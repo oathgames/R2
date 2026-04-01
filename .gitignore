@@ -1,7 +1,13 @@
+# Source code — lives in private repo (oathgames/autocmo-core)
+autocmo/
+*.go
+go.mod
+go.sum
+build.ps1
+
 # Binaries
 *.exe
 *.exe~
-autocmo/AutoCMO-*
 .claude/tools/AutoCMO*
 .claude/tools/ffmpeg*
 .claude/tools/ffprobe*
@@ -12,15 +18,15 @@ autocmo/AutoCMO-*
 
 # Output
 results/
-autocmo/output/
 
 # Temp files
 tmp_cmd*.json
 autocmo-music-pack.zip
 *.update
 *.backup
+.autocmo-backup/
 
-# Brand-specific assets (testers bring their own)
+# Brand-specific assets (users bring their own)
 assets/brands/*/
 !assets/brands/example/
 assets/music/*.mp3
@@ -35,6 +41,3 @@ extract_colors.ps1
 # OS
 .DS_Store
 Thumbs.db
-
-# Go
-autocmo/go.sum

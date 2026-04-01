@@ -51,8 +51,9 @@ codesign --force --sign - .claude/tools/AutoCMO
 This removes the quarantine flag and ad-hoc signs the binary. Do this automatically before the first pipeline run if on macOS.
 
 ## Updates
-Run `{"action": "update"}` to check for and install new versions automatically.
-The binary downloads the latest release from GitHub and replaces itself.
+Type `/update` to check for and install new versions.
+Downloads the latest binary + framework files from GitHub while preserving user data (memory.md, brand folders, config).
+Backups are saved to `.autocmo-backup/{version}/` before overwriting.
 
 ## Key Rules
 - Only `falApiKey` required to start. Everything else optional.

@@ -4,7 +4,7 @@
   / ___ \ |_| | || (_) | |___| |  | | |_| |
  /_/   \_\__,_|\__\___/ \____|_|  |_|\___/
 
-  Autonomous AI CMO — v0.1.2
+  Autonomous AI CMO — v0.2.0
 
 Replace your marketing team with an AI-powered Claude Code plugin.
 Generate ads, manage campaigns, write SEO blogs, run competitor intel.
@@ -50,6 +50,11 @@ WHAT YOU CAN DO
     /cmo check TikTok performance
     /cmo archive old results
 
+UPDATES
+  Type: /update
+  Downloads the latest binary + framework files from GitHub.
+  Your brand data, config, and memory are never touched.
+
 ADDING PRODUCTS
   Create a folder under assets/brands/<brand>/products/ with a references/ subfolder.
   Drop product photos in it. Claude handles the rest.
@@ -81,10 +86,6 @@ META ADS
 TIKTOK ADS
   /cmo push to TikTok          — uploads to Testing campaign ($5/day)
   /cmo check TikTok performance — CTR, CPC, ATC, winner/loser flags
-
-UPDATES
-  AutoCMO self-updates. Type: /cmo update
-  Or run: AutoCMO.exe --action update
 
 API KEYS (add to autocmo-config.json)
   Required:  falApiKey (fal.ai — image/video generation)
