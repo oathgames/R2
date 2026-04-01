@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-"net/http"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -33,68 +33,120 @@ func slackPost(cfg *Config, videoPath, voiceoverPath string, meta *VideoMeta, cu
 		}
 	}
 
-	// Step 2: Post rich message via webhook
 	timestamp := time.Now().Format("2006-01-02 15:04")
-	scriptPreview := meta.Script
-	if len(scriptPreview) > 2000 {
-		scriptPreview = scriptPreview[:1997] + "..."
-	}
-	if scriptPreview == "" {
-		scriptPreview = "No script available"
-	}
 
-	blocks := []map[string]interface{}{
-		{
-			"type": "header",
-			"text": map[string]string{
-				"type": "plain_text",
-				"text": fmt.Sprintf("New Ad — %s", cfg.ProductName),
-			},
-		},
-		{
-			"type": "context",
-			"elements": []map[string]string{
-				{"type": "mrkdwn", "text": fmt.Sprintf("Auto-generated on %s", timestamp)},
-			},
-		},
-		{
-			"type": "section",
-			"text": map[string]string{
-				"type": "mrkdwn",
-				"text": fmt.Sprintf("*Script*\n%s", scriptPreview),
-			},
-		},
-		{
-			"type": "section",
-			"fields": []map[string]string{
-				{"type": "mrkdwn", "text": fmt.Sprintf("*Model*\n%s", stringOr(meta.Model, "unknown"))},
-				{"type": "mrkdwn", "text": fmt.Sprintf("*Format*\n%s", stringOr(meta.VideoFormat, "9:16"))},
-				{"type": "mrkdwn", "text": fmt.Sprintf("*Duration*\n%ds", meta.Duration)},
-			},
-		},
-	}
+	var blocks []map[string]interface{}
 
-	// Add file links if we have them
-	if len(fileLinks) > 0 {
-		linksText := ""
-		for _, l := range fileLinks {
-			linksText += l + "\n"
+	if meta.VideoFormat == "image" {
+		// Clean image-only layout: header + model/cost context line
+		blocks = []map[string]interface{}{
+			{
+				"type": "header",
+				"text": map[string]string{
+					"type": "plain_text",
+					"text": fmt.Sprintf("New Ad — %s", cfg.ProductName),
+				},
+			},
+			{
+				"type": "context",
+				"elements": []map[string]interface{}{
+					{"type": "mrkdwn", "text": fmt.Sprintf("*%s*", stringOr(meta.Model, "AutoCMO"))},
+					{"type": "mrkdwn", "text": fmt.Sprintf("_%s_", timestamp)},
+				},
+			},
 		}
+
+		// Add file links if we have them
+		if len(fileLinks) > 0 {
+			linksText := ""
+			for _, l := range fileLinks {
+				linksText += l + "\n"
+			}
+			blocks = append(blocks, map[string]interface{}{
+				"type": "section",
+				"text": map[string]string{
+					"type": "mrkdwn",
+					"text": linksText,
+				},
+			})
+		}
+
 		blocks = append(blocks, map[string]interface{}{
-			"type": "section",
-			"text": map[string]string{
-				"type": "mrkdwn",
-				"text": fmt.Sprintf("*Files*\n%s", linksText),
+			"type":    "divider",
+		})
+		blocks = append(blocks, map[string]interface{}{
+			"type": "context",
+			"elements": []map[string]interface{}{
+				{"type": "mrkdwn", "text": "AutoCMO"},
+				{"type": "mrkdwn", "text": stringOr(meta.Cost, "")},
+			},
+		})
+	} else {
+		// Video layout with script preview
+		scriptPreview := meta.Script
+		if len(scriptPreview) > 2000 {
+			scriptPreview = scriptPreview[:1997] + "..."
+		}
+		if scriptPreview == "" {
+			scriptPreview = "No script available"
+		}
+
+		blocks = []map[string]interface{}{
+			{
+				"type": "header",
+				"text": map[string]string{
+					"type": "plain_text",
+					"text": fmt.Sprintf("New Ad — %s", cfg.ProductName),
+				},
+			},
+			{
+				"type": "context",
+				"elements": []map[string]interface{}{
+					{"type": "mrkdwn", "text": fmt.Sprintf("*%s*", stringOr(meta.Model, "AutoCMO"))},
+					{"type": "mrkdwn", "text": fmt.Sprintf("_%s_", timestamp)},
+				},
+			},
+			{
+				"type": "section",
+				"text": map[string]string{
+					"type": "mrkdwn",
+					"text": fmt.Sprintf("*Script*\n%s", scriptPreview),
+				},
+			},
+			{
+				"type": "section",
+				"fields": []map[string]string{
+					{"type": "mrkdwn", "text": fmt.Sprintf("*Format*\n%s", stringOr(meta.VideoFormat, "9:16"))},
+					{"type": "mrkdwn", "text": fmt.Sprintf("*Duration*\n%ds", meta.Duration)},
+				},
+			},
+		}
+
+		if len(fileLinks) > 0 {
+			linksText := ""
+			for _, l := range fileLinks {
+				linksText += l + "\n"
+			}
+			blocks = append(blocks, map[string]interface{}{
+				"type": "section",
+				"text": map[string]string{
+					"type": "mrkdwn",
+					"text": fmt.Sprintf("*Files*\n%s", linksText),
+				},
+			})
+		}
+
+		blocks = append(blocks, map[string]interface{}{
+			"type":    "divider",
+		})
+		blocks = append(blocks, map[string]interface{}{
+			"type": "context",
+			"elements": []map[string]interface{}{
+				{"type": "mrkdwn", "text": "AutoCMO"},
+				{"type": "mrkdwn", "text": stringOr(meta.Cost, "")},
 			},
 		})
 	}
-
-	blocks = append(blocks, map[string]interface{}{
-		"type": "context",
-		"elements": []map[string]string{
-			{"type": "plain_text", "text": "AutoCMO"},
-		},
-	})
 
 	payload := map[string]interface{}{
 		"blocks": blocks,
@@ -160,10 +212,10 @@ func slackUploadFile(cfg *Config, filePath, title string) (string, error) {
 	body, _ := io.ReadAll(resp.Body)
 
 	var urlResult struct {
-		OK       bool   `json:"ok"`
-		Error    string `json:"error"`
+		OK        bool   `json:"ok"`
+		Error     string `json:"error"`
 		UploadURL string `json:"upload_url"`
-		FileID   string `json:"file_id"`
+		FileID    string `json:"file_id"`
 	}
 	if err := json.Unmarshal(body, &urlResult); err != nil {
 		return "", fmt.Errorf("cannot parse getUploadURL response: %w", err)

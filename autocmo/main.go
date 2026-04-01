@@ -1578,10 +1578,16 @@ func runImagePipeline(cfg *Config, cmd *Command) {
 		}
 
 		// Post summary message via webhook
+		imgModel := "banana-pro-edit"
+		if cmd != nil && cmd.ImageModel != "" {
+			imgModel = cmd.ImageModel
+		}
+		imgCost := fmt.Sprintf("~$%.2f", float64(len(imagePaths))*0.15)
 		meta := &VideoMeta{
-			Script:      prompt,
 			VideoFormat: "image",
 			Duration:    0,
+			Model:       imgModel,
+			Cost:        imgCost,
 		}
 		customMsg := ""
 		if cmd != nil {

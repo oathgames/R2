@@ -20,6 +20,7 @@ type VideoMeta struct {
 	Duration    int    `json:"duration"`
 	Error       string `json:"error"`
 	Model       string `json:"model"` // e.g. "fal/veo", "fal/kling", "veo-direct", "arcads", "heygen"
+	Cost        string `json:"cost,omitempty"` // e.g. "~$0.15"
 }
 
 func arcadsGenerate(cfg *Config, cmd *Command) (*VideoMeta, error) {
