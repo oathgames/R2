@@ -6,6 +6,62 @@ user-invocable: true
 
 You are an autonomous CMO. The user speaks plain English. You handle everything.
 
+## Step -1: Preflight (runs every time, silently)
+
+Check these in order. If everything passes, skip to Step 0 silently — the user should never see preflight output unless something needs fixing.
+
+### A) Binary installed?
+
+Check if `.claude/tools/AutoCMO.exe` exists (any platform — the binary is always named AutoCMO.exe).
+
+If missing, **download it automatically**:
+
+1. Detect platform:
+   - Windows → `AutoCMO-windows-amd64.exe`
+   - macOS ARM64 → `AutoCMO-darwin-arm64`
+   - macOS Intel → `AutoCMO-darwin-amd64`
+   - Linux → `AutoCMO-linux-amd64`
+
+2. Create `.claude/tools/` if it doesn't exist
+
+3. Download:
+```bash
+curl -L -o .claude/tools/AutoCMO.exe "https://github.com/oathgames/AutoCMO/releases/latest/download/{platform-binary}"
+chmod +x .claude/tools/AutoCMO.exe
+```
+
+4. macOS only — remove Gatekeeper block:
+```bash
+xattr -d com.apple.quarantine .claude/tools/AutoCMO.exe
+codesign --force --sign - .claude/tools/AutoCMO.exe
+```
+
+5. Show one line: `Downloaded AutoCMO binary.`
+
+### B) Config file exists?
+
+Check if `.claude/tools/autocmo-config.json` exists.
+
+If missing, copy from the example template:
+```bash
+cp .claude/tools/autocmo-config.example.json .claude/tools/autocmo-config.json
+```
+
+Then check if `falApiKey` is empty in the config. If empty, ask the user:
+
+```
+To generate images and videos, you need a fal.ai API key (free tier available).
+
+  1. Go to https://fal.ai/dashboard/keys
+  2. Create a key, paste it here
+```
+
+Wait for the key. Write it into `.claude/tools/autocmo-config.json` in the `falApiKey` field. Then continue — do NOT ask about any other API keys during first setup. Those come later when the user needs them.
+
+### C) Preflight done
+
+Continue to Step 0. If the user typed just `/cmo` with no arguments and no brands exist yet, fall through to the Setup Flow.
+
 ## Step 0: Resolve Brand + Product
 
 ### Meta Ads — Autonomous Ad Management
@@ -453,14 +509,11 @@ If Shopify is not configured, save the blog as a `.html` file in results/ for ma
 
 Then proceed:
 
-**A) API Key — only fal.ai required:**
-1. "What's your fal.ai API key?" (https://fal.ai/dashboard/keys)
-2. Optional: ElevenLabs, HeyGen, Google, Slack — "skip" any
-
-**B) Brand + Product setup:**
-3. "What's your brand name?" → creates `assets/brands/<brand>/` folder
-4. "What's your website?" → scrapes it, writes `brand.md`
-5. "Can I pull your product images from your store?" → if yes:
+**A) Brand + Product setup:**
+(fal.ai key was already configured during preflight — skip straight to brand)
+1. "What's your brand name?" → creates `assets/brands/<brand>/` folder
+2. "What's your website?" → scrapes it, writes `brand.md`
+3. "Can I pull your product images from your store?" → if yes:
 
 **Auto-import from Shopify (or any store with /products.json):**
 - WebFetch `<website>/products.json`
@@ -471,7 +524,7 @@ Then proceed:
 
 If the store doesn't have `/products.json`, ask the user to drop photos manually.
 
-**B2) Competitor Discovery (automatic, no user input needed):**
+**A2) Competitor Discovery (automatic, no user input needed):**
 After brand setup, launch a background agent to discover competitors:
 1. Read `brand.md` — extract niche, product types, price range, location
 2. Use WebSearch to find 5-8 competing brands (see Competitor Intelligence section above)
@@ -480,8 +533,8 @@ After brand setup, launch a background agent to discover competitors:
 
 This runs silently during setup — no questions asked. The user sees the result and can edit the list later.
 
-**C) Schedule daily generation:**
-6. "Want me to set up daily auto-generation? (default: 9 AM weekdays)"
+**B) Schedule daily generation:**
+4. "Want me to set up daily auto-generation? (default: 9 AM weekdays)"
    If yes → create a scheduled task:
    - Use `mcp__scheduled-tasks__create_scheduled_task`
    - **taskId**: `auto-cmo`
@@ -511,15 +564,15 @@ This runs silently during setup — no questions asked. The user sees the result
      ```
    - Tell user: "Daily content is set! I'll generate fresh ads, blog posts, and fix SEO issues every weekday at 9 AM. Type /cmo status anytime."
 
-**D) Meta Ads setup (optional):**
-7. "Want to auto-push ads to Meta?" → if yes, ask for:
+**C) Meta Ads setup (optional):**
+5. "Want to auto-push ads to Meta?" → if yes, ask for:
    - Meta Access Token (System User token from Business Manager)
    - Ad Account ID (act_XXXXXXXXX)
    - Facebook Page ID
    - Pixel ID (optional)
    → Save to config, then run `{"action": "meta-setup"}` to create campaigns
 
-**E) TikTok Ads setup (optional):**
+**D) TikTok Ads setup (optional):**
    "Want to also push to TikTok?" → if yes, ask for:
    - TikTok Access Token (from TikTok Ads Manager → API)
    - Advertiser ID
@@ -527,7 +580,7 @@ This runs silently during setup — no questions asked. The user sees the result
    → Save to config, then run `{"action": "tiktok-setup"}` to create campaigns
    Same two-campaign architecture: Testing + Scaling (the binary sets default budgets)
 
-8. If Meta OR TikTok is configured, create a SECOND scheduled task for optimization:
+6. If Meta OR TikTok is configured, create a SECOND scheduled task for optimization:
    - Use `mcp__scheduled-tasks__create_scheduled_task`
    - **taskId**: `auto-cmo-optimize`
    - **cronExpression**: `0 10 * * 1-5` (10 AM weekdays -- 1 hour after generation)
@@ -554,7 +607,7 @@ This runs silently during setup — no questions asked. The user sees the result
      10. Update memory.md with: which ads killed, scaled, retargeted, lookalikes created, and why
      ```
 
-9. Create a THIRD scheduled task -- weekly digest (always, not just for ads):
+7. Create a THIRD scheduled task -- weekly digest (always, not just for ads):
    - Use `mcp__scheduled-tasks__create_scheduled_task`
    - **taskId**: `auto-cmo-digest`
    - **cronExpression**: `0 9 * * 1` (Monday 9 AM)
@@ -632,8 +685,8 @@ This runs silently during setup — no questions asked. The user sees the result
          daily content task can incorporate it into scripts
      ```
 
-**F) Shopify SEO Blog setup (optional):**
-10. "Want me to auto-publish SEO blog posts to your Shopify store? (skip if you want to set this up later — just run /cmo again anytime)"
+**E) Shopify SEO Blog setup (optional):**
+8. "Want me to auto-publish SEO blog posts to your Shopify store? (skip if you want to set this up later — just run /cmo again anytime)"
 
 If they say skip/no/later → move on. If yes, walk them through it step by step:
 
@@ -806,9 +859,9 @@ Shopify is connected! Here's what I'll do:
     /cmo show seo status
 ```
 
-**G) Adding a second brand later:**
+**F) Adding a second brand later:**
 User says "add a new brand" → same flow, creates new folder under `assets/`
 
-**D) Adding a new product:**
+**G) Adding a new product:**
 User drops photos in a new subfolder → Claude auto-generates `product.md` on next run.
 Or: "add product [name]" → Claude checks the store for new products and imports them.

@@ -9,34 +9,15 @@
 Replace your marketing team with an AI-powered Claude Code plugin.
 Generate ads, manage campaigns, write SEO blogs, run competitor intel.
 
-PREREQUISITES
-  - Claude Code (https://claude.ai/code)
-  - A fal.ai API key (https://fal.ai — free tier available)
+SETUP (3 steps)
 
-QUICK START
-  1. Download the latest release for your platform:
-     https://github.com/oathgames/AutoCMO/releases/latest
+  1. Download this folder (or clone it)
+  2. Open it in Claude Code
+  3. Type: /cmo
 
-     Windows:  AutoCMO-windows-amd64.exe
-     macOS:    AutoCMO-darwin-arm64 (Apple Silicon) or AutoCMO-darwin-amd64 (Intel)
-     Linux:    AutoCMO-linux-amd64
-
-  2. Place the binary in this folder at: .claude/tools/AutoCMO.exe
-     (On macOS/Linux, rename it to AutoCMO.exe — yes, keep the .exe extension)
-
-  3. Copy .claude/tools/autocmo-config.example.json to .claude/tools/autocmo-config.json
-     Add your fal.ai API key to the "falApiKey" field.
-
-  4. Open this folder in Claude Code
-  5. Type: /cmo
-
-  First run walks you through brand setup — auto-imports products from your website.
-
-macOS NOTE
-  If macOS blocks the binary, /cmo handles it automatically.
-  Or manually run:
-    xattr -d com.apple.quarantine .claude/tools/AutoCMO.exe
-    codesign --force --sign - .claude/tools/AutoCMO.exe
+  That's it. The /cmo command downloads the binary, sets up your config,
+  and walks you through everything. The only thing you need is a fal.ai
+  API key (free tier: https://fal.ai).
 
 WHAT YOU CAN DO
   Just talk naturally:
@@ -87,12 +68,11 @@ TIKTOK ADS
   /cmo push to TikTok          — uploads to Testing campaign ($5/day)
   /cmo check TikTok performance — CTR, CPC, ATC, winner/loser flags
 
-API KEYS (add to autocmo-config.json)
-  Required:  falApiKey (fal.ai — image/video generation)
-  Optional:  slackWebhookUrl, slackBotToken, slackChannel (Slack delivery)
-             metaAccessToken, metaAdAccountId, metaPageId (Meta Ads)
-             tiktokAccessToken, tiktokAdvertiserId (TikTok Ads)
-             shopifyStore, shopifyAccessToken (SEO blogs)
-             elevenLabsApiKey (voice cloning)
-             heygenApiKey (avatar videos)
-             googleApiKey (Gemini fallback)
+API KEYS
+  fal.ai is the only required key (configured during /cmo setup).
+  Everything else is optional and configured when you need it:
+
+    /cmo push to Meta       → asks for Meta token
+    /cmo push to TikTok     → asks for TikTok token
+    /cmo write a blog post  → asks for Shopify token
+    /cmo clone my voice     → asks for ElevenLabs key
