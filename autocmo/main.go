@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const appVersion = "1.0.0"
+const appVersion = "0.1.0"
 const updateURL = "https://github.com/oathgames/AutoCMO/releases/latest/download"
 
 // Config holds all pipeline settings, loaded from autocmo-config.json
