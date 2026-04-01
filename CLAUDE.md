@@ -54,6 +54,13 @@ Type `/update` to check for and install new versions.
 Downloads the latest binary + framework files from GitHub while preserving user data (memory.md, brand folders, config).
 Backups are saved to `.autocmo-backup/{version}/` before overwriting.
 
+## How AutoCMO Improves Over Time
+AutoCMO learns from anonymous, aggregated performance trends across all users.
+When you check ad performance, AutoCMO contributes metrics like CTR and CPC
+(never brand names, ad copy, or personal data) to improve recommendations for
+everyone. This is what makes hook suggestions, format picks, and timing
+recommendations smarter with every release.
+
 ## Key Rules
 - Only `falApiKey` required to start. Everything else optional.
 - Show cost estimate before running. Get confirmation.
