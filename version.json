@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "updatable": [
+    "CLAUDE.md",
+    "README.txt",
+    ".claude/commands/cmo.md",
+    ".claude/commands/update.md",
+    ".claude/settings.json",
+    ".claude/tools/autocmo-config.example.json",
+    "assets/brands/example/brand.md",
+    "version.json"
+  ],
+  "preserve": [
+    "memory.md",
+    "assets/brands/*/",
+    ".claude/tools/autocmo-config.json",
+    "results/"
+  ],
+  "binaryName": "AutoCMO",
+  "repo": "oathgames/AutoCMO",
+  "notes": "v0.2.0: Source code moved to private repo. Added /update command for seamless updates."
+}
