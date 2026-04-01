@@ -1,6 +1,13 @@
 # AutoCMO — Portable AI Content Engine
 
-Open in Claude Code. Type `/cmo`.
+Open in Claude Code. Type `/cmo`. Everything else is automatic.
+
+The `/cmo` command handles all setup on first run:
+- Downloads the binary if missing
+- Creates the config file if missing
+- Asks for a fal.ai API key (the only requirement)
+- Walks through brand + product setup
+- Sets up daily automation if wanted
 
 ## Session Protocol
 
@@ -33,26 +40,19 @@ assets/
             └── product.md
 
 results/                        ← All output (timestamped)
-memory.md                   ← Learning memory (grows over time)
+memory.md                       ← Learning memory (grows over time)
 ```
 
 ### Adding a new brand
-Create a folder under `assets/`, run `/cmo` — setup flow asks for website + writes brand.md.
+Run `/cmo` — setup flow asks for website + writes brand.md.
 
 ### Adding a new product
 Create a subfolder with `references/` inside a brand folder, drop photos in it. Claude auto-generates `product.md` on first use.
 
-## macOS First-Run
-If the user is on macOS and the pipeline binary is blocked by Gatekeeper, run:
-```bash
-xattr -d com.apple.quarantine .claude/tools/AutoCMO
-codesign --force --sign - .claude/tools/AutoCMO
-```
-This removes the quarantine flag and ad-hoc signs the binary. Do this automatically before the first pipeline run if on macOS.
-
 ## Updates
-Run `{"action": "update"}` to check for and install new versions automatically.
-The binary downloads the latest release from GitHub and replaces itself.
+Type `/update` to check for and install new versions.
+Downloads the latest binary + framework files from GitHub while preserving user data (memory.md, brand folders, config).
+Backups are saved to `.autocmo-backup/{version}/` before overwriting.
 
 ## Key Rules
 - Only `falApiKey` required to start. Everything else optional.
