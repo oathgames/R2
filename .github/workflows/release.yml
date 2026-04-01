@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build cross-platform binaries
+        working-directory: autocmo
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "Building AutoCMO v${VERSION}"
+
+          # Windows AMD64
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -ldflags="-s -w" -o ../dist/AutoCMO-windows-amd64.exe .
+
+          # macOS ARM64 (Apple Silicon)
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
+            go build -ldflags="-s -w" -o ../dist/AutoCMO-darwin-arm64 .
+
+          # macOS AMD64 (Intel)
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
+            go build -ldflags="-s -w" -o ../dist/AutoCMO-darwin-amd64 .
+
+          # Linux AMD64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags="-s -w" -o ../dist/AutoCMO-linux-amd64 .
+
+          # version.txt for self-update
+          echo "${VERSION}" > ../dist/version.txt
+
+          ls -la ../dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AutoCMO ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/AutoCMO-windows-amd64.exe
+            dist/AutoCMO-darwin-arm64
+            dist/AutoCMO-darwin-amd64
+            dist/AutoCMO-linux-amd64
+            dist/version.txt

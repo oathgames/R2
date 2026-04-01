@@ -1,0 +1,32 @@
+{
+  "falApiKey": "",
+  "googleApiKey": "",
+  "elevenLabsApiKey": "",
+  "heygenApiKey": "",
+  "arcadsApiKey": "",
+
+  "falModel": "veo",
+  "imageModel": "banana-pro-edit",
+
+  "slackWebhookUrl": "",
+  "slackBotToken": "",
+  "slackChannel": "",
+
+  "metaAccessToken": "",
+  "metaAdAccountId": "",
+  "metaPageId": "",
+  "metaPixelId": "",
+
+  "tiktokAccessToken": "",
+  "tiktokAdvertiserId": "",
+  "tiktokPixelId": "",
+
+  "shopifyStore": "",
+  "shopifyAccessToken": "",
+
+  "productName": "My Brand",
+  "productUrl": "https://mybrand.com",
+  "productDescription": "A short description of your brand.",
+  "outputDir": "../../results",
+  "qualityGate": true
+}
