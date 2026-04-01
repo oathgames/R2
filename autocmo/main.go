@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const appVersion = "0.1.0"
+const appVersion = "0.1.1"
 const updateURL = "https://github.com/oathgames/AutoCMO/releases/latest/download"
 
 // Config holds all pipeline settings, loaded from autocmo-config.json
@@ -161,8 +161,8 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Validate config without calling APIs")
 	setup := flag.Bool("setup", false, "Print setup instructions")
 	testMode := flag.Bool("test", false, "Test mode — skip video generation, use placeholder, test voiceover + Slack")
-	imageMode := flag.Bool("image", false, "Generate UGC product images instead of video")
-	installDir := flag.String("install", "", "Create a ready-to-use UGC project folder at this path")
+	imageMode := flag.Bool("image", false, "Generate product ad images instead of video")
+	installDir := flag.String("install", "", "Create a ready-to-use AutoCMO project folder at this path")
 	cmdJSON := flag.String("cmd", "", "JSON command from Claude (overrides all other flags)")
 	cmdFile := flag.String("cmd-file", "", "Path to JSON command file (alternative to --cmd for escaping issues)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
@@ -706,7 +706,7 @@ func runPipeline(cfg *Config, cmd *Command) {
 
 	// Create a unique folder for this run: Results/ugc_20260331_140532/
 	runID := time.Now().Format("20060102_150405")
-	runDir := filepath.Join(cfg.OutputDir, "ugc_"+runID)
+	runDir := filepath.Join(cfg.OutputDir, "ad_"+runID)
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		log.Fatalf("[ERROR] Cannot create run dir: %v", err)
 	}
@@ -742,7 +742,7 @@ func runPipeline(cfg *Config, cmd *Command) {
 		fmt.Println("  Quality gate: ON (max retries:", maxRetries, ")")
 	}
 
-	// ── Step 1: Generate UGC Script (with QA retry) ──────────────
+	// ── Step 1: Generate Ad Script (with QA retry) ──────────────
 	if cmd != nil && cmd.Script != "" {
 		scriptText = cmd.Script
 		fmt.Println("\n[1/5] Using provided script")
@@ -762,7 +762,7 @@ func runPipeline(cfg *Config, cmd *Command) {
 			}
 		}
 	} else if !skipVoice && cfg.GoogleAPIKey != "" {
-		fmt.Println("\n[1/5] Writing UGC script via Gemini...")
+		fmt.Println("\n[1/5] Writing ad script via Gemini...")
 		feedback := ""
 		for attempt := 1; attempt <= maxRetries; attempt++ {
 			var err error
@@ -1035,7 +1035,7 @@ func runPipeline(cfg *Config, cmd *Command) {
 				}
 
 			case "veo":
-				fmt.Printf("\n[3/5] Generating UGC video via Google Veo (attempt %d)...\n", attempt)
+				fmt.Printf("\n[3/5] Generating ad video via Google Veo (attempt %d)...\n", attempt)
 				if err := veoGenerateVideo(cfg, videoPrompt, videoPath); err != nil {
 					log.Fatalf("[ERROR] Veo failed: %v", err)
 				}
@@ -1049,7 +1049,7 @@ func runPipeline(cfg *Config, cmd *Command) {
 				}
 
 			case "heygen":
-				fmt.Printf("\n[3/5] Generating UGC video via HeyGen (attempt %d)...\n", attempt)
+				fmt.Printf("\n[3/5] Generating ad video via HeyGen (attempt %d)...\n", attempt)
 				var err error
 				videoMeta, err = heygenGenerate(cfg, cmd, videoPrompt)
 				if err != nil {
@@ -1069,7 +1069,7 @@ func runPipeline(cfg *Config, cmd *Command) {
 				fmt.Printf("  Saved: %s\n", videoPath)
 
 			case "arcads":
-				fmt.Printf("\n[3/5] Generating UGC video via Arcads (attempt %d)...\n", attempt)
+				fmt.Printf("\n[3/5] Generating ad video via Arcads (attempt %d)...\n", attempt)
 				var err error
 				videoMeta, err = arcadsGenerate(cfg, cmd)
 				if err != nil {
@@ -1304,11 +1304,11 @@ func runCloneVoice(cfg *Config, cmd *Command, configPath string) {
 		fmt.Println("\n  Tips for best results:")
 		fmt.Println("    - Record 1-3 minutes of clear speech")
 		fmt.Println("    - Minimize background noise")
-		fmt.Println("    - Speak naturally in the tone you want for your UGC")
+		fmt.Println("    - Speak naturally in the tone you want for your ads")
 		os.Exit(1)
 	}
 
-	voiceName := "UGC Voice"
+	voiceName := "AutoCMO Voice"
 	if cmd.VoiceName != "" {
 		voiceName = cmd.VoiceName
 	}
@@ -1336,7 +1336,7 @@ func runCloneVoice(cfg *Config, cmd *Command, configPath string) {
 	}
 
 	fmt.Println("\n============================================================")
-	fmt.Println("  Your cloned voice is now the default for all UGC voiceovers.")
+	fmt.Println("  Your cloned voice is now the default for all ad voiceovers.")
 	fmt.Println("============================================================")
 }
 
@@ -1530,7 +1530,7 @@ func runImagePipeline(cfg *Config, cmd *Command) {
 	if !skipPost {
 		fmt.Println("\n[2/2] Posting to Slack...")
 		for _, imgPath := range imagePaths {
-			title := fmt.Sprintf("UGC Image — %s", cfg.ProductName)
+			title := fmt.Sprintf("Ad Image — %s", cfg.ProductName)
 			if _, err := slackUploadFile(cfg, imgPath, title); err != nil {
 				fmt.Printf("  [WARN] Upload failed for %s: %v\n", filepath.Base(imgPath), err)
 			}
@@ -1843,9 +1843,10 @@ func runSelfUpdate() {
 	}
 	os.Remove(backupPath)
 
-	// On macOS, remove quarantine attribute
+	// On macOS, remove quarantine attribute and ad-hoc codesign
 	if runtime.GOOS == "darwin" {
 		exec.Command("xattr", "-d", "com.apple.quarantine", exePath).Run()
+		exec.Command("codesign", "--force", "--sign", "-", exePath).Run()
 	}
 
 	fmt.Printf("  Updated to v%s (%.0f KB)\n", latest, float64(n)/1024)
@@ -1870,7 +1871,7 @@ func clearMacQuarantine(binaryPath string) {
 	}
 }
 
-// installProject creates a ready-to-use UGC project folder.
+// installProject creates a ready-to-use AutoCMO project folder.
 // The user opens this folder in Claude Desktop/Code — /cmo works immediately.
 func installProject(targetDir string) error {
 	fmt.Println("============================================================")
@@ -1923,12 +1924,16 @@ func installProject(targetDir string) error {
 		fmt.Printf("  Skipped: autocmo-config.json (already exists)\n")
 	}
 
-	// Write skill file
+	// Write skill file (skip if exists to preserve customizations)
 	skillPath := filepath.Join(targetDir, ".claude", "commands", "cmo.md")
-	if err := os.WriteFile(skillPath, []byte(skillTemplate), 0644); err != nil {
-		return err
+	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
+		if err := os.WriteFile(skillPath, []byte(skillTemplate), 0644); err != nil {
+			return err
+		}
+		fmt.Printf("  Created: .claude/commands/cmo.md\n")
+	} else {
+		fmt.Printf("  Skipped: cmo.md (already exists)\n")
 	}
-	fmt.Printf("  Created: .claude/commands/cmo.md\n")
 
 	// Write CLAUDE.md
 	claudeMdPath := filepath.Join(targetDir, "CLAUDE.md")
@@ -1957,12 +1962,16 @@ func installProject(targetDir string) error {
 		fmt.Printf("  Created: .claude/settings.json\n")
 	}
 
-	// Write project README
+	// Write project README (skip if exists to preserve customizations)
 	readmePath := filepath.Join(targetDir, "README.txt")
-	if err := os.WriteFile(readmePath, []byte(projectReadmeText), 0644); err != nil {
-		return err
+	if _, err := os.Stat(readmePath); os.IsNotExist(err) {
+		if err := os.WriteFile(readmePath, []byte(projectReadmeText), 0644); err != nil {
+			return err
+		}
+		fmt.Printf("  Created: README.txt\n")
+	} else {
+		fmt.Printf("  Skipped: README.txt (already exists)\n")
 	}
-	fmt.Printf("  Created: README.txt\n")
 
 	fmt.Println("\n============================================================")
 	fmt.Println("  DONE! Next steps:")
@@ -2023,7 +2032,7 @@ description: AI content engine — generate ads, manage campaigns, write SEO blo
 user-invocable: true
 ---
 
-You are a UGC content engine. The user speaks plain English. You handle everything.
+You are an AI content engine. The user speaks plain English. You handle everything.
 
 ## Step 0: Resolve Brand + Product
 
@@ -2247,10 +2256,10 @@ func printSetup() {
                        Powers both Veo (video) and Gemini (image). Free tier.
 
      arcadsApiKey    → https://app.arcads.ai → Settings → API Keys
-                       AI avatar-based UGC videos.
+                       AI avatar-based ad videos.
 
      heygenApiKey    → https://app.heygen.com/settings → API
-                       Talking-head UGC videos.
+                       Talking-head ad videos.
 
      IMAGE:
      ─────

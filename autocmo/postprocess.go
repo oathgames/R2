@@ -142,7 +142,7 @@ func generateASS(script string, totalDuration float64, videoW, videoH int, outpu
 	// ASS header
 	var ass strings.Builder
 	ass.WriteString("[Script Info]\n")
-	ass.WriteString("Title: UGC Captions\n")
+	ass.WriteString("Title: AutoCMO Captions\n")
 	ass.WriteString(fmt.Sprintf("PlayResX: %d\n", videoW))
 	ass.WriteString(fmt.Sprintf("PlayResY: %d\n", videoH))
 	ass.WriteString("ScaledBorderAndShadow: yes\n\n")

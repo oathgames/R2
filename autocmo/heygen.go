@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// heygenGenerate creates a production-quality talking-head UGC video via HeyGen.
+// heygenGenerate creates a production-quality talking-head ad video via HeyGen.
 // Uses Avatar IV for realistic facial motion and lip-sync.
 // Two modes:
 //   - Text mode: HeyGen generates voice + video from script text

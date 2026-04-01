@@ -111,7 +111,7 @@ func elevenLabsCloneVoice(cfg *Config, voiceName string, samplePaths []string) (
 	if err := writer.WriteField("name", voiceName); err != nil {
 		return "", err
 	}
-	if err := writer.WriteField("description", "Cloned voice for AutoCMO"); err != nil {
+	if err := writer.WriteField("description", "Cloned ad voice for AutoCMO"); err != nil {
 		return "", err
 	}
 

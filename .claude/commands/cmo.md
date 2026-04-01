@@ -229,7 +229,7 @@ Run it? (y/n)
 ## Step 5: Run the Pipeline
 
 ```
-.claude/tools/AutoCMO.exe --config .claude/tools/cmo-config.json --cmd '<JSON>'
+.claude/tools/AutoCMO.exe --config .claude/tools/autocmo-config.json --cmd '<JSON>'
 ```
 
 **Always pass `"skipSlack": true` unless user says to post.** You show the output first.
@@ -591,7 +591,7 @@ This runs silently during setup — no questions asked. The user sees the result
 
      1. Generate a product-showcase image (both formats). Show quality report. Post to Slack if configured.
 
-     2. If shopifyStore + shopifyAccessToken are configured in autocmo-config.json:
+     2. If shopifyStore + shopifyAccessToken are configured in autoautocmo-config.json:
         - Write a 600-1000 word SEO blog post about the product (or a related lifestyle topic)
         - Use the brand voice from brand.md
         - Include the product name as primary keyword, related terms as secondary
@@ -635,7 +635,7 @@ This runs silently during setup — no questions asked. The user sees the result
      Run the full optimization loop across all configured platforms:
 
      META (if metaAccessToken configured):
-     1. Run: .claude/tools/AutoCMO.exe --config .claude/tools/cmo-config.json --cmd '{"action":"meta-insights"}'
+     1. Run: .claude/tools/AutoCMO.exe --config .claude/tools/autocmo-config.json --cmd '{"action":"meta-insights"}'
         - This now queries BOTH Testing AND Scaling campaigns and flags FATIGUE
      2. Parse the JSON results. For each ad:
         - KILL (testing): CTR < 0.5% after $5 spend
@@ -649,7 +649,7 @@ This runs silently during setup — no questions asked. The user sees the result
      6. Massive winners: run meta-lookalike (1% US) -- only ONCE per winner (check memory.md)
 
      TIKTOK (if tiktokAccessToken configured):
-     7. Run: .claude/tools/AutoCMO.exe --config .claude/tools/cmo-config.json --cmd '{"action":"tiktok-insights"}'
+     7. Run: .claude/tools/AutoCMO.exe --config .claude/tools/autocmo-config.json --cmd '{"action":"tiktok-insights"}'
      8. Same verdict logic: KILL, WINNER, scale, retarget
      9. Run tiktok-kill / tiktok-duplicate for each
 
@@ -680,7 +680,7 @@ This runs silently during setup — no questions asked. The user sees the result
      == COMPETITOR INTEL (if competitors.md exists) ==
      7. Read assets/brands/<brand>/competitors.md for brand names
      8. If metaAccessToken configured, run the Ad Library scan:
-        .claude/tools/AutoCMO.exe --config .claude/tools/autocmo-config.json --cmd-file <json>
+        .claude/tools/AutoCMO.exe --config .claude/tools/autoautocmo-config.json --cmd-file <json>
         with: {"action":"competitor-scan","blogBody":"Brand1,Brand2,Brand3","imageCount":3}
         This pulls actual ad copy, headlines, CTAs, and snapshot URLs from Meta Ad Library.
         Read the snapshot URLs via WebFetch to analyze visual creatives.

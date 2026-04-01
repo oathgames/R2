@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// generateUGCScript uses Gemini to write a natural-sounding UGC voiceover script.
+// generateUGCScript uses Gemini to write a natural-sounding ad voiceover script.
 // The script is written in the style of real social media creators — casual, authentic,
 // with hooks, filler words, natural pauses, and a call-to-action.
 func generateUGCScript(cfg *Config, refs []ReferenceImage, targetSeconds int, feedback ...string) (string, error) {

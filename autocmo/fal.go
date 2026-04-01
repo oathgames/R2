@@ -388,7 +388,7 @@ func falGenerateImageToVideo(cfg *Config, model, prompt, imageURL, outputPath st
 
 // falLipSync takes a real video clip + voiceover audio and produces a lip-synced video.
 // Uses Kling LipSync — the person's natural body motion is preserved,
-// only the mouth is AI-driven to match the audio. Highest quality UGC path.
+// only the mouth is AI-driven to match the audio. Highest quality lip-sync path.
 func falLipSync(cfg *Config, videoURL, audioURL, outputPath string) error {
 	slug := "fal-ai/kling-video/lipsync/audio-to-video"
 
@@ -472,7 +472,7 @@ func falLipSync(cfg *Config, videoURL, audioURL, outputPath string) error {
 
 // falGenerateAvatar creates a talking-head video using Kling AI Avatar v2.
 // Takes a face photo + voiceover audio → generates lip-synced video.
-// This is the highest quality path for UGC talking-head content.
+// This is the highest quality path for talking-head ad content.
 func falGenerateAvatar(cfg *Config, avatarImageURL, audioURL, prompt, outputPath string) error {
 	slug := "fal-ai/kling-video/ai-avatar/v2/standard"
 
