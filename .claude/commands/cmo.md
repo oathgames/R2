@@ -250,6 +250,47 @@ For the best results, use a template from `quality-benchmark/`:
 
 This is the same approach professional agencies use — recreate proven compositions with new products.
 
+### Composite Mode — 100% Product Accuracy
+
+When the product has visible text, logos, embroidery, or prints that must be exact, use **composite mode**. The AI generates the scene only, then the real product photo is cut out and composited on top.
+
+```json
+{
+  "action": "image",
+  "compositeMode": true,
+  "productRefPath": "assets/brands/madchill/products/7431710507085/references/flatlay.jpg",
+  "adBrief": {
+    "environment": "Sunlit boardwalk at golden hour, ocean behind, warm beach setting.",
+    "subject": "No person — empty scene with centered space for product placement.",
+    "lighting": "Warm golden hour backlight from ocean.",
+    "mood": "Warm, aspirational, California lifestyle.",
+    "negatives": "No people, no products, no text. Clean empty scene only.",
+    "compositePosition": "center",
+    "compositeScale": 0.4
+  },
+  "imageFormat": "portrait",
+  "referencesDir": "assets/brands/madchill/products/7431710507085/references",
+  "skipSlack": true
+}
+```
+
+**When to use composite mode:**
+- Product has embroidered/printed text (logos, brand names)
+- Product has specific patterns that AI can't reproduce
+- Product accuracy is critical (the customer will receive exactly what's shown)
+
+**When NOT to use composite mode:**
+- Lifestyle shots where the product is being worn/used by a model
+- Mood/vibe images where exact product details aren't the focus
+- Product has no distinguishing text or logos
+
+**Composite rules:**
+- `productRefPath` should point to a **flat-lay or isolated product photo** — NOT a photo of someone wearing it
+- Pick the reference with the clearest, cleanest product shot (no wrinkles, good lighting)
+- `compositeScale` of 0.3–0.5 works best (product takes 30-50% of the image height)
+- The scene prompt must say "no people, no products" — the scene is JUST the environment
+- The binary handles background removal + overlay automatically
+
 ### Image model selection
 
 The binary selects the optimal image model automatically based on reference photo availability
