@@ -89,6 +89,15 @@ Every piece of content — email images, ad creatives, social posts, blog featur
 - Bot requires scopes: `channels:read`, `channels:join`, `files:read`, `files:write`, `chat:write`.
 - `files:write` alone will upload but silently fail to share to channels.
 
+### Meta Ads API
+- The AutoCMO app must be in **Live mode** (not Development) to create ad creatives. This is a hard Meta platform restriction.
+- Campaigns, ad sets, image uploads all work in dev mode — only ad creative creation is blocked.
+- Error subcode `1885183` = app in development mode. No workaround exists (page tokens, system user tokens all fail).
+- `metaFindCampaign` uses URL-encoded filtering to avoid duplicate campaign creation.
+- `is_adset_budget_sharing_enabled` is required on ALL campaigns (Meta v22.0+).
+- CBO campaigns need `is_campaign_budget_optimization: true` + `daily_budget` at campaign level.
+- On partial failure (creative/ad fails after ad set created), the ad set is auto-cleaned up.
+
 ### AI Image Generation
 - fal.ai cannot produce pixel-perfect logos or text — only use for lifestyle/hero imagery.
 - Always use real logos, real product photos, and real brand colors for production content.
