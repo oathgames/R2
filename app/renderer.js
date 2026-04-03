@@ -48,6 +48,7 @@ async function init() {
   merlin.checkSetup().then((result) => {
     if (result.ready) {
       turnStartTime = Date.now();
+      sessionActive = true;
       merlin.startSession();
     } else {
       clearInterval(window._welcomeInterval);
@@ -126,6 +127,8 @@ function appendText(text) {
   }
 }
 
+let sessionActive = false;
+
 function finalizeBubble() {
   if (currentBubble) {
     currentBubble.classList.remove('streaming');
@@ -135,6 +138,15 @@ function finalizeBubble() {
   textBuffer = '';
   isStreaming = false;
   scrollToBottom();
+  // If session is still active (no result yet), show typing indicator
+  // because Claude is likely doing tool calls
+  if (sessionActive) {
+    setTimeout(() => {
+      if (sessionActive && !currentBubble) {
+        showTypingIndicator();
+      }
+    }, 300);
+  }
 }
 
 function scrollToBottom() {
@@ -258,7 +270,9 @@ merlin.onSdkMessage((msg) => {
       break;
 
     case 'result':
+      sessionActive = false;
       finalizeBubble();
+      removeTypingIndicator();
       isStreaming = false;
       stopTickingTimer();
       // Show stats bar like Claude Desktop
@@ -519,6 +533,7 @@ function sendMessage() {
   showTypingIndicator();
   turnStartTime = Date.now();
   turnTokens = 0;
+  sessionActive = true;
   startTickingTimer();
   merlin.sendMessage(text);
   input.value = '';
