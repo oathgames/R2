@@ -12,64 +12,59 @@ Check these in order. If everything passes, skip to Step 0 silently — the user
 
 ### A) Binary installed?
 
-Check if `.claude/tools/Merlin.exe` exists (any platform — the binary is always named Merlin.exe).
+Check if `.claude/tools/AutoCMO.exe` exists (any platform — the binary is always named AutoCMO.exe).
 
 If missing, **download it automatically**:
 
 1. Detect platform:
-   - Windows → `Merlin-windows-amd64.exe`
-   - macOS ARM64 → `Merlin-darwin-arm64`
-   - macOS Intel → `Merlin-darwin-amd64`
-   - Linux → `Merlin-linux-amd64`
+   - Windows → `AutoCMO-windows-amd64.exe`
+   - macOS ARM64 → `AutoCMO-darwin-arm64`
+   - macOS Intel → `AutoCMO-darwin-amd64`
+   - Linux → `AutoCMO-linux-amd64`
 
 2. Create `.claude/tools/` if it doesn't exist
 
 3. Download:
 ```bash
-curl -L -o .claude/tools/Merlin.exe "https://github.com/oathgames/Merlin/releases/latest/download/{platform-binary}"
-chmod +x .claude/tools/Merlin.exe
+curl -L -o .claude/tools/AutoCMO.exe "https://github.com/oathgames/AutoCMO/releases/latest/download/{platform-binary}"
+chmod +x .claude/tools/AutoCMO.exe
 ```
 
 4. macOS only — remove Gatekeeper block:
 ```bash
-xattr -d com.apple.quarantine .claude/tools/Merlin.exe
-codesign --force --sign - .claude/tools/Merlin.exe
+xattr -d com.apple.quarantine .claude/tools/AutoCMO.exe
+codesign --force --sign - .claude/tools/AutoCMO.exe
 ```
 
-5. Show one line: `Downloaded Merlin binary.`
+5. Show one line: `Downloaded AutoCMO binary.`
 
 ### B) Config file exists?
 
-Check if `.claude/tools/merlin-config.json` exists.
+Check if `.claude/tools/autocmo-config.json` exists.
 
 If missing, copy from the example template:
 ```bash
-cp .claude/tools/merlin-config.example.json .claude/tools/merlin-config.json
+cp .claude/tools/autocmo-config.example.json .claude/tools/autocmo-config.json
 ```
 
-Then check if `falApiKey` is empty in the config. If empty:
+Then check if `falApiKey` is empty in the config. If empty, ask the user:
 
-1. Run api-key-setup to open the browser to the key page:
-   ```bash
-   .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"api-key-setup","provider":"fal"}'
-   ```
-2. Tell the user: "I opened fal.ai in your browser — create a key and paste it here. Or skip this for now and set it up later."
-3. If the user pastes a key, verify it:
-   ```bash
-   .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"verify-key","provider":"fal","apiKey":"THE_KEY"}'
-   ```
-4. If valid, write it into `.claude/tools/merlin-config.json` in the `falApiKey` field.
-5. If the user says "skip" or "later", continue without it — it's not required for setup.
+```
+To generate images and videos, you need a fal.ai API key (free tier available).
 
-Do NOT ask about any other API keys during first setup. Those come later when the user actually needs them (e.g., ElevenLabs when they want voiceover, HeyGen when they want talking heads). Use the same api-key-setup + verify-key pattern for all providers: fal, elevenlabs, heygen, arcads, google.
+  1. Go to https://fal.ai/dashboard/keys
+  2. Create a key, paste it here
+```
+
+Wait for the key. Write it into `.claude/tools/autocmo-config.json` in the `falApiKey` field. Then continue — do NOT ask about any other API keys during first setup. Those come later when the user needs them.
 
 ### C) Load performance insights
 
-Merlin improves over time by learning from aggregated, anonymous performance trends across all users — no brand names, ad copy, or personal data is ever shared. Pull the latest insights:
+AutoCMO improves over time by learning from aggregated, anonymous performance trends across all users — no brand names, ad copy, or personal data is ever shared. Pull the latest insights:
 ```bash
-.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"wisdom"}'
+.claude/tools/AutoCMO.exe --config .claude/tools/autocmo-config.json --cmd '{"action":"wisdom"}'
 ```
-This writes `.merlin-wisdom.json` next to the config. If it exists, use the data to make better recommendations:
+This writes `.autocmo-wisdom.json` next to the config. If it exists, use the data to make better recommendations:
 - Prefer hook styles with higher avg_ctr for the user's vertical
 - Suggest formats with better win_rate
 - Factor in timing patterns that perform well across similar brands
@@ -85,26 +80,26 @@ Continue to Step 0. If the user typed just `/cmo` with no arguments and no brand
 When Meta is configured, the full loop is:
 
 ```
-Daily 9 AM: merlin-daily generates content
+Daily 9 AM: auto-cmo generates content
   → Generate 3 variations (batch mode)
   → Visual QA passes all 3
-  → Push all 3 into ONE ad set in "Merlin - Testing"
+  → Push all 3 into ONE ad set in "Auto CMO - Testing"
   → Meta optimizes across the 3 creatives automatically
 
-Daily 10 AM: merlin-optimize reviews yesterday
+Daily 10 AM: auto-cmo-optimize reviews yesterday
   → Pull CTR, CPC, ATC, Purchases for each ad
   → The binary evaluates each ad against internal performance thresholds
   → Returns verdicts: KILL / WINNER / MASSIVE WINNER — act on these directly
 
-Monday 9 AM: merlin-digest
+Monday 9 AM: auto-cmo-digest
   → Weekly summary: total spend, ATC, purchases, ROAS
   → Best/worst performers, active ad counts
   → Posted to Slack
 ```
 
 **Two campaigns are auto-created:**
-- **Merlin - Testing** (ABO) — each ad gets its own budget. Isolated testing.
-- **Merlin - Scaling** (CBO) — winners get moved here. Meta optimizes budget across all winners.
+- **Auto CMO - Testing** (ABO) — each ad gets its own budget. Isolated testing.
+- **Auto CMO - Scaling** (CBO) — winners get moved here. Meta optimizes budget across all winners.
 
 When the user says "push to Meta" after approving content:
 1. Read config — check `maxDailyAdBudget` and `maxMonthlyAdSpend`
@@ -176,7 +171,7 @@ Before every run:
 | Product photos, ad images | `image` | fal.ai (model auto-selected) |
 | Someone talking to camera | `talking-head` | HeyGen |
 
-## CRITICAL: Image Ad Laws — Product Accuracy Is Non-Negotiable
+## CRITICAL: Image Prompt Rules — Product Accuracy Is Non-Negotiable
 
 **The generated image MUST look exactly like the real product. Customers will buy
 what they see in the ad. If the ad doesn't match the product, it's deceptive.**
@@ -184,112 +179,20 @@ what they see in the ad. If the ad doesn't match the product, it's deceptive.**
 ### Before writing ANY image prompt:
 1. **READ every reference photo** in the product's `references/` folder using the Read tool
 2. **Describe ONLY what you see** in the photos — not what brand.md says, not what you imagine
-3. If a template image exists in `quality-benchmark/`, READ it and use it as the composition target
+3. Before writing any image prompt, read every reference photo. The binary validates your description against reference images.
 
-### Use Structured Ad Briefs (not freeform prompts)
+### Image Prompt Quality
 
-**Always use `adBrief` instead of `imagePrompt`.** The structured brief produces consistently better results because every visual dimension is explicitly controlled.
+Before writing any image prompt, read every reference photo and describe only what you see.
+The binary applies internal quality rules for color precision, fabric rendering, camera
+settings, and negative constraints. Pass your raw product description and the binary
+returns the production-ready prompt.
 
-```json
-{
-  "action": "image",
-  "adBrief": {
-    "product": "Black strapless faux-leather mini dress with top buckle detail, styled with a heavy silver western buckle belt, a black fringe crossbody bag, and pointed-toe black cowboy boots.",
-    "headline": "Forever 21",
-    "subheadline": "Bold style for the wild at heart.",
-    "bodyText": "The Western Collection",
-    "cta": "Shop now",
-    "typography": "White sans-serif text, centered over lower-third of main image, clean modern aesthetic, high contrast against dark product and car background.",
-    "environment": "A sprawling desert landscape at golden hour; hero image features a vintage silver classic car with chrome accents reflecting the sunset; three right-side panels showcase sensory details: the grainy texture of the black leather, the ornate engravings on the silver belt buckle, and the sway of the leather fringe.",
-    "subject": "Young woman with long, sun-kissed wavy hair and accent braids; confident, cool expression; leaning relaxed against the car hood in a desert sunset setting.",
-    "lighting": "Deep golden hour glow from the horizon, casting long shadows and creating warm, radiant highlights on the model's skin and the car's metallic surface; soft, cinematic orange and pink sky.",
-    "colorPalette": "Midnight black, shimmering chrome silver, sunset orange, dusty earth tones, and muted sage; trendy, moody, and high-saturation desert vibes.",
-    "camera": "Multi-frame collage; main frame is a medium-full shot at a slight 45-degree angle; detail frames are macro-focus with a soft, artistic blur.",
-    "mood": "Rebellious, chic, and adventurous; captures the raw energy of a sunset road trip and the premium feel of textured leather and silver metal.",
-    "postProcess": "Balanced contrast, warm temperature, no watermarks, no text glare, sharp focus on product textures.",
-    "negatives": "No watermarks, no text glare on leather, no unintended objects, no motion blur, no harsh artificial shadows.",
-    "goal": "Awareness",
-    "focus": "Product Shot"
-  },
-  "imageFormat": "both",
-  "referencesDir": "assets/brands/forever21/products/western-dress/references",
-  "skipSlack": true
-}
-```
+### Prompt Construction
 
-### How to fill the AdBrief
-
-**`product` (REQUIRED):** Read every reference photo. Describe EXACTLY what you see: fabric, color, fit, logo, stitching, buttons, collar type. Be obsessively specific. This is the anchor.
-
-**`environment`:** Describe the scene/background. If using a template from quality-benchmark, describe the template's setting. If no template, pick a setting that fits the brand voice and product vibe.
-
-**`subject`:** Who is wearing/using the product? Age, hair, expression, pose, body language. Be specific.
-
-**`lighting`:** Direction, quality, color temperature. "Golden hour from the left" not "nice lighting."
-
-**`colorPalette`:** List the dominant colors with adjectives. "Midnight black, chrome silver, dusty earth tones" not "dark colors."
-
-**`camera`:** Shot type (medium, close-up, full body), angle, depth of field, composition style.
-
-**`mood`:** The emotional feeling of the image in 3-5 words.
-
-**`typography` + `headline` + `cta`:** Only include if the image should have text overlay. Most product photos should NOT have text.
-
-**`negatives`:** Always include. Default: "No watermarks, no text glare, no unintended objects, no motion blur, no harsh artificial shadows." Add product-specific negatives like "no fuzzy texture" for smooth fabrics.
-
-**`postProcess`:** Color grading and contrast instructions.
-
-### Template-Matching Workflow (S-tier results)
-
-For the best results, use a template from `quality-benchmark/`:
-
-1. Read the template image from `assets/brands/<brand>/quality-benchmark/`
-2. Analyze it: composition, lighting, mood, color palette, camera angle
-3. Fill the `adBrief` fields to MATCH the template but with YOUR product
-4. Pass `templatePath` pointing to the template image
-
-This is the same approach professional agencies use — recreate proven compositions with new products.
-
-### Composite Mode — 100% Product Accuracy
-
-When the product has visible text, logos, embroidery, or prints that must be exact, use **composite mode**. The AI generates the scene only, then the real product photo is cut out and composited on top.
-
-```json
-{
-  "action": "image",
-  "compositeMode": true,
-  "productRefPath": "assets/brands/madchill/products/7431710507085/references/flatlay.jpg",
-  "adBrief": {
-    "environment": "Sunlit boardwalk at golden hour, ocean behind, warm beach setting.",
-    "subject": "No person — empty scene with centered space for product placement.",
-    "lighting": "Warm golden hour backlight from ocean.",
-    "mood": "Warm, aspirational, California lifestyle.",
-    "negatives": "No people, no products, no text. Clean empty scene only.",
-    "compositePosition": "center",
-    "compositeScale": 0.4
-  },
-  "imageFormat": "portrait",
-  "referencesDir": "assets/brands/madchill/products/7431710507085/references",
-  "skipSlack": true
-}
-```
-
-**When to use composite mode:**
-- Product has embroidered/printed text (logos, brand names)
-- Product has specific patterns that AI can't reproduce
-- Product accuracy is critical (the customer will receive exactly what's shown)
-
-**When NOT to use composite mode:**
-- Lifestyle shots where the product is being worn/used by a model
-- Mood/vibe images where exact product details aren't the focus
-- Product has no distinguishing text or logos
-
-**Composite rules:**
-- `productRefPath` should point to a **flat-lay or isolated product photo** — NOT a photo of someone wearing it
-- Pick the reference with the clearest, cleanest product shot (no wrinkles, good lighting)
-- `compositeScale` of 0.3–0.5 works best (product takes 30-50% of the image height)
-- The scene prompt must say "no people, no products" — the scene is JUST the environment
-- The binary handles background removal + overlay automatically
+Describe what you see in the reference photos — exact collar type, lettering style, colors,
+fabric texture. The binary's prompt pipeline layers camera settings, scene anchoring, and
+negative constraints automatically.
 
 ### Image model selection
 
@@ -310,7 +213,7 @@ Rules: Hook in 3 seconds. Sound human. ONE specific detail from reference photos
 ## Step 4: Cost Estimate + Confirmation
 
 ```
-🪄  Ready to generate:
+( ◕ ◡ ◕ )  Ready to generate:
 
   Brand:    MadChill
   Product:  cream-set (3 reference photos)
@@ -327,7 +230,7 @@ Rules: Hook in 3 seconds. Sound human. ONE specific detail from reference photos
 ## Step 5: Run the Pipeline
 
 ```
-.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '<JSON>'
+.claude/tools/AutoCMO.exe --config .claude/tools/autocmo-config.json --cmd '<JSON>'
 ```
 
 **Always pass `"skipSlack": true` unless user says to post.** You show the output first.
@@ -375,7 +278,7 @@ For images:
 | List voices | `{"action": "list-voices"}` |
 | List HeyGen avatars | `{"action": "list-avatars"}` |
 | Dry run | `{"action": "dry-run"}` |
-| Check schedule | Use `mcp__scheduled-tasks__list_scheduled_tasks` and report `merlin-daily` state |
+| Check schedule | Use `mcp__scheduled-tasks__list_scheduled_tasks` and report `auto-cmo` state |
 | Pause schedule | Use `mcp__scheduled-tasks__update_scheduled_task` with `enabled: false` |
 | Resume schedule | Use `mcp__scheduled-tasks__update_scheduled_task` with `enabled: true` |
 | Push to Meta | `{"action": "meta-push", "adImagePath": "path/to/image.jpg", "adHeadline": "...", "adBody": "...", "dailyBudget": 5}` |
@@ -591,7 +494,7 @@ If Shopify is not configured, save the blog as a `.html` file in results/ for ma
   / ___ \ |_| | || (_) | |___| |  | | |_| |
  /_/   \_\__,_|\__\___/ \____|_|  |_|\___/
 
-  🪄  Your AI CMO
+  ( ◕ ◡ ◕ )  Your AI CMO
 
   What I can do:
   ──────────────────────────────────────────
@@ -632,7 +535,7 @@ Then proceed:
 (fal.ai key was already configured during preflight — skip straight to brand)
 1. "What's your brand name?" → creates `assets/brands/<brand>/` folder
 2. "What's your website?" → scrapes it, writes `brand.md`
-3. Infer the brand's vertical from the website (apparel, skincare, fitness, food, tech, home, etc.) and write it into `.claude/tools/merlin-config.json` as the `"vertical"` field. Don't ask — just infer from the product catalog.
+3. Infer the brand's vertical from the website (apparel, skincare, fitness, food, tech, home, etc.) and write it into `.claude/tools/autocmo-config.json` as the `"vertical"` field. Don't ask — just infer from the product catalog.
 4. Extract brand colors + logo from the website (run in background, no user input):
    - Fetch the homepage HTML
    - Extract CSS custom properties (`--color-button`, `--color-background`, `--color-foreground`, etc.)
@@ -673,24 +576,24 @@ This runs silently during setup — no questions asked. The user sees the result
 4. "Want me to set up daily auto-generation? (default: 9 AM weekdays)"
    If yes → create a scheduled task:
    - Use `mcp__scheduled-tasks__create_scheduled_task`
-   - **taskId**: `merlin-daily`
+   - **taskId**: `auto-cmo`
    - **cronExpression**: `0 9 * * 1-5` (9 AM weekdays)
    - **description**: `Generate daily content for all brands`
    - **prompt**:
      ```
      == SETUP ==
-     Read .claude/tools/merlin-config.json for budget limits and settings.
+     Read .claude/tools/autocmo-config.json for budget limits and settings.
      CONFIG = the parsed config JSON. Use it throughout.
 
      == ERROR HANDLING (applies to ALL steps) ==
      If the binary returns an error or non-zero exit code:
        - Log the error to memory.md under "## Errors"
-       - Post to Slack if configured: "🪄 Merlin error: {error message}"
+       - Post to Slack if configured: "( ◕ ◡ ◕ ) AutoCMO error: {error message}"
        - Skip that step and continue to the next
        - Do NOT retry failed API calls — they will be retried next cycle
      If a token/API key error occurs (401, 403, "unauthorized", "expired"):
        - Log: "⚠ TOKEN EXPIRED: {platform}" to memory.md
-       - Post to Slack: "🪄 ⚠ {platform} token expired — re-authenticate to resume"
+       - Post to Slack: "( ◕ ◡ ◕ ) ⚠ {platform} token expired — re-authenticate to resume"
        - Skip ALL steps for that platform until the next session
 
      == MEMORY ROTATION ==
@@ -726,67 +629,47 @@ This runs silently during setup — no questions asked. The user sees the result
      ```
    - Tell user: "Daily content is set! I'll generate fresh ads and blog drafts every weekday at 9 AM."
 
-**C) Meta Ads setup (optional — user can skip and set up later):**
-5. "Want to connect Meta Ads? You can skip this and set it up anytime later." → if yes:
-   - Run `meta-login` — this opens the user's browser for one-click Facebook authorization:
-     ```bash
-     .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"meta-login"}'
-     ```
-   - The binary handles everything: OAuth flow, token exchange, account discovery
-   - Parse the JSON output. It contains: `metaAccessToken`, `metaAdAccountId`, `metaPageId`, `metaPixelId`, plus `allAccounts` and `allPages` arrays
-   - If `allAccounts` has multiple active accounts, ask the user which one to use
-   - If `allPages` has multiple pages, ask which one to use
-   - Write the selected values into `.claude/tools/merlin-config.json`
-   - Run `{"action": "meta-setup"}` to create campaigns
-   - Also ask: "What's your max daily budget per ad? (default: $5)" → save to `maxDailyAdBudget`
-   - Also ask: "What's your max monthly ad spend? (default: $300)" → save to `maxMonthlyAdSpend`
-   - Ask: "Should new ads go live automatically, or wait for your approval? (default: wait for approval)" → save to `autoPublishAds` (true/false)
+**C) Meta Ads setup (optional):**
+5. "Want to auto-push ads to Meta?" → if yes, ask for:
+   - Meta Access Token (System User token from Business Manager)
+   - Ad Account ID (act_XXXXXXXXX)
+   - Facebook Page ID
+   - Pixel ID (optional)
+   → Save to config, then run `{"action": "meta-setup"}` to create campaigns
+   → Also ask: "What's your max daily budget per ad? (default: $5)" → save to `maxDailyAdBudget`
+   → Also ask: "What's your max monthly ad spend? (default: $300)" → save to `maxMonthlyAdSpend`
+   → Ask: "Should new ads go live automatically, or wait for your approval? (default: wait for approval)" → save to `autoPublishAds` (true/false)
 
-**D) TikTok Ads setup (optional — user can skip and set up later):**
-   "Want to connect TikTok Ads? Skip if you don't need it right now." → if yes:
-   - Run `tiktok-login` — opens browser for one-click TikTok authorization:
-     ```bash
-     .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"tiktok-login"}'
-     ```
-   - Parse JSON output, write `tiktokAccessToken`, `tiktokAdvertiserId` into config
-   - If multiple advertisers, ask which one to use
-   - Run `{"action": "tiktok-setup"}` to create campaigns
-   - Same budget caps apply (shared maxDailyAdBudget / maxMonthlyAdSpend)
-
-**E) Additional platforms (all optional — connect anytime):**
-   Don't offer these during initial setup. When the user later asks to use a platform that isn't connected, use the same one-click pattern:
-   - Shopify: `{"action": "shopify-login"}` — auto-discovers store
-   - Klaviyo: `{"action": "klaviyo-login"}` — connects email marketing
-   - Pinterest: `{"action": "pinterest-login"}` — connects Pinterest Ads
-   - Snapchat: `{"action": "snapchat-login"}` — connects Snapchat Ads
-   - Google Ads: `{"action": "google-login"}` — connects Google Ads
-   - X/Twitter: `{"action": "twitter-login"}` — connects X Ads
-
-   All login commands open the user's browser for one-click authorization.
-   Parse the JSON output and write values into config. Never ask for manual tokens or IDs.
+**D) TikTok Ads setup (optional):**
+   "Want to also push to TikTok?" → if yes, ask for:
+   - TikTok Access Token (from TikTok Ads Manager → API)
+   - Advertiser ID
+   - Pixel ID (optional)
+   → Save to config, then run `{"action": "tiktok-setup"}` to create campaigns
+   Same budget caps apply (shared maxDailyAdBudget / maxMonthlyAdSpend).
 
 6. If Meta OR TikTok is configured, create a SECOND scheduled task for optimization:
    - Use `mcp__scheduled-tasks__create_scheduled_task`
-   - **taskId**: `merlin-optimize`
+   - **taskId**: `auto-cmo-optimize`
    - **cronExpression**: `0 10 * * 1-5` (10 AM weekdays -- 1 hour after generation)
    - **description**: `Review ad performance, kill losers, scale winners (with budget checks)`
    - **prompt**:
      ```
      == SETUP ==
-     Read .claude/tools/merlin-config.json.
+     Read .claude/tools/autocmo-config.json.
      CONFIG = the parsed config JSON. Check budget limits before any spend action.
 
      == ERROR HANDLING ==
-     Same rules as merlin-daily task: log errors, alert on token expiry, skip and continue.
+     Same rules as auto-cmo task: log errors, alert on token expiry, skip and continue.
 
      == BUDGET CHECK (before ANY ad action) ==
      Read the current month's total spend from memory.md "## Monthly Spend" section.
      If total spend >= CONFIG.maxMonthlyAdSpend: STOP. Log "Monthly budget cap reached ($X/$Y)."
-     Post to Slack: "🪄 Monthly ad budget reached. Pausing all ad operations."
+     Post to Slack: "( ◕ ◡ ◕ ) Monthly ad budget reached. Pausing all ad operations."
      Skip all ad operations. Still run the digest portion.
 
      == META (if metaAccessToken configured) ==
-     1. Run: .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"meta-insights"}'
+     1. Run: .claude/tools/AutoCMO.exe --config .claude/tools/autocmo-config.json --cmd '{"action":"meta-insights"}'
         If this fails, log the error and skip Meta entirely.
      2. The binary returns each ad with a verdict. Act on verdicts:
         - KILL / FATIGUE → run meta-kill
@@ -805,7 +688,7 @@ This runs silently during setup — no questions asked. The user sees the result
 
 7. Create a THIRD scheduled task -- weekly digest (always, not just for ads):
    - Use `mcp__scheduled-tasks__create_scheduled_task`
-   - **taskId**: `merlin-digest`
+   - **taskId**: `auto-cmo-digest`
    - **cronExpression**: `0 9 * * 1` (Monday 9 AM)
    - **description**: `Weekly performance digest across all brands and platforms`
    - **prompt**:
@@ -832,7 +715,7 @@ This runs silently during setup — no questions asked. The user sees the result
      9. Use WebSearch for competitor news
 
      == COMPILE DIGEST ==
-     🪄  Merlin Weekly Digest — [Date Range]
+     ( ◕ ◡ ◕ )  AutoCMO Weekly Digest — [Date Range]
      ─────────────────────────────────────────────────
      BUDGET:
        Monthly spend: $XX / $YY cap (ZZ% used)
@@ -919,7 +802,7 @@ Audited: YYYY-MM-DD | Store: <url>
 
 ## What Claude will NOT touch
 Product titles, descriptions, prices, pages, theme, navigation.
-These are yours. Merlin only adds — never edits or overwrites.
+These are yours. AutoCMO only adds — never edits or overwrites.
 
 ## Auto-Fix Queue (additive only)
 - [ ] 12 product images missing alt text (will ADD where empty)
@@ -958,7 +841,7 @@ Here's how to create one (takes ~60 seconds):
      → If you see "Allow custom app development", click it first
 
   3. Click "Create an app"
-     → Name it "Merlin" (or anything)
+     → Name it "AutoCMO" (or anything)
 
   4. Click "Configure Admin API scopes"
      → Check these boxes:
@@ -1046,14 +929,14 @@ When the user says "audit my email", "check email flows", "email performance", o
 ### Email Audit
 Run the email audit to analyze Klaviyo setup:
 ```bash
-.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"email-audit"}'
+.claude/tools/AutoCMO.exe --config .claude/tools/autocmo-config.json --cmd '{"action":"email-audit"}'
 ```
 
 The binary returns JSON with: existing flows, lists, campaigns, missing essential flows, and recommendations.
 
 Present the results as:
 ```
-🪄  Email Audit — <Brand Name>
+( ◕ ◡ ◕ )  Email Audit — <Brand Name>
 ─────────────────────────────────────────────
 
 Subscriber Lists: X
@@ -1093,12 +976,12 @@ When the user says "set up Google Ads", "Google Ads status", or anything Google 
 
 ### Status Check
 ```bash
-.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"google-ads-status"}'
+.claude/tools/AutoCMO.exe --config .claude/tools/autocmo-config.json --cmd '{"action":"google-ads-status"}'
 ```
 
 If not connected, explain the value and walk through setup:
 ```
-🪄  Google Ads — Not Connected
+( ◕ ◡ ◕ )  Google Ads — Not Connected
 
 Google Ads captures people actively searching for products like yours.
 It's the highest-intent ad channel — buyers come to you.
@@ -1127,14 +1010,14 @@ When the user says "marketing calendar", "plan my content", "launch schedule", o
 ### Step 1: Analyze Launch Cadence
 If Shopify is connected, pull product launch data:
 ```bash
-.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"calendar"}'
+.claude/tools/AutoCMO.exe --config .claude/tools/autocmo-config.json --cmd '{"action":"calendar"}'
 ```
 
 The binary returns: launch history, average cadence, seasonal signals, and gaps.
 
 ### Step 2: Present the Analysis
 ```
-🪄  Marketing Calendar Analysis — <Brand>
+( ◕ ◡ ◕ )  Marketing Calendar Analysis — <Brand>
 ─────────────────────────────────────────────────
 
 Product Catalog: 24 products across 5 categories
@@ -1156,7 +1039,7 @@ Gaps:
 Based on the analysis, generate a 30-day marketing calendar:
 
 ```
-🪄  Proposed 30-Day Calendar — <Brand>
+( ◕ ◡ ◕ )  Proposed 30-Day Calendar — <Brand>
 ─────────────────────────────────────────────────
 
 Week 1:
@@ -1187,4 +1070,4 @@ Channels per piece:
 
 Ask: "Want me to set this up as your daily schedule? I'll generate the right content on the right days automatically."
 
-If yes, update the merlin-daily scheduled task prompt to follow the calendar pattern instead of random product selection.
+If yes, update the auto-cmo scheduled task prompt to follow the calendar pattern instead of random product selection.

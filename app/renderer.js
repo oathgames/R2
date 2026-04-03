@@ -23,15 +23,18 @@ merlin.onPlatform((platform) => {
 
 // ── Setup Flow ──────────────────────────────────────────────
 async function init() {
-  const result = await merlin.checkSetup();
-  if (result.ready) {
-    // Claude is installed and authenticated — skip setup, go straight to /cmo
-    setup.classList.add('hidden');
-    await merlin.startSession();
-  } else {
-    // Show setup — user needs Claude Desktop
-    document.getElementById('setup-status').textContent = result.reason || 'Install Claude Desktop to get started.';
-  }
+  // Show the chat immediately — don't block on setup check
+  setup.classList.add('hidden');
+
+  // Check + start session in parallel — non-blocking
+  merlin.checkSetup().then((result) => {
+    if (result.ready) {
+      merlin.startSession();
+    } else {
+      setup.classList.remove('hidden');
+      document.getElementById('setup-status').textContent = result.reason || 'Install Claude Desktop to get started.';
+    }
+  });
 }
 
 document.getElementById('setup-install-btn').addEventListener('click', () => {

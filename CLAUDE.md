@@ -1,4 +1,4 @@
-# Merlin — Portable AI Content Engine
+# AutoCMO — Portable AI Content Engine
 
 Open in Claude Code. Type `/cmo`. Everything else is automatic.
 
@@ -51,11 +51,11 @@ Create a subfolder under `assets/brands/<brand>/products/` with a `references/` 
 ## Updates
 Type `/update` to check for and install new versions.
 Downloads the latest binary + framework files from GitHub while preserving user data (memory.md, brand folders, config).
-Backups are saved to `.merlin-backup/{version}/` before overwriting.
+Backups are saved to `.autocmo-backup/{version}/` before overwriting.
 
-## How Merlin Improves Over Time
-Merlin learns from anonymous, aggregated performance trends across all users.
-When you check ad performance, Merlin contributes metrics like CTR and CPC
+## How AutoCMO Improves Over Time
+AutoCMO learns from anonymous, aggregated performance trends across all users.
+When you check ad performance, AutoCMO contributes metrics like CTR and CPC
 (never brand names, ad copy, or personal data) to improve recommendations for
 everyone. This is what makes hook suggestions, format picks, and timing
 recommendations smarter with every release.
@@ -90,7 +90,7 @@ Every piece of content — email images, ad creatives, social posts, blog featur
 - `files:write` alone will upload but silently fail to share to channels.
 
 ### Meta Ads API
-- The Merlin app must be in **Live mode** (not Development) to create ad creatives. This is a hard Meta platform restriction.
+- The AutoCMO app must be in **Live mode** (not Development) to create ad creatives. This is a hard Meta platform restriction.
 - Campaigns, ad sets, image uploads all work in dev mode — only ad creative creation is blocked.
 - Error subcode `1885183` = app in development mode. No workaround exists (page tokens, system user tokens all fail).
 - `metaFindCampaign` uses URL-encoded filtering to avoid duplicate campaign creation.
@@ -99,11 +99,6 @@ Every piece of content — email images, ad creatives, social posts, blog featur
 - On partial failure (creative/ad fails after ad set created), the ad set is auto-cleaned up.
 
 ### AI Image Generation
-- **Always use structured `adBrief` instead of freeform `imagePrompt`.** Every visual dimension must be explicit.
-- The `adBrief` fields: product, environment, subject, lighting, colorPalette, camera, mood, typography, postProcess, negatives.
-- **Product accuracy is non-negotiable.** The `product` field must describe ONLY what you see in reference photos.
-- **Template matching produces S-tier results.** Use images from `quality-benchmark/` as composition targets.
 - fal.ai cannot produce pixel-perfect logos or text — only use for lifestyle/hero imagery.
 - Always use real logos, real product photos, and real brand colors for production content.
-- Brand colors extracted from website CSS custom properties during onboarding.
-- **Negatives are mandatory.** Always include: "No watermarks, no text glare, no unintended objects, no motion blur."
+- Brand colors extracted from website CSS custom properties (`--color-button`, `--color-foreground`, etc.) during onboarding.

@@ -246,15 +246,19 @@ async function startSession() {
 
 // ── IPC Handlers ────────────────────────────────────────────
 
-ipcMain.handle('check-setup', () => {
-  // Check if claude CLI is available (user has Claude Desktop installed)
-  const { execSync } = require('child_process');
-  try {
-    execSync('claude --version', { stdio: 'ignore', timeout: 5000 });
-    return { ready: true };
-  } catch {
-    return { ready: false, reason: 'Claude Desktop not found. Install it from claude.ai/download' };
-  }
+ipcMain.handle('check-setup', async () => {
+  // Async check — doesn't block the main process
+  const { exec } = require('child_process');
+  return new Promise((resolve) => {
+    const child = exec('claude --version', { timeout: 3000 });
+    child.on('close', (code) => {
+      if (code === 0) resolve({ ready: true });
+      else resolve({ ready: false, reason: 'Claude Desktop not found. Install it from claude.ai/download' });
+    });
+    child.on('error', () => {
+      resolve({ ready: false, reason: 'Claude Desktop not found. Install it from claude.ai/download' });
+    });
+  });
 });
 
 ipcMain.handle('start-session', () => {
@@ -418,8 +422,8 @@ ipcMain.handle('restart-app', () => {
 
 app.whenReady().then(async () => {
   await createWindow();
-  // Check for updates on launch + every 4 hours
-  checkForUpdates();
+  // Check for updates after 10s (don't compete with session startup) + every 4 hours
+  setTimeout(checkForUpdates, 10000);
   setInterval(checkForUpdates, 4 * 60 * 60 * 1000);
 });
 app.on('window-all-closed', () => {

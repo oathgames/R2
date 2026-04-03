@@ -218,7 +218,13 @@ a:hover{text-decoration:underline}
   outline:none;
   max-height:120px;
   transition:border-color .2s;
+  overflow-y:auto;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(255,255,255,.1) transparent;
 }
+#input::-webkit-scrollbar{width:4px}
+#input::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:2px}
+#input::-webkit-scrollbar-track{background:transparent}
 #input:focus{border-color:var(--accent-border)}
 #input::placeholder{color:var(--text-dim)}
 #send-btn{
