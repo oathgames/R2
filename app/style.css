@@ -550,8 +550,8 @@ a:hover{text-decoration:underline}
 .dot-pending{background:var(--text-dim);opacity:.4}
 .autopilot-time{
   margin-left:auto;
-  font-size:11px;color:var(--text-dim);
-  font-family:'JetBrains Mono',monospace;
+  font-size:12px;color:var(--text-muted);
+  font-weight:500;
 }
 .autopilot-last{
   font-size:11px;color:var(--text-dim);
@@ -559,6 +559,16 @@ a:hover{text-decoration:underline}
   padding-top:8px;
   border-top:1px solid var(--border);
 }
+.autopilot-row{cursor:pointer;padding:6px 8px;border-radius:8px;transition:background .2s}
+.autopilot-row:hover{background:var(--surface)}
+.add-task-btn{
+  width:100%;margin-top:12px;padding:10px;
+  background:var(--surface);border:1px dashed var(--border);
+  border-radius:10px;color:var(--text-dim);
+  font-size:12px;font-weight:500;font-family:var(--font);
+  cursor:pointer;transition:all .2s;
+}
+.add-task-btn:hover{border-color:var(--accent-border);color:var(--accent);background:var(--surface-hover)}
 .autopilot-last:empty{display:none}
 
 /* ── Typing Indicator ────────────────────────────────────── */

@@ -556,6 +556,35 @@ document.querySelectorAll('.magic-tile').forEach(tile => {
   });
 });
 
+// Add scheduled task button
+document.getElementById('add-task-btn').addEventListener('click', () => {
+  document.getElementById('magic-panel').classList.add('hidden');
+  const msg = 'I want to add a new scheduled task. What would be useful?';
+  addUserBubble(msg);
+  showTypingIndicator();
+  turnStartTime = Date.now();
+  turnTokens = 0;
+  sessionActive = true;
+  startTickingTimer();
+  merlin.sendMessage(msg);
+});
+
+// Autopilot row clicks
+document.querySelectorAll('.autopilot-row').forEach(row => {
+  row.addEventListener('click', () => {
+    document.getElementById('magic-panel').classList.add('hidden');
+    const taskName = row.textContent.trim().replace(/\d+\s*(AM|PM|Mon).*/, '').trim();
+    const msg = `Tell me about the "${taskName}" scheduled task and let me configure it.`;
+    addUserBubble(msg);
+    showTypingIndicator();
+    turnStartTime = Date.now();
+    turnTokens = 0;
+    sessionActive = true;
+    startTickingTimer();
+    merlin.sendMessage(msg);
+  });
+});
+
 // ── Input Handling ──────────────────────────────────────────
 // ── Ticking Timer ───────────────────────────────────────────
 let tickerInterval = null;
