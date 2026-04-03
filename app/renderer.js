@@ -12,60 +12,46 @@ const setup = document.getElementById('setup');
 const approval = document.getElementById('approval');
 
 // ── Platform Detection ──────────────────────────────────────
-r2.onPlatform((platform) => {
+merlin.onPlatform((platform) => {
   if (platform === 'win32') {
     document.getElementById('win-controls').classList.remove('hidden');
-    document.getElementById('btn-min').onclick = () => r2.invoke?.('win-minimize');
-    document.getElementById('btn-max').onclick = () => r2.invoke?.('win-maximize');
-    document.getElementById('btn-close').onclick = () => r2.invoke?.('win-close');
+    document.getElementById('btn-min').onclick = () => merlin.invoke?.('win-minimize');
+    document.getElementById('btn-max').onclick = () => merlin.invoke?.('win-maximize');
+    document.getElementById('btn-close').onclick = () => merlin.invoke?.('win-close');
   }
 });
 
 // ── Setup Flow ──────────────────────────────────────────────
 async function init() {
-  const { hasKey } = await r2.checkSetup();
-  if (hasKey) {
+  const result = await merlin.checkSetup();
+  if (result.ready) {
+    // Claude is installed and authenticated — skip setup, go straight to /cmo
     setup.classList.add('hidden');
-    startChat();
+    await merlin.startSession();
+  } else {
+    // Show setup — user needs Claude Desktop
+    document.getElementById('setup-status').textContent = result.reason || 'Install Claude Desktop to get started.';
   }
 }
 
-document.getElementById('key-submit').addEventListener('click', async () => {
-  const key = document.getElementById('key-input').value.trim();
-  const error = document.getElementById('key-error');
-
-  if (!key || !key.startsWith('sk-ant-')) {
-    error.classList.remove('hidden');
-    return;
-  }
-
-  error.classList.add('hidden');
-  document.getElementById('key-submit').disabled = true;
-  document.getElementById('key-submit').textContent = 'Connecting...';
-
-  await r2.saveApiKey(key);
-  setup.style.animation = 'fadeOut .3s ease forwards';
-  setTimeout(() => {
-    setup.classList.add('hidden');
-    setup.style.animation = '';
-    startChat();
-  }, 300);
+document.getElementById('setup-install-btn').addEventListener('click', () => {
+  merlin.openClaudeDownload();
 });
 
-document.getElementById('setup-close').addEventListener('click', () => {
-  setup.classList.add('hidden');
-});
-
-document.getElementById('key-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    document.getElementById('key-submit').click();
+document.getElementById('setup-retry-btn').addEventListener('click', async () => {
+  document.getElementById('setup-status').textContent = 'Checking...';
+  const result = await merlin.checkSetup();
+  if (result.ready) {
+    setup.style.animation = 'fadeOut .3s ease forwards';
+    setTimeout(async () => {
+      setup.classList.add('hidden');
+      setup.style.animation = '';
+      await merlin.startSession();
+    }, 300);
+  } else {
+    document.getElementById('setup-status').textContent = result.reason || 'Claude Desktop not found.';
   }
 });
-
-async function startChat() {
-  await r2.startSession();
-}
 
 // ── Message Rendering ───────────────────────────────────────
 function addUserBubble(text) {
@@ -82,7 +68,7 @@ function addClaudeBubble() {
 
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
-  avatar.textContent = '( \u25D5 \u25E1 \u25D5 )';
+  avatar.textContent = '🪄';
 
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble streaming';
@@ -170,7 +156,7 @@ function escapeHtml(text) {
 }
 
 // ── SDK Message Handling ────────────────────────────────────
-r2.onSdkMessage((msg) => {
+merlin.onSdkMessage((msg) => {
   switch (msg.type) {
     case 'system':
       // Session init — ready
@@ -219,7 +205,7 @@ function handleStreamEvent(msg) {
 }
 
 // ── Approval Cards ──────────────────────────────────────────
-r2.onApprovalRequest(({ toolUseID, label, cost }) => {
+merlin.onApprovalRequest(({ toolUseID, label, cost }) => {
   document.getElementById('approval-label').textContent = label;
   document.getElementById('approval-cost').textContent = cost ? `Cost: ${cost}` : '';
 
@@ -237,17 +223,17 @@ r2.onApprovalRequest(({ toolUseID, label, cost }) => {
   approval.classList.remove('hidden');
 
   approveBtn.onclick = () => {
-    r2.approveTool(toolUseID);
+    merlin.approveTool(toolUseID);
     approval.classList.add('hidden');
   };
   denyBtn.onclick = () => {
-    r2.denyTool(toolUseID);
+    merlin.denyTool(toolUseID);
     approval.classList.add('hidden');
   };
 });
 
 // ── AskUserQuestion (Option Chips) ──────────────────────────
-r2.onAskUserQuestion(({ toolUseID, questions }) => {
+merlin.onAskUserQuestion(({ toolUseID, questions }) => {
   const answers = {};
   const bubble = addClaudeBubble();
   finalizeBubble(); // Stop streaming cursor
@@ -280,7 +266,7 @@ r2.onAskUserQuestion(({ toolUseID, questions }) => {
         // If all questions answered, submit
         if (Object.keys(answers).length === questions.length) {
           setTimeout(() => {
-            r2.answerQuestion(toolUseID, answers);
+            merlin.answerQuestion(toolUseID, answers);
             // Disable all chips after answering
             container.querySelectorAll('.chip').forEach(c => {
               c.disabled = true;
@@ -300,7 +286,7 @@ r2.onAskUserQuestion(({ toolUseID, questions }) => {
 });
 
 // ── Error Handling ──────────────────────────────────────────
-r2.onSdkError((err) => {
+merlin.onSdkError((err) => {
   const bubble = addClaudeBubble();
   textBuffer = `Something went wrong: ${err}\n\nTry sending your message again.`;
   finalizeBubble();
@@ -313,7 +299,7 @@ function sendMessage() {
   if (!text || isStreaming) return;
 
   addUserBubble(text);
-  r2.sendMessage(text);
+  merlin.sendMessage(text);
   input.value = '';
   autoResize();
 }

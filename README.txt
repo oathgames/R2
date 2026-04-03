@@ -1,10 +1,10 @@
-  ____  ____
- |  _ \|___ \
- | |_) | __) |
- |  _ < / __/
- |_| \_\_____|
+  __  __           _ _
+ |  \/  | ___ _ __| (_)_ __
+ | |\/| |/ _ \ '__| | | '_ \
+ | |  | |  __/ |  | | | | | |
+ |_|  |_|\___|_|  |_|_|_| |_|
 
-  ( ◕ ◡ ◕ )  Your AI CMO
+  🪄  Your AI CMO
 
 Generate ads, manage campaigns, write SEO blogs, run competitor intel.
 All from one command.
@@ -12,7 +12,7 @@ All from one command.
 SETUP
 
   1. Download this repo (or ask Claude to do it):
-     https://github.com/oathgames/R2
+     https://github.com/oathgames/Merlin
   2. Open the folder in Claude Code
   3. Type: /cmo
 

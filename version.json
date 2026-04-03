@@ -6,17 +6,17 @@
     ".claude/commands/cmo.md",
     ".claude/commands/update.md",
     ".claude/settings.json",
-    ".claude/tools/r2-config.example.json",
+    ".claude/tools/merlin-config.example.json",
     "assets/brands/example/",
     "version.json"
   ],
   "preserve": [
     "memory.md",
-    ".claude/tools/r2-config.json",
+    ".claude/tools/merlin-config.json",
     "results/"
   ],
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
-  "binaryName": "R2",
-  "repo": "oathgames/R2",
+  "binaryName": "Merlin",
+  "repo": "oathgames/Merlin",
   "notes": "v0.2.3: Meta Ads v22.0 fixes — campaign creation, duplicate prevention, orphan cleanup, better error messages."
 }

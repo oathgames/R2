@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, protocol, nativeTheme, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, protocol, nativeTheme, Menu, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -10,7 +10,7 @@ const appRoot = app.isPackaged
   ? path.dirname(app.getPath('exe'))
   : path.join(__dirname, '..');
 
-const keyFile = path.join(appRoot, '.r2-key');
+const keyFile = path.join(appRoot, '.merlin-key');
 let win = null;
 let resolveNextMessage = null;
 let pendingApprovals = new Map(); // toolUseID → resolve function
@@ -37,8 +37,8 @@ function createWindow() {
   });
 
   // Register protocol for inline images
-  protocol.handle('r2', (request) => {
-    const filePath = path.join(appRoot, decodeURIComponent(request.url.replace('r2://', '')));
+  protocol.handle('merlin', (request) => {
+    const filePath = path.join(appRoot, decodeURIComponent(request.url.replace('merlin://', '')));
     return new Response(fs.readFileSync(filePath));
   });
 
@@ -64,6 +64,15 @@ function saveApiKey(key) {
   fs.writeFileSync(keyFile, encrypted);
 }
 
+// Open Claude Desktop download page in user's default browser
+function openClaudeDownload() {
+  shell.openExternal('https://claude.ai/download');
+}
+
+ipcMain.handle('open-claude-download', () => {
+  openClaudeDownload();
+});
+
 // ── SDK Integration ─────────────────────────────────────────
 
 // Tools that never need user approval
@@ -74,8 +83,8 @@ const autoApproveTools = new Set([
 
 // Translate tool calls to plain English for approvals
 function translateTool(toolName, input) {
-  // Parse R2 binary commands
-  if (toolName === 'Bash' && input.command && input.command.includes('R2')) {
+  // Parse Merlin binary commands
+  if (toolName === 'Bash' && input.command && input.command.includes('Merlin')) {
     const cmdMatch = input.command.match(/"action"\s*:\s*"([^"]+)"/);
     const action = cmdMatch ? cmdMatch[1] : null;
     const translations = {
@@ -149,18 +158,18 @@ async function handleToolApproval(toolName, input, context) {
   });
 }
 
-async function startSession(apiKey) {
+async function startSession() {
   // Dynamic import (ESM module)
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
 
   // Streaming input — async generator that yields user messages on demand
   async function* messageGenerator() {
-    // Initial greeting
+    // Fire /cmo immediately — get right into the value
     yield {
       type: 'user',
       message: {
         role: 'user',
-        content: 'Greet the user warmly. You are R2, their AI CMO. Be concise — one short paragraph. Then show 3 options: "Create an Ad", "Connect Ad Accounts", "What can you do?" as an AskUserQuestion.',
+        content: '/cmo',
       },
     };
 
@@ -172,6 +181,8 @@ async function startSession(apiKey) {
     }
   }
 
+  // No API key needed — uses the user's existing Claude Pro/Max auth
+  // via the Claude Code CLI that's already installed and authenticated
   activeQuery = query({
     prompt: messageGenerator(),
     options: {
@@ -180,7 +191,6 @@ async function startSession(apiKey) {
       includePartialMessages: true,
       settingSources: ['project'],
       canUseTool: handleToolApproval,
-      env: { ...process.env, ANTHROPIC_API_KEY: apiKey },
     },
   });
 
@@ -200,19 +210,18 @@ async function startSession(apiKey) {
 // ── IPC Handlers ────────────────────────────────────────────
 
 ipcMain.handle('check-setup', () => {
-  const key = getApiKey();
-  return { hasKey: !!key };
-});
-
-ipcMain.handle('save-api-key', (_, key) => {
-  saveApiKey(key);
-  return { success: true };
+  // Check if claude CLI is available (user has Claude Desktop installed)
+  const { execSync } = require('child_process');
+  try {
+    execSync('claude --version', { stdio: 'ignore', timeout: 5000 });
+    return { ready: true };
+  } catch {
+    return { ready: false, reason: 'Claude Desktop not found. Install it from claude.ai/download' };
+  }
 });
 
 ipcMain.handle('start-session', () => {
-  const apiKey = getApiKey();
-  if (!apiKey) return { error: 'No API key' };
-  startSession(apiKey); // fire and forget — messages come via events
+  startSession(); // No API key — uses existing Claude auth
   return { success: true };
 });
 

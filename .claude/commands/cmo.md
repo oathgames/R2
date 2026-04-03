@@ -12,64 +12,64 @@ Check these in order. If everything passes, skip to Step 0 silently — the user
 
 ### A) Binary installed?
 
-Check if `.claude/tools/R2.exe` exists (any platform — the binary is always named R2.exe).
+Check if `.claude/tools/Merlin.exe` exists (any platform — the binary is always named Merlin.exe).
 
 If missing, **download it automatically**:
 
 1. Detect platform:
-   - Windows → `R2-windows-amd64.exe`
-   - macOS ARM64 → `R2-darwin-arm64`
-   - macOS Intel → `R2-darwin-amd64`
-   - Linux → `R2-linux-amd64`
+   - Windows → `Merlin-windows-amd64.exe`
+   - macOS ARM64 → `Merlin-darwin-arm64`
+   - macOS Intel → `Merlin-darwin-amd64`
+   - Linux → `Merlin-linux-amd64`
 
 2. Create `.claude/tools/` if it doesn't exist
 
 3. Download:
 ```bash
-curl -L -o .claude/tools/R2.exe "https://github.com/oathgames/R2/releases/latest/download/{platform-binary}"
-chmod +x .claude/tools/R2.exe
+curl -L -o .claude/tools/Merlin.exe "https://github.com/oathgames/Merlin/releases/latest/download/{platform-binary}"
+chmod +x .claude/tools/Merlin.exe
 ```
 
 4. macOS only — remove Gatekeeper block:
 ```bash
-xattr -d com.apple.quarantine .claude/tools/R2.exe
-codesign --force --sign - .claude/tools/R2.exe
+xattr -d com.apple.quarantine .claude/tools/Merlin.exe
+codesign --force --sign - .claude/tools/Merlin.exe
 ```
 
-5. Show one line: `Downloaded R2 binary.`
+5. Show one line: `Downloaded Merlin binary.`
 
 ### B) Config file exists?
 
-Check if `.claude/tools/r2-config.json` exists.
+Check if `.claude/tools/merlin-config.json` exists.
 
 If missing, copy from the example template:
 ```bash
-cp .claude/tools/r2-config.example.json .claude/tools/r2-config.json
+cp .claude/tools/merlin-config.example.json .claude/tools/merlin-config.json
 ```
 
 Then check if `falApiKey` is empty in the config. If empty:
 
 1. Run api-key-setup to open the browser to the key page:
    ```bash
-   .claude/tools/R2.exe --config .claude/tools/r2-config.json --cmd '{"action":"api-key-setup","provider":"fal"}'
+   .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"api-key-setup","provider":"fal"}'
    ```
 2. Tell the user: "I opened fal.ai in your browser — create a key and paste it here. Or skip this for now and set it up later."
 3. If the user pastes a key, verify it:
    ```bash
-   .claude/tools/R2.exe --config .claude/tools/r2-config.json --cmd '{"action":"verify-key","provider":"fal","apiKey":"THE_KEY"}'
+   .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"verify-key","provider":"fal","apiKey":"THE_KEY"}'
    ```
-4. If valid, write it into `.claude/tools/r2-config.json` in the `falApiKey` field.
+4. If valid, write it into `.claude/tools/merlin-config.json` in the `falApiKey` field.
 5. If the user says "skip" or "later", continue without it — it's not required for setup.
 
 Do NOT ask about any other API keys during first setup. Those come later when the user actually needs them (e.g., ElevenLabs when they want voiceover, HeyGen when they want talking heads). Use the same api-key-setup + verify-key pattern for all providers: fal, elevenlabs, heygen, arcads, google.
 
 ### C) Load performance insights
 
-R2 improves over time by learning from aggregated, anonymous performance trends across all users — no brand names, ad copy, or personal data is ever shared. Pull the latest insights:
+Merlin improves over time by learning from aggregated, anonymous performance trends across all users — no brand names, ad copy, or personal data is ever shared. Pull the latest insights:
 ```bash
-.claude/tools/R2.exe --config .claude/tools/r2-config.json --cmd '{"action":"wisdom"}'
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"wisdom"}'
 ```
-This writes `.r2-wisdom.json` next to the config. If it exists, use the data to make better recommendations:
+This writes `.merlin-wisdom.json` next to the config. If it exists, use the data to make better recommendations:
 - Prefer hook styles with higher avg_ctr for the user's vertical
 - Suggest formats with better win_rate
 - Factor in timing patterns that perform well across similar brands
@@ -88,7 +88,7 @@ When Meta is configured, the full loop is:
 Daily 9 AM: auto-cmo generates content
   → Generate 3 variations (batch mode)
   → Visual QA passes all 3
-  → Push all 3 into ONE ad set in "R2 - Testing"
+  → Push all 3 into ONE ad set in "Merlin - Testing"
   → Meta optimizes across the 3 creatives automatically
 
 Daily 10 AM: auto-cmo-optimize reviews yesterday
@@ -103,8 +103,8 @@ Monday 9 AM: auto-cmo-digest
 ```
 
 **Two campaigns are auto-created:**
-- **R2 - Testing** (ABO) — each ad gets its own budget. Isolated testing.
-- **R2 - Scaling** (CBO) — winners get moved here. Meta optimizes budget across all winners.
+- **Merlin - Testing** (ABO) — each ad gets its own budget. Isolated testing.
+- **Merlin - Scaling** (CBO) — winners get moved here. Meta optimizes budget across all winners.
 
 When the user says "push to Meta" after approving content:
 1. Read config — check `maxDailyAdBudget` and `maxMonthlyAdSpend`
@@ -310,7 +310,7 @@ Rules: Hook in 3 seconds. Sound human. ONE specific detail from reference photos
 ## Step 4: Cost Estimate + Confirmation
 
 ```
-( ◕ ◡ ◕ )  Ready to generate:
+🪄  Ready to generate:
 
   Brand:    MadChill
   Product:  cream-set (3 reference photos)
@@ -327,7 +327,7 @@ Rules: Hook in 3 seconds. Sound human. ONE specific detail from reference photos
 ## Step 5: Run the Pipeline
 
 ```
-.claude/tools/R2.exe --config .claude/tools/r2-config.json --cmd '<JSON>'
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '<JSON>'
 ```
 
 **Always pass `"skipSlack": true` unless user says to post.** You show the output first.
@@ -591,7 +591,7 @@ If Shopify is not configured, save the blog as a `.html` file in results/ for ma
   / ___ \ |_| | || (_) | |___| |  | | |_| |
  /_/   \_\__,_|\__\___/ \____|_|  |_|\___/
 
-  ( ◕ ◡ ◕ )  Your AI CMO
+  🪄  Your AI CMO
 
   What I can do:
   ──────────────────────────────────────────
@@ -632,7 +632,7 @@ Then proceed:
 (fal.ai key was already configured during preflight — skip straight to brand)
 1. "What's your brand name?" → creates `assets/brands/<brand>/` folder
 2. "What's your website?" → scrapes it, writes `brand.md`
-3. Infer the brand's vertical from the website (apparel, skincare, fitness, food, tech, home, etc.) and write it into `.claude/tools/r2-config.json` as the `"vertical"` field. Don't ask — just infer from the product catalog.
+3. Infer the brand's vertical from the website (apparel, skincare, fitness, food, tech, home, etc.) and write it into `.claude/tools/merlin-config.json` as the `"vertical"` field. Don't ask — just infer from the product catalog.
 4. Extract brand colors + logo from the website (run in background, no user input):
    - Fetch the homepage HTML
    - Extract CSS custom properties (`--color-button`, `--color-background`, `--color-foreground`, etc.)
@@ -679,18 +679,18 @@ This runs silently during setup — no questions asked. The user sees the result
    - **prompt**:
      ```
      == SETUP ==
-     Read .claude/tools/r2-config.json for budget limits and settings.
+     Read .claude/tools/merlin-config.json for budget limits and settings.
      CONFIG = the parsed config JSON. Use it throughout.
 
      == ERROR HANDLING (applies to ALL steps) ==
      If the binary returns an error or non-zero exit code:
        - Log the error to memory.md under "## Errors"
-       - Post to Slack if configured: "( ◕ ◡ ◕ ) R2 error: {error message}"
+       - Post to Slack if configured: "🪄 Merlin error: {error message}"
        - Skip that step and continue to the next
        - Do NOT retry failed API calls — they will be retried next cycle
      If a token/API key error occurs (401, 403, "unauthorized", "expired"):
        - Log: "⚠ TOKEN EXPIRED: {platform}" to memory.md
-       - Post to Slack: "( ◕ ◡ ◕ ) ⚠ {platform} token expired — re-authenticate to resume"
+       - Post to Slack: "🪄 ⚠ {platform} token expired — re-authenticate to resume"
        - Skip ALL steps for that platform until the next session
 
      == MEMORY ROTATION ==
@@ -730,13 +730,13 @@ This runs silently during setup — no questions asked. The user sees the result
 5. "Want to connect Meta Ads? You can skip this and set it up anytime later." → if yes:
    - Run `meta-login` — this opens the user's browser for one-click Facebook authorization:
      ```bash
-     .claude/tools/R2.exe --config .claude/tools/r2-config.json --cmd '{"action":"meta-login"}'
+     .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"meta-login"}'
      ```
    - The binary handles everything: OAuth flow, token exchange, account discovery
    - Parse the JSON output. It contains: `metaAccessToken`, `metaAdAccountId`, `metaPageId`, `metaPixelId`, plus `allAccounts` and `allPages` arrays
    - If `allAccounts` has multiple active accounts, ask the user which one to use
    - If `allPages` has multiple pages, ask which one to use
-   - Write the selected values into `.claude/tools/r2-config.json`
+   - Write the selected values into `.claude/tools/merlin-config.json`
    - Run `{"action": "meta-setup"}` to create campaigns
    - Also ask: "What's your max daily budget per ad? (default: $5)" → save to `maxDailyAdBudget`
    - Also ask: "What's your max monthly ad spend? (default: $300)" → save to `maxMonthlyAdSpend`
@@ -746,7 +746,7 @@ This runs silently during setup — no questions asked. The user sees the result
    "Want to connect TikTok Ads? Skip if you don't need it right now." → if yes:
    - Run `tiktok-login` — opens browser for one-click TikTok authorization:
      ```bash
-     .claude/tools/R2.exe --config .claude/tools/r2-config.json --cmd '{"action":"tiktok-login"}'
+     .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"tiktok-login"}'
      ```
    - Parse JSON output, write `tiktokAccessToken`, `tiktokAdvertiserId` into config
    - If multiple advertisers, ask which one to use
@@ -773,7 +773,7 @@ This runs silently during setup — no questions asked. The user sees the result
    - **prompt**:
      ```
      == SETUP ==
-     Read .claude/tools/r2-config.json.
+     Read .claude/tools/merlin-config.json.
      CONFIG = the parsed config JSON. Check budget limits before any spend action.
 
      == ERROR HANDLING ==
@@ -782,11 +782,11 @@ This runs silently during setup — no questions asked. The user sees the result
      == BUDGET CHECK (before ANY ad action) ==
      Read the current month's total spend from memory.md "## Monthly Spend" section.
      If total spend >= CONFIG.maxMonthlyAdSpend: STOP. Log "Monthly budget cap reached ($X/$Y)."
-     Post to Slack: "( ◕ ◡ ◕ ) Monthly ad budget reached. Pausing all ad operations."
+     Post to Slack: "🪄 Monthly ad budget reached. Pausing all ad operations."
      Skip all ad operations. Still run the digest portion.
 
      == META (if metaAccessToken configured) ==
-     1. Run: .claude/tools/R2.exe --config .claude/tools/r2-config.json --cmd '{"action":"meta-insights"}'
+     1. Run: .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"meta-insights"}'
         If this fails, log the error and skip Meta entirely.
      2. The binary returns each ad with a verdict. Act on verdicts:
         - KILL / FATIGUE → run meta-kill
@@ -832,7 +832,7 @@ This runs silently during setup — no questions asked. The user sees the result
      9. Use WebSearch for competitor news
 
      == COMPILE DIGEST ==
-     ( ◕ ◡ ◕ )  R2 Weekly Digest — [Date Range]
+     🪄  Merlin Weekly Digest — [Date Range]
      ─────────────────────────────────────────────────
      BUDGET:
        Monthly spend: $XX / $YY cap (ZZ% used)
@@ -919,7 +919,7 @@ Audited: YYYY-MM-DD | Store: <url>
 
 ## What Claude will NOT touch
 Product titles, descriptions, prices, pages, theme, navigation.
-These are yours. R2 only adds — never edits or overwrites.
+These are yours. Merlin only adds — never edits or overwrites.
 
 ## Auto-Fix Queue (additive only)
 - [ ] 12 product images missing alt text (will ADD where empty)
@@ -958,7 +958,7 @@ Here's how to create one (takes ~60 seconds):
      → If you see "Allow custom app development", click it first
 
   3. Click "Create an app"
-     → Name it "R2" (or anything)
+     → Name it "Merlin" (or anything)
 
   4. Click "Configure Admin API scopes"
      → Check these boxes:
@@ -1046,14 +1046,14 @@ When the user says "audit my email", "check email flows", "email performance", o
 ### Email Audit
 Run the email audit to analyze Klaviyo setup:
 ```bash
-.claude/tools/R2.exe --config .claude/tools/r2-config.json --cmd '{"action":"email-audit"}'
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"email-audit"}'
 ```
 
 The binary returns JSON with: existing flows, lists, campaigns, missing essential flows, and recommendations.
 
 Present the results as:
 ```
-( ◕ ◡ ◕ )  Email Audit — <Brand Name>
+🪄  Email Audit — <Brand Name>
 ─────────────────────────────────────────────
 
 Subscriber Lists: X
@@ -1093,12 +1093,12 @@ When the user says "set up Google Ads", "Google Ads status", or anything Google 
 
 ### Status Check
 ```bash
-.claude/tools/R2.exe --config .claude/tools/r2-config.json --cmd '{"action":"google-ads-status"}'
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"google-ads-status"}'
 ```
 
 If not connected, explain the value and walk through setup:
 ```
-( ◕ ◡ ◕ )  Google Ads — Not Connected
+🪄  Google Ads — Not Connected
 
 Google Ads captures people actively searching for products like yours.
 It's the highest-intent ad channel — buyers come to you.
@@ -1127,14 +1127,14 @@ When the user says "marketing calendar", "plan my content", "launch schedule", o
 ### Step 1: Analyze Launch Cadence
 If Shopify is connected, pull product launch data:
 ```bash
-.claude/tools/R2.exe --config .claude/tools/r2-config.json --cmd '{"action":"calendar"}'
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"calendar"}'
 ```
 
 The binary returns: launch history, average cadence, seasonal signals, and gaps.
 
 ### Step 2: Present the Analysis
 ```
-( ◕ ◡ ◕ )  Marketing Calendar Analysis — <Brand>
+🪄  Marketing Calendar Analysis — <Brand>
 ─────────────────────────────────────────────────
 
 Product Catalog: 24 products across 5 categories
@@ -1156,7 +1156,7 @@ Gaps:
 Based on the analysis, generate a 30-day marketing calendar:
 
 ```
-( ◕ ◡ ◕ )  Proposed 30-Day Calendar — <Brand>
+🪄  Proposed 30-Day Calendar — <Brand>
 ─────────────────────────────────────────────────
 
 Week 1:

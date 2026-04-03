@@ -1,0 +1,7 @@
+---
+name: merlin
+description: AI content engine — generate ads, manage campaigns, write SEO blogs, all via natural language.
+user-invocable: true
+---
+
+Run /cmo with the same arguments.

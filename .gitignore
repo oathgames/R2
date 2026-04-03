@@ -1,5 +1,5 @@
 # Source code
-r2/
+merlin/
 *.go
 go.mod
 go.sum
@@ -8,23 +8,23 @@ build.ps1
 # Binaries
 *.exe
 *.exe~
-.claude/tools/R2*
+.claude/tools/Merlin*
 .claude/tools/ffmpeg*
 .claude/tools/ffprobe*
 
 # Config with secrets (example template IS tracked)
-.claude/tools/r2-config.json
-!.claude/tools/r2-config.example.json
+.claude/tools/merlin-config.json
+!.claude/tools/merlin-config.example.json
 
 # Output
 results/
 
 # Temp files
 tmp_cmd*.json
-r2-music-pack.zip
+merlin-music-pack.zip
 *.update
 *.backup
-.r2-backup/
+.merlin-backup/
 
 # Brand-specific assets (users bring their own)
 assets/brands/*/
@@ -42,7 +42,7 @@ extract_colors.ps1
 node_modules/
 dist/
 package-lock.json
-.r2-key
+.merlin-key
 .env
 
 # OS

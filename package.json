@@ -1,7 +1,7 @@
 {
-  "name": "r2-desktop",
+  "name": "merlin-desktop",
   "version": "0.1.0",
-  "description": "R2 — Your AI CMO",
+  "description": "Merlin — Your AI CMO",
   "main": "app/main.js",
   "scripts": {
     "start": "electron .",
@@ -17,8 +17,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.r2.desktop",
-    "productName": "R2",
+    "appId": "com.merlin.desktop",
+    "productName": "Merlin",
     "asar": false,
     "files": ["app/**/*"],
     "extraResources": [

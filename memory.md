@@ -1,4 +1,4 @@
-# R2 Memory
+# Merlin Memory
 
 Accumulated learnings from every run. Claude reads this before generating content and updates it after every run.
 

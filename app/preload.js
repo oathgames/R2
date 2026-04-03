@@ -1,9 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('r2', {
+contextBridge.exposeInMainWorld('merlin', {
   // Setup
   checkSetup: () => ipcRenderer.invoke('check-setup'),
-  saveApiKey: (key) => ipcRenderer.invoke('save-api-key', key),
+  openClaudeDownload: () => ipcRenderer.invoke('open-claude-download'),
 
   // Session
   startSession: () => ipcRenderer.invoke('start-session'),
