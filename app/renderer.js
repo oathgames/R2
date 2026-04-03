@@ -587,7 +587,7 @@ document.getElementById('brand-select').addEventListener('change', (e) => {
 
 document.getElementById('add-brand-btn').addEventListener('click', () => {
   document.getElementById('magic-panel').classList.add('hidden');
-  const msg = 'I want to add a new brand. What\'s the website?';
+  const msg = 'Set up a new brand for me';
   addUserBubble(msg);
   showTypingIndicator();
   turnStartTime = Date.now();
