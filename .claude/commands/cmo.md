@@ -550,6 +550,7 @@ The goal: **WOW the user in 30 seconds.** The moment they give you their URL, st
    - "Content generation — weekdays at 9 AM"
    - "Performance review — weekdays at 10 AM"
    - "Weekly digest — Mondays at 9 AM"
+   - "These tasks run on this computer — just keep Merlin open and your PC awake."
 
    **Step 6: Ready**
    - "Your brand is loaded — [X] products, [Y] images, [Z] competitors. Autopilot is on. What should we create first?"
