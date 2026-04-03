@@ -51,6 +51,8 @@ function setupConnectionHandler() {
       switch (msg.type) {
         case 'send-message':
           if (onSendMessage) onSendMessage(msg.text);
+          // Echo user message to all OTHER clients (including desktop)
+          broadcastExcept(ws, 'user-message', { text: msg.text });
           break;
         case 'approve-tool':
           if (onApproveTool) onApproveTool(msg.toolUseID);
@@ -80,7 +82,17 @@ async function start() {
 function broadcast(type, payload) {
   const msg = JSON.stringify({ type, payload });
   for (const client of authenticatedClients) {
-    if (client.readyState === 1) { // OPEN
+    if (client.readyState === 1) {
+      client.send(msg);
+    }
+  }
+}
+
+// Broadcast to all clients EXCEPT the sender
+function broadcastExcept(sender, type, payload) {
+  const msg = JSON.stringify({ type, payload });
+  for (const client of authenticatedClients) {
+    if (client !== sender && client.readyState === 1) {
       client.send(msg);
     }
   }

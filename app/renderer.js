@@ -293,6 +293,11 @@ merlin.onSdkError((err) => {
   bubble.style.borderColor = 'rgba(239,68,68,.3)';
 });
 
+// ── Remote User Messages (from PWA) ─────────────────────────
+merlin.onRemoteUserMessage((text) => {
+  addUserBubble('📱 ' + text);
+});
+
 // ── Mobile QR ───────────────────────────────────────────────
 document.getElementById('mobile-btn').addEventListener('click', async () => {
   const { qrDataUri, pwaUrl } = await merlin.getMobileQR();

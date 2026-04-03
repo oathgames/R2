@@ -57,6 +57,10 @@ async function createWindow() {
       if (resolveNextMessage) {
         resolveNextMessage({ type: 'user', message: { role: 'user', content: text } });
       }
+      // Show PWA user's message on desktop
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('remote-user-message', text);
+      }
     },
     onApproveTool: (toolUseID) => {
       const resolve = pendingApprovals.get(toolUseID);
@@ -264,6 +268,8 @@ ipcMain.handle('send-message', (_, text) => {
       message: { role: 'user', content: text },
     });
   }
+  // Show desktop user's message on PWA
+  wsServer.broadcast('user-message', { text });
   return { success: true };
 });
 

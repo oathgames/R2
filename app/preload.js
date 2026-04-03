@@ -23,4 +23,5 @@ contextBridge.exposeInMainWorld('merlin', {
   onApprovalRequest: (cb) => ipcRenderer.on('approval-request', (_, data) => cb(data)),
   onAskUserQuestion: (cb) => ipcRenderer.on('ask-user-question', (_, data) => cb(data)),
   onSdkError: (cb) => ipcRenderer.on('sdk-error', (_, err) => cb(err)),
+  onRemoteUserMessage: (cb) => ipcRenderer.on('remote-user-message', (_, text) => cb(text)),
 });

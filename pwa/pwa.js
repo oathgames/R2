@@ -57,6 +57,9 @@ function connect() {
       case 'sdk-error':
         showError(msg.payload);
         break;
+      case 'user-message':
+        addUserBubble('🖥️ ' + msg.payload.text);
+        break;
     }
   };
 
