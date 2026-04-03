@@ -524,11 +524,85 @@ document.getElementById('qr-modal').addEventListener('click', (e) => {
 });
 
 // ── Magic Panel ─────────────────────────────────────────────
+// ── Brand + Integration Filtering ────────────────────────────
+const verticalIntegrations = {
+  ecom:    ['meta','tiktok','shopify','klaviyo','google','pinterest','fal','elevenlabs','heygen'],
+  apparel: ['meta','tiktok','shopify','klaviyo','google','pinterest','fal','elevenlabs','heygen'],
+  skincare:['meta','tiktok','shopify','klaviyo','google','pinterest','fal','elevenlabs'],
+  fitness: ['meta','tiktok','google','fal','elevenlabs','heygen'],
+  food:    ['meta','tiktok','shopify','klaviyo','google','fal'],
+  tech:    ['meta','google','tiktok','fal','elevenlabs'],
+  gaming:  ['meta','tiktok','google','fal','heygen'],
+  music:   ['meta','tiktok','google','fal','elevenlabs'],
+  saas:    ['meta','google','klaviyo','fal'],
+};
+
+function loadBrands() {
+  merlin.getBrands().then((brands) => {
+    const select = document.getElementById('brand-select');
+    select.innerHTML = '';
+    if (!brands || brands.length === 0) {
+      select.innerHTML = '<option value="">No brand loaded</option>';
+      return;
+    }
+    brands.forEach((b, i) => {
+      const opt = document.createElement('option');
+      opt.value = b.name;
+      opt.textContent = `${b.name} (${b.productCount} products)`;
+      if (i === 0) opt.selected = true;
+      select.appendChild(opt);
+    });
+    // Set vertical tag + filter integrations
+    if (brands[0]?.vertical) updateVertical(brands[0].vertical);
+  }).catch(() => {});
+}
+
+function updateVertical(vertical) {
+  const tag = document.getElementById('vertical-tag');
+  const v = document.getElementById('brand-vertical');
+  if (vertical) {
+    tag.textContent = vertical;
+    v.textContent = `Category: ${vertical}`;
+    // Filter integrations
+    const allowed = verticalIntegrations[vertical.toLowerCase()] || null;
+    if (allowed) {
+      document.querySelectorAll('.magic-tile').forEach(tile => {
+        tile.style.display = allowed.includes(tile.dataset.platform) ? '' : 'none';
+      });
+    }
+  } else {
+    tag.textContent = '';
+    v.textContent = '';
+    document.querySelectorAll('.magic-tile').forEach(t => t.style.display = '');
+  }
+}
+
+document.getElementById('brand-select').addEventListener('change', (e) => {
+  merlin.getBrands().then((brands) => {
+    const brand = brands.find(b => b.name === e.target.value);
+    if (brand?.vertical) updateVertical(brand.vertical);
+    else updateVertical('');
+  });
+});
+
+document.getElementById('add-brand-btn').addEventListener('click', () => {
+  document.getElementById('magic-panel').classList.add('hidden');
+  const msg = 'I want to add a new brand. What\'s the website?';
+  addUserBubble(msg);
+  showTypingIndicator();
+  turnStartTime = Date.now();
+  turnTokens = 0;
+  sessionActive = true;
+  startTickingTimer();
+  merlin.sendMessage(msg);
+});
+
 document.getElementById('magic-btn').addEventListener('click', () => {
   const panel = document.getElementById('magic-panel');
   panel.classList.toggle('hidden');
-  // Fetch credits when panel opens
+  // Load brands + fetch credits when panel opens
   if (!panel.classList.contains('hidden')) {
+    loadBrands();
     merlin.getCredits().then((credits) => {
       if (!credits) return;
       // Update tiles with credit info

@@ -302,6 +302,31 @@ ipcMain.handle('answer-question', (_, toolUseID, answers) => {
 
 ipcMain.handle('open-claude-download', () => { shell.openExternal('https://claude.ai/download'); });
 
+// Read brands from filesystem
+ipcMain.handle('get-brands', () => {
+  const brandsDir = path.join(appRoot, 'assets', 'brands');
+  try {
+    const dirs = fs.readdirSync(brandsDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && d.name !== 'example')
+      .map(d => {
+        const brandPath = path.join(brandsDir, d.name);
+        const brandMd = path.join(brandPath, 'brand.md');
+        let vertical = '';
+        if (fs.existsSync(brandMd)) {
+          const content = fs.readFileSync(brandMd, 'utf8');
+          const match = content.match(/vertical[:\s]+(\w+)/i);
+          if (match) vertical = match[1];
+        }
+        // Count products
+        const productsDir = path.join(brandPath, 'products');
+        let productCount = 0;
+        try { productCount = fs.readdirSync(productsDir, { withFileTypes: true }).filter(d => d.isDirectory()).length; } catch {}
+        return { name: d.name, vertical, productCount };
+      });
+    return dirs;
+  } catch { return []; }
+});
+
 // Fetch credit balances for connected platforms
 ipcMain.handle('get-credits', async () => {
   const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
