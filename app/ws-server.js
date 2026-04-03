@@ -1,13 +1,18 @@
 const { WebSocketServer } = require('ws');
+const http = require('http');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const os = require('os');
 
 // Generate a session token — random, never stored to disk
 const sessionToken = crypto.randomBytes(16).toString('hex');
 
 let wss = null;
+let httpServer = null;
 let wsPort = 0;
 const authenticatedClients = new Set();
+const pwaDir = path.join(__dirname, '..', 'pwa');
 
 // Message handlers — set by main.js to bridge into SDK
 let onSendMessage = null;
@@ -17,9 +22,32 @@ let onAnswerQuestion = null;
 
 function startServer() {
   return new Promise((resolve) => {
-    wss = new WebSocketServer({ host: '0.0.0.0', port: 0 }, () => {
-      wsPort = wss.address().port;
-      console.log(`[WS] Server listening on port ${wsPort}`);
+    // HTTP server serves PWA files on the same port as WebSocket
+    // This avoids mixed-content (https→ws) browser restrictions
+    const mimeTypes = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json' };
+
+    httpServer = http.createServer((req, res) => {
+      let filePath = req.url.split('?')[0];
+      if (filePath === '/') filePath = '/index.html';
+
+      const fullPath = path.join(pwaDir, filePath);
+      const ext = path.extname(fullPath);
+
+      if (fs.existsSync(fullPath)) {
+        res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'text/plain', 'Access-Control-Allow-Origin': '*' });
+        res.end(fs.readFileSync(fullPath));
+      } else {
+        // SPA fallback — serve index.html (preserves query params)
+        res.writeHead(200, { 'Content-Type': 'text/html', 'Access-Control-Allow-Origin': '*' });
+        res.end(fs.readFileSync(path.join(pwaDir, 'index.html')));
+      }
+    });
+
+    wss = new WebSocketServer({ server: httpServer });
+
+    httpServer.listen(0, '0.0.0.0', () => {
+      wsPort = httpServer.address().port;
+      console.log(`[WS+HTTP] Server listening on port ${wsPort}`);
       resolve(wsPort);
     });
   });
@@ -51,7 +79,6 @@ function setupConnectionHandler() {
       switch (msg.type) {
         case 'send-message':
           if (onSendMessage) onSendMessage(msg.text);
-          // Echo user message to all OTHER clients (including desktop)
           broadcastExcept(ws, 'user-message', { text: msg.text });
           break;
         case 'approve-tool':
@@ -80,21 +107,23 @@ async function start() {
 
 // Broadcast to all authenticated PWA clients
 function broadcast(type, payload) {
+  if (authenticatedClients.size === 0) return;
   const msg = JSON.stringify({ type, payload });
   for (const client of authenticatedClients) {
-    if (client.readyState === 1) {
-      client.send(msg);
-    }
+    try {
+      if (client.readyState === 1) client.send(msg);
+    } catch { authenticatedClients.delete(client); }
   }
 }
 
 // Broadcast to all clients EXCEPT the sender
 function broadcastExcept(sender, type, payload) {
+  if (authenticatedClients.size === 0) return;
   const msg = JSON.stringify({ type, payload });
   for (const client of authenticatedClients) {
-    if (client !== sender && client.readyState === 1) {
-      client.send(msg);
-    }
+    try {
+      if (client !== sender && client.readyState === 1) client.send(msg);
+    } catch { authenticatedClients.delete(client); }
   }
 }
 

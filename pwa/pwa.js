@@ -1,8 +1,9 @@
 // ── Connection ──────────────────────────────────────────────
 const params = new URLSearchParams(window.location.search);
-const host = params.get('host');
-const port = params.get('port');
 const token = params.get('token');
+// Connect WS to the same host:port that served this page
+const wsHost = window.location.hostname;
+const wsPort = window.location.port;
 
 let ws = null;
 let currentBubble = null;
@@ -23,12 +24,12 @@ function setStatus(connected) {
 }
 
 function connect() {
-  if (!host || !port || !token) {
-    statusText.textContent = 'Missing connection info';
+  if (!token) {
+    statusText.textContent = 'Missing token — scan QR code again';
     return;
   }
 
-  ws = new WebSocket(`ws://${host}:${port}`);
+  ws = new WebSocket(`ws://${wsHost}:${wsPort}`);
 
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'auth', token }));

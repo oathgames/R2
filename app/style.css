@@ -423,19 +423,8 @@ a:hover{text-decoration:underline}
   0%,100%{opacity:1}
   50%{opacity:0}
 }
-/* ── Phone icon button ────────────────────────────────────── */
-.icon-btn{
-  flex-shrink:0;
-  width:38px;height:38px;
-  border:none;
-  background:var(--surface);
-  border-radius:10px;
-  color:var(--text-dim);
-  cursor:pointer;
-  display:flex;align-items:center;justify-content:center;
-  transition:all .2s;
-}
-.icon-btn:hover{background:var(--surface-hover);color:var(--text-muted)}
+/* ── Phone icon button (stubbed — hidden until tunnel security is ready) ── */
+.icon-btn{display:none}
 
 /* ── QR Modal ────────────────────────────────────────────── */
 .qr-card{

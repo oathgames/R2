@@ -103,7 +103,8 @@ ipcMain.handle('open-claude-download', () => {
 
 ipcMain.handle('get-mobile-qr', async () => {
   const info = wsServer.getConnectionInfo();
-  const pwaUrl = `https://merlin-pwa.ryan-fec.workers.dev?host=${info.host}&port=${info.port}&token=${info.token}`;
+  // PWA served from the same HTTP server as WebSocket — no mixed-content issues
+  const pwaUrl = `http://${info.host}:${info.port}?token=${info.token}`;
   const qrDataUri = await generateQRDataUri(pwaUrl);
   return { qrDataUri, pwaUrl, ...info };
 });
