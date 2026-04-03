@@ -160,7 +160,11 @@ a:hover{text-decoration:underline}
 .msg-bubble li{margin:3px 0}
 .msg-bubble h1,.msg-bubble h2,.msg-bubble h3{font-size:15px;font-weight:700;margin:10px 0 4px}
 .msg-bubble img{
-  max-width:100%;
+  max-width:min(260px, 66%);
+  max-height:320px;
+  width:auto;
+  height:auto;
+  object-fit:contain;
   border-radius:10px;
   margin:8px 0;
   display:block;
@@ -169,6 +173,21 @@ a:hover{text-decoration:underline}
   box-shadow:0 2px 8px rgba(0,0,0,.3);
 }
 .msg-bubble img:hover{opacity:.9}
+
+/* User-pasted images (full width within bubble) */
+.msg-user img{
+  max-width:min(280px, 80%);
+  max-height:360px;
+  border-radius:10px;
+  margin:0;
+}
+.msg-bubble video{
+  max-width:min(260px, 66%);
+  max-height:320px;
+  border-radius:10px;
+  margin:8px 0;
+  display:block;
+}
 .msg-bubble hr{border:none;border-top:1px solid var(--border);margin:12px 0}
 .msg-bubble a{color:var(--accent);text-decoration:none}
 .msg-bubble a:hover{text-decoration:underline}
