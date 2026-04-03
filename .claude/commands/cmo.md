@@ -85,18 +85,18 @@ Continue to Step 0. If the user typed just `/cmo` with no arguments and no brand
 When Meta is configured, the full loop is:
 
 ```
-Daily 9 AM: auto-cmo generates content
+Daily 9 AM: merlin-daily generates content
   → Generate 3 variations (batch mode)
   → Visual QA passes all 3
   → Push all 3 into ONE ad set in "Merlin - Testing"
   → Meta optimizes across the 3 creatives automatically
 
-Daily 10 AM: auto-cmo-optimize reviews yesterday
+Daily 10 AM: merlin-optimize reviews yesterday
   → Pull CTR, CPC, ATC, Purchases for each ad
   → The binary evaluates each ad against internal performance thresholds
   → Returns verdicts: KILL / WINNER / MASSIVE WINNER — act on these directly
 
-Monday 9 AM: auto-cmo-digest
+Monday 9 AM: merlin-digest
   → Weekly summary: total spend, ATC, purchases, ROAS
   → Best/worst performers, active ad counts
   → Posted to Slack
@@ -375,7 +375,7 @@ For images:
 | List voices | `{"action": "list-voices"}` |
 | List HeyGen avatars | `{"action": "list-avatars"}` |
 | Dry run | `{"action": "dry-run"}` |
-| Check schedule | Use `mcp__scheduled-tasks__list_scheduled_tasks` and report `auto-cmo` state |
+| Check schedule | Use `mcp__scheduled-tasks__list_scheduled_tasks` and report `merlin-daily` state |
 | Pause schedule | Use `mcp__scheduled-tasks__update_scheduled_task` with `enabled: false` |
 | Resume schedule | Use `mcp__scheduled-tasks__update_scheduled_task` with `enabled: true` |
 | Push to Meta | `{"action": "meta-push", "adImagePath": "path/to/image.jpg", "adHeadline": "...", "adBody": "...", "dailyBudget": 5}` |
@@ -673,7 +673,7 @@ This runs silently during setup — no questions asked. The user sees the result
 4. "Want me to set up daily auto-generation? (default: 9 AM weekdays)"
    If yes → create a scheduled task:
    - Use `mcp__scheduled-tasks__create_scheduled_task`
-   - **taskId**: `auto-cmo`
+   - **taskId**: `merlin-daily`
    - **cronExpression**: `0 9 * * 1-5` (9 AM weekdays)
    - **description**: `Generate daily content for all brands`
    - **prompt**:
@@ -767,7 +767,7 @@ This runs silently during setup — no questions asked. The user sees the result
 
 6. If Meta OR TikTok is configured, create a SECOND scheduled task for optimization:
    - Use `mcp__scheduled-tasks__create_scheduled_task`
-   - **taskId**: `auto-cmo-optimize`
+   - **taskId**: `merlin-optimize`
    - **cronExpression**: `0 10 * * 1-5` (10 AM weekdays -- 1 hour after generation)
    - **description**: `Review ad performance, kill losers, scale winners (with budget checks)`
    - **prompt**:
@@ -777,7 +777,7 @@ This runs silently during setup — no questions asked. The user sees the result
      CONFIG = the parsed config JSON. Check budget limits before any spend action.
 
      == ERROR HANDLING ==
-     Same rules as auto-cmo task: log errors, alert on token expiry, skip and continue.
+     Same rules as merlin-daily task: log errors, alert on token expiry, skip and continue.
 
      == BUDGET CHECK (before ANY ad action) ==
      Read the current month's total spend from memory.md "## Monthly Spend" section.
@@ -805,7 +805,7 @@ This runs silently during setup — no questions asked. The user sees the result
 
 7. Create a THIRD scheduled task -- weekly digest (always, not just for ads):
    - Use `mcp__scheduled-tasks__create_scheduled_task`
-   - **taskId**: `auto-cmo-digest`
+   - **taskId**: `merlin-digest`
    - **cronExpression**: `0 9 * * 1` (Monday 9 AM)
    - **description**: `Weekly performance digest across all brands and platforms`
    - **prompt**:
@@ -1187,4 +1187,4 @@ Channels per piece:
 
 Ask: "Want me to set this up as your daily schedule? I'll generate the right content on the right days automatically."
 
-If yes, update the auto-cmo scheduled task prompt to follow the calendar pattern instead of random product selection.
+If yes, update the merlin-daily scheduled task prompt to follow the calendar pattern instead of random product selection.
