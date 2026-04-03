@@ -484,35 +484,51 @@ If Shopify is not configured, save the blog as a `.html` file in results/ for ma
 
 ## Setup Flow (first-run only)
 
-DO NOT print any ASCII art, banners, feature lists, or folder structure diagrams. Keep the setup conversational — talk to the user like a person.
+DO NOT print any ASCII art, banners, feature lists, or folder structure diagrams.
+
+The goal: **WOW the user in 30 seconds.** The moment they give you their URL, start showing their own content back to them — their logo, their products, their images — in real time. They should think "holy shit, this is amazing."
 
 **A) Brand + Product setup:**
-1. Ask: "What's your brand's website?" — that's the only question needed. Everything else is automatic.
-2. From the website URL:
-   - Scrape the site to learn the brand name, voice, audience, products
-   - Write `brand.md` with brand voice, audience, CTA style
-   - Infer the vertical (apparel, skincare, fitness, etc.) and write it to `merlin-config.json`
-   - Extract brand colors from CSS (`--color-button`, `--color-background`, etc.) and hex values
-   - Find and download the logo to `assets/brands/<brand>/logo/logo.png`
-   - Write `## Brand Colors` and `## Email Design Rules` sections to `brand.md`
-3. Auto-import products (no asking — just do it):
-   - Try `<website>/products.json` first (Shopify and many platforms support this)
-   - Download up to **10 products** to start (up to 5 images each)
-   - Create `assets/brands/<brand>/products/<product-handle>/references/` for each
-   - Auto-generate `product.md` from the product data
-   - **Tell the user clearly**: "I pulled your first 10 products with X images. You have [total] products — I can grab the rest anytime, just ask."
-   - If `/products.json` doesn't work, say: "I couldn't auto-pull your products. Just drop product photos into the products folder and I'll handle the rest."
-4. Competitor discovery (automatic, no questions):
+1. Ask: "What's your brand's website?" — that's the ONLY question. Everything else is automatic.
+
+2. **Immediately start the magic — show progress in real time:**
+
+   **Step 1: Brand (first 5 seconds)**
+   - Fetch the website
+   - As soon as you have the brand name, say it: "✦ **[Brand Name]** — love it. Let me learn everything about you."
+   - Download the logo, then READ it so it displays inline in the chat
+   - Say: "Got your logo." (with the actual logo visible above)
+
+   **Step 2: Colors + Voice (next 5 seconds)**
+   - Extract brand colors from CSS
+   - Write `brand.md` with voice, audience, CTA style, vertical, colors
+   - Say: "Captured your brand colors and voice."
+
+   **Step 3: Products — THE WOW MOMENT (next 20 seconds)**
+   - Fetch `<website>/products.json`
+   - For each of the first 10 products:
+     - Create the product folder + download the first image
+     - **READ the downloaded image so it appears inline in the chat**
+     - Say: "✦ **[Product Name]** — $[price]" with the image visible
+   - Download remaining images (up to 5 per product) in the background
+   - Auto-generate `product.md` for each
+   - After all 10: "That's your first 10 of [total] products. I can grab the rest anytime — just ask."
+
+   **The user should see their own product photos streaming into the chat one by one.** This is the moment they realize the AI just learned their entire brand.
+
+   **IMPORTANT**: Use the Read tool on each downloaded image so it renders inline. The image path will be like `assets/brands/<brand>/products/<product>/references/1.jpg` — Read it immediately after downloading.
+
+   If `/products.json` doesn't work:
+   - Try scraping product pages directly
+   - If that fails, say: "I couldn't auto-pull products from your site. Drop some product photos in and I'll take it from there."
+
+   **Step 4: Competitors (background, 10 seconds)**
    - Launch a background agent to find 5-8 competitors via WebSearch
    - Write `assets/brands/<brand>/competitors.md`
-   - Tell the user: "I found X competitors in your space. I'll keep an eye on them."
+   - Say: "✦ Found [X] competitors in your space. I'll keep tabs on them."
 
-**The entire setup should feel like one smooth conversation. Communicate progress as you go:**
-- "Checking out your website..."
-- "Nice brand! I'm pulling your colors and logo..."
-- "Downloading your first 10 products..."
-- "Found 8 competitors in your space."
-- "All set! What would you like to create first?"
+   **Step 5: Ready**
+   - "Your brand is loaded — [X] products, [Y] images, [Z] competitors. What should we create first?"
 
 **B) Schedule daily generation:**
 4. "Want me to set up daily auto-generation? (default: 9 AM weekdays)"
