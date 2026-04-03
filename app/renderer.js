@@ -119,7 +119,7 @@ function renderMarkdown(text) {
   if (!text) return '';
 
   // Strip mascot prefix if Claude prepends it
-  text = text.replace(/^\s*\(\s*◕\s*◡\s*◕\s*\)\s*/g, '');
+  text = text.replace(/^\s*🪄\s*/g, '');
 
   let html = escapeHtml(text);
 
