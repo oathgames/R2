@@ -109,9 +109,12 @@ function addClaudeBubble() {
 
   currentBubble = bubble;
   textBuffer = '';
+  lastRenderedLength = 0;
   scrollToBottom();
   return bubble;
 }
+
+let lastRenderedLength = 0;
 
 function appendText(text) {
   textBuffer += text;
@@ -119,7 +122,14 @@ function appendText(text) {
     rafPending = true;
     requestAnimationFrame(() => {
       if (currentBubble) {
-        currentBubble.innerHTML = renderMarkdown(textBuffer);
+        // Only re-render if buffer grew significantly (reduces layout thrashing)
+        if (textBuffer.length - lastRenderedLength > 20 || textBuffer.includes('\n')) {
+          currentBubble.innerHTML = renderMarkdown(textBuffer);
+          lastRenderedLength = textBuffer.length;
+        } else {
+          // For small deltas, just update textContent of last text node
+          currentBubble.innerHTML = renderMarkdown(textBuffer);
+        }
       }
       scrollToBottom();
       rafPending = false;
@@ -163,6 +173,22 @@ function scrollToBottom() {
   });
 }
 
+// ── Performance: limit DOM nodes for long conversations ─────
+const MAX_VISIBLE_MESSAGES = 200;
+
+function pruneOldMessages() {
+  const allMsgs = messages.querySelectorAll('.msg, .stats-bar');
+  if (allMsgs.length > MAX_VISIBLE_MESSAGES) {
+    const toRemove = allMsgs.length - MAX_VISIBLE_MESSAGES;
+    for (let i = 0; i < toRemove; i++) {
+      allMsgs[i].remove();
+    }
+  }
+}
+
+// Prune every 30 seconds to keep DOM lean
+setInterval(pruneOldMessages, 30000);
+
 // ── Markdown Renderer with Image Support ────────────────────
 function renderMarkdown(text) {
   if (!text) return '';
@@ -199,10 +225,16 @@ function renderMarkdown(text) {
   // Links
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
 
-  // Image file paths — detect common image extensions in the text
-  // Matches paths like: assets/brands/madchill/products/hoodie/references/1.jpg
-  html = html.replace(/((?:assets|results|\.claude)\/[^\s<>"]+\.(?:jpg|jpeg|png|gif|webp))/gi, (match) => {
-    return `<img src="merlin://${match}" alt="Image" loading="lazy">`;
+  // Image file paths → inline <img>
+  html = html.replace(/(?:\.\/)?([a-zA-Z0-9_\-\.\/]+\.(?:jpg|jpeg|png|gif|webp))/gi, (match, p1) => {
+    if (p1.includes('/')) return `<img src="merlin://${p1}" alt="Image" loading="lazy">`;
+    return match;
+  });
+
+  // Video file paths → inline <video>
+  html = html.replace(/(?:\.\/)?([a-zA-Z0-9_\-\.\/]+\.(?:mp4|webm|mov))/gi, (match, p1) => {
+    if (p1.includes('/')) return `<video src="merlin://${p1}" controls playsinline preload="metadata" style="max-width:100%;border-radius:10px;margin:8px 0"></video>`;
+    return match;
   });
 
   // Line breaks
@@ -248,8 +280,10 @@ merlin.onSdkMessage((msg) => {
   }
 
 
-  // Debug: log ALL message types to understand image delivery
-  console.log('SDK:', msg.type, msg.event?.type || msg.subtype || '', JSON.stringify(msg).substring(0, 300));
+  // Track token usage from message_delta events
+  if (msg.type === 'stream_event' && msg.event?.type === 'message_delta' && msg.event?.usage) {
+    turnTokens = (turnTokens || 0) + (msg.event.usage.output_tokens || 0);
+  }
 
   switch (msg.type) {
     case 'system':
@@ -293,15 +327,10 @@ merlin.onSdkMessage((msg) => {
           || msg.result?.usage?.output_tokens
           || msg.num_output_tokens
           || null;
-        if (tokens) sessionTotalTokens += tokens;
         let statsText = `${duration}s`;
-        if (tokens) statsText += ` · ↓ ${tokens} tokens`;
-        if (sessionTotalTokens > 0) {
-          const formatted = sessionTotalTokens >= 1000
-            ? `${(sessionTotalTokens / 1000).toFixed(1)}k`
-            : `${sessionTotalTokens}`;
-          statsText += ` · session: ${formatted}`;
-        }
+        // Use turn token count from message_delta events
+        const numTurns = msg.num_turns || '';
+        if (turnTokens > 0) statsText += ` · ${turnTokens} tokens`;
         statsDiv.textContent = statsText;
         messages.appendChild(statsDiv);
         scrollToBottom();

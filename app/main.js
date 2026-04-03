@@ -211,7 +211,7 @@ async function startSession() {
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
 
   async function* messageGenerator() {
-    yield { type: 'user', message: { role: 'user', content: 'Run /cmo silently — do the preflight checks but do NOT print anything. No greetings, no banners, no feature lists. The app UI already showed my welcome message asking for a URL. Check assets/brands/ for existing brand folders (ignore "example"). If a brand ALREADY exists, skip setup entirely — just say "✦ [Brand] is ready — [X] products loaded. What would you like to create?" and wait. If NO brands exist, wait for my next message with a URL.' } };
+    yield { type: 'user', message: { role: 'user', content: 'Run /cmo silently — do the preflight checks but do NOT print anything. No greetings, no banners, no feature lists. The app UI already showed my welcome message. Check assets/brands/ for existing brand folders (ignore "example"). If a brand ALREADY exists, skip setup — just say "✦ [Brand] is ready — [X] products loaded. What would you like to create?" If NO brands exist, wait for my URL. IMPORTANT RULE: When showing images, include the full file path in your response text like this: results/img_20260403_164511/image_1_portrait.jpg — the app will render it inline automatically. Always include the path, never just describe the image.' } };
     while (true) {
       const msg = await new Promise((resolve) => { resolveNextMessage = resolve; });
       if (msg === null) return;
@@ -265,6 +265,14 @@ ipcMain.handle('check-setup', async () => {
 });
 
 ipcMain.handle('start-session', () => { startSession(); return { success: true }; });
+
+ipcMain.handle('get-account-info', async () => {
+  try {
+    if (!activeQuery) return null;
+    const info = await activeQuery.accountInfo();
+    return info;
+  } catch { return null; }
+});
 
 ipcMain.handle('send-message', (_, text) => {
   if (typeof text !== 'string' || text.length > 50000) return { success: false };

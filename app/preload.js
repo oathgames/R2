@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('merlin', {
 
   // Session
   startSession: () => ipcRenderer.invoke('start-session'),
+  getAccountInfo: () => ipcRenderer.invoke('get-account-info'),
   sendMessage: (text) => ipcRenderer.invoke('send-message', text),
 
   // Approvals
