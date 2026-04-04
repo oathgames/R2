@@ -249,6 +249,17 @@ async function startSession() {
         const serialized = JSON.parse(JSON.stringify(msg));
         win.webContents.send('sdk-message', serialized);
         wsServer.broadcast('sdk-message', serialized);
+
+        // Spellbook: detect task-related MCP tool calls and task lifecycle events
+        if (msg.type === 'tool_use' && msg.tool_name && msg.tool_name.includes('scheduled-tasks')) {
+          win.webContents.send('spell-activity', { tool: msg.tool_name, input: msg.input });
+        }
+        if (msg.type === 'system' && msg.subtype === 'task_notification') {
+          win.webContents.send('spell-completed', {
+            taskId: msg.task_id, status: msg.status,
+            summary: msg.summary, timestamp: Date.now()
+          });
+        }
       }
     }
   } catch (err) {
@@ -314,21 +325,40 @@ ipcMain.handle('send-message', (_, text) => {
 });
 
 ipcMain.handle('approve-tool', (_, toolUseID) => {
-  const entry = pendingApprovals.get(toolUseID);
-  if (entry) { clearTimeout(entry.timer); entry.fn(true); pendingApprovals.delete(toolUseID); }
+  try {
+    const entry = pendingApprovals.get(toolUseID);
+    if (entry) { clearTimeout(entry.timer); pendingApprovals.delete(toolUseID); entry.fn(true); }
+  } catch (err) { console.error('[approve]', err.message); }
 });
 
 ipcMain.handle('deny-tool', (_, toolUseID) => {
-  const entry = pendingApprovals.get(toolUseID);
-  if (entry) { clearTimeout(entry.timer); entry.fn(false); pendingApprovals.delete(toolUseID); }
+  try {
+    const entry = pendingApprovals.get(toolUseID);
+    if (entry) { clearTimeout(entry.timer); pendingApprovals.delete(toolUseID); entry.fn(false); }
+  } catch (err) { console.error('[deny]', err.message); }
 });
 
 ipcMain.handle('answer-question', (_, toolUseID, answers) => {
-  const entry = pendingApprovals.get(toolUseID);
-  if (entry) { clearTimeout(entry.timer); entry.fn(answers); pendingApprovals.delete(toolUseID); }
+  try {
+    const entry = pendingApprovals.get(toolUseID);
+    if (entry) { clearTimeout(entry.timer); pendingApprovals.delete(toolUseID); entry.fn(answers); }
+  } catch (err) { console.error('[answer]', err.message); }
 });
 
 ipcMain.handle('open-claude-download', () => { shell.openExternal('https://claude.ai/download'); });
+
+// ── Config helpers ──────────────────────────────────────────
+function readConfig() {
+  const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
+  try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { return {}; }
+}
+function writeConfig(cfg) {
+  const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
+  try {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+  } catch (err) { console.error('[config] write failed:', err.message); }
+}
 
 // Check which platforms are connected by reading the config
 ipcMain.handle('get-connected-platforms', () => {
@@ -348,6 +378,75 @@ ipcMain.handle('get-connected-platforms', () => {
     if (cfg.slackBotToken || cfg.slackWebhookUrl) connected.push('slack');
     return connected;
   } catch { return []; }
+});
+
+// ── Spellbook (Scheduled Tasks) ────────────────────────────
+ipcMain.handle('list-spells', () => {
+  const tasksDir = path.join(os.homedir(), '.claude', 'scheduled-tasks');
+  if (!fs.existsSync(tasksDir)) return [];
+
+  const cfg = readConfig();
+  const spellMeta = cfg.spells || {};
+
+  try {
+    const dirs = fs.readdirSync(tasksDir, { withFileTypes: true }).filter(d => d.isDirectory());
+    return dirs.map(d => {
+      let name = d.name, description = '';
+      const skillPath = path.join(tasksDir, d.name, 'SKILL.md');
+      try {
+        const content = fs.readFileSync(skillPath, 'utf8');
+        const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+        if (fmMatch) {
+          const nameMatch = fmMatch[1].match(/name:\s*(.+)/);
+          const descMatch = fmMatch[1].match(/description:\s*["']?(.+?)["']?\s*$/m);
+          if (nameMatch) name = nameMatch[1].trim();
+          if (descMatch) description = descMatch[1].trim();
+        }
+      } catch {}
+
+      const meta = spellMeta[d.name] || {};
+      return {
+        id: d.name,
+        name,
+        description,
+        cron: meta.cron || null,
+        enabled: meta.enabled !== false,
+        lastRun: meta.lastRun || null,
+        isMerlin: d.name.startsWith('merlin-'),
+      };
+    }).filter(t => t.isMerlin);
+  } catch { return []; }
+});
+
+ipcMain.handle('update-spell-meta', (_, taskId, meta) => {
+  const cfg = readConfig();
+  if (!cfg.spells) cfg.spells = {};
+  cfg.spells[taskId] = { ...cfg.spells[taskId], ...meta };
+  writeConfig(cfg);
+  return { success: true };
+});
+
+ipcMain.handle('toggle-spell', (_, taskId, enabled) => {
+  if (!taskId || typeof taskId !== 'string') return { success: false, error: 'invalid taskId' };
+
+  // Update local meta
+  const cfg = readConfig();
+  if (!cfg.spells) cfg.spells = {};
+  cfg.spells[taskId] = { ...cfg.spells[taskId], enabled };
+  writeConfig(cfg);
+
+  // Ask Claude to actually enable/disable via MCP
+  if (resolveNextMessage) {
+    resolveNextMessage({
+      type: 'user',
+      message: { role: 'user', content:
+        `Silently ${enabled ? 'enable' : 'disable'} the scheduled task "${taskId}" using update_scheduled_task. Don't explain, just do it and confirm in one short sentence.`
+      }
+    });
+    return { success: true, synced: true };
+  }
+  // Session not active — local state updated but MCP not called
+  return { success: true, synced: false };
 });
 
 // Read brands from filesystem
@@ -416,6 +515,7 @@ ipcMain.handle('get-credits', async () => {
 
   return credits;
 });
+ipcMain.handle('get-version', () => getCurrentVersion());
 ipcMain.handle('win-minimize', () => { if (win) win.minimize(); });
 ipcMain.handle('win-maximize', () => { if (win) { win.isMaximized() ? win.unmaximize() : win.maximize(); } });
 ipcMain.handle('win-close', () => { if (win) win.close(); });
@@ -429,12 +529,17 @@ ipcMain.handle('get-mobile-qr', async () => {
 });
 
 ipcMain.handle('save-pasted-media', (_, dataUrl, filename) => {
-  const resultsDir = path.join(appRoot, 'results');
-  if (!fs.existsSync(resultsDir)) fs.mkdirSync(resultsDir, { recursive: true });
-  const filePath = path.join(resultsDir, filename);
-  const base64 = dataUrl.replace(/^data:[^;]+;base64,/, '');
-  fs.writeFileSync(filePath, Buffer.from(base64, 'base64'));
-  return `results/${filename}`;
+  try {
+    const resultsDir = path.join(appRoot, 'results');
+    if (!fs.existsSync(resultsDir)) fs.mkdirSync(resultsDir, { recursive: true });
+    const filePath = path.join(resultsDir, filename);
+    const base64 = dataUrl.replace(/^data:[^;]+;base64,/, '');
+    fs.writeFileSync(filePath, Buffer.from(base64, 'base64'));
+    return `results/${filename}`;
+  } catch (err) {
+    console.error('[media-save]', err.message);
+    return null;
+  }
 });
 
 ipcMain.handle('get-subscription', () => {
@@ -496,7 +601,7 @@ async function checkForUpdates() {
   try {
     const currentVersion = getCurrentVersion();
     const raw = await httpsGet('https://api.github.com/repos/oathgames/Merlin/releases/latest');
-    const data = JSON.parse(raw);
+    const data = JSON.parse(raw.toString());
     if (!data || !data.tag_name) return; // validate response
     const latestVersion = data.tag_name.replace(/^v/, '');
     if (!latestVersion || latestVersion === currentVersion) return;
@@ -510,14 +615,14 @@ async function downloadAndApplyUpdate() {
   try {
     const currentVersion = getCurrentVersion();
     const raw = await httpsGet('https://api.github.com/repos/oathgames/Merlin/releases/latest');
-    const data = JSON.parse(raw);
+    const data = JSON.parse(raw.toString());
     if (!data || !data.tag_name) throw new Error('Invalid release data');
     const latestVersion = data.tag_name.replace(/^v/, '');
     if (!latestVersion || latestVersion === currentVersion) return;
 
     if (win && !win.isDestroyed()) win.webContents.send('update-progress', 'Downloading...');
 
-    const versionJson = JSON.parse(await httpsGet(`https://raw.githubusercontent.com/oathgames/Merlin/${data.tag_name}/version.json`));
+    const versionJson = JSON.parse((await httpsGet(`https://raw.githubusercontent.com/oathgames/Merlin/${data.tag_name}/version.json`)).toString());
 
     for (const filePath of (versionJson.updatable || [])) {
       try {

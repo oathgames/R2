@@ -46,6 +46,12 @@ document.getElementById('btn-close').addEventListener('click', () => merlin.winC
 
 // ── Setup Flow ──────────────────────────────────────────────
 async function init() {
+  // Show version in titlebar
+  const vLabel = document.getElementById('version-label');
+  if (vLabel && merlin.getVersion) {
+    try { vLabel.textContent = 'v' + await merlin.getVersion(); } catch {}
+  }
+
   // Show chat immediately with a welcome message — no blank screen
   setup.classList.add('hidden');
 
@@ -97,16 +103,21 @@ document.getElementById('setup-install-btn').addEventListener('click', () => {
 
 document.getElementById('setup-retry-btn').addEventListener('click', async () => {
   document.getElementById('setup-status').textContent = 'Checking...';
-  const result = await merlin.checkSetup();
-  if (result.ready) {
-    setup.style.animation = 'fadeOut .3s ease forwards';
-    setTimeout(async () => {
-      setup.classList.add('hidden');
-      setup.style.animation = '';
-      await merlin.startSession();
-    }, 300);
-  } else {
-    document.getElementById('setup-status').textContent = result.reason || 'Claude Desktop not found.';
+  try {
+    const result = await merlin.checkSetup();
+    if (result.ready) {
+      setup.style.animation = 'fadeOut .3s ease forwards';
+      setTimeout(async () => {
+        setup.classList.add('hidden');
+        setup.style.animation = '';
+        sessionActive = true;
+        await merlin.startSession();
+      }, 300);
+    } else {
+      document.getElementById('setup-status').textContent = result.reason || 'Claude not found.';
+    }
+  } catch (err) {
+    document.getElementById('setup-status').textContent = 'Check failed — make sure you\'re connected to the internet.';
   }
 });
 
@@ -167,6 +178,7 @@ function appendText(text) {
 let sessionActive = false;
 
 let typingTimeout = null;
+let typingStuckTimeout = null;
 
 function finalizeBubble() {
   if (currentBubble) {
@@ -262,6 +274,9 @@ function renderMarkdown(text) {
     }
     return match;
   });
+
+  // Normalize Windows backslash paths to forward slashes before matching
+  html = html.replace(/([a-zA-Z0-9_\-\.]+)\\([a-zA-Z0-9_\-\.\\]+\.(?:jpg|jpeg|png|gif|webp|mp4|webm|mov))/gi, (m, a, b) => `${a}/${b.replace(/\\/g, '/')}`);
 
   // Image file paths → inline <img>
   html = html.replace(/(?:\.\/)?([a-zA-Z0-9_\-\.\/]+\.(?:jpg|jpeg|png|gif|webp))/gi, (match, p1) => {
@@ -406,9 +421,16 @@ function handleStreamEvent(msg) {
 }
 
 // ── Approval Cards ──────────────────────────────────────────
+let _approvalCountdown = null; // track active countdown to prevent stacking
+
 merlin.onApprovalRequest(({ toolUseID, label, cost }) => {
+  // Clear any previous countdown from a prior approval
+  if (_approvalCountdown) { clearInterval(_approvalCountdown); _approvalCountdown = null; }
+
   document.getElementById('approval-label').textContent = label;
-  document.getElementById('approval-cost').textContent = cost ? `Cost: ${cost}` : '';
+  const costEl = document.getElementById('approval-cost');
+  costEl.textContent = cost ? `Cost: ${cost}` : '';
+  costEl.style.color = '';
 
   const approveBtn = document.getElementById('btn-approve');
   const denyBtn = document.getElementById('btn-deny');
@@ -423,14 +445,31 @@ merlin.onApprovalRequest(({ toolUseID, label, cost }) => {
 
   approval.classList.remove('hidden');
 
-  approveBtn.onclick = () => {
-    merlin.approveTool(toolUseID);
+  // 5-minute countdown
+  let secondsLeft = 300;
+  _approvalCountdown = setInterval(() => {
+    secondsLeft--;
+    if (secondsLeft <= 60) {
+      costEl.textContent = `Expires in ${secondsLeft}s`;
+      costEl.style.color = '#ef4444';
+    }
+    if (secondsLeft <= 0) {
+      clearInterval(_approvalCountdown);
+      _approvalCountdown = null;
+      approval.classList.add('hidden');
+      costEl.style.color = '';
+    }
+  }, 1000);
+
+  const clearApproval = () => {
+    if (_approvalCountdown) { clearInterval(_approvalCountdown); _approvalCountdown = null; }
     approval.classList.add('hidden');
+    costEl.style.color = '';
   };
-  denyBtn.onclick = () => {
-    merlin.denyTool(toolUseID);
-    approval.classList.add('hidden');
-  };
+
+  // Replace handlers cleanly (onclick= replaces previous, no stacking)
+  approveBtn.onclick = () => { merlin.approveTool(toolUseID); clearApproval(); };
+  denyBtn.onclick = () => { merlin.denyTool(toolUseID); clearApproval(); };
 });
 
 // ── AskUserQuestion (Option Chips) ──────────────────────────
@@ -488,10 +527,28 @@ merlin.onAskUserQuestion(({ toolUseID, questions }) => {
 
 // ── Error Handling ──────────────────────────────────────────
 merlin.onSdkError((err) => {
+  removeTypingIndicator();
+  sessionActive = false;
+  isStreaming = false;
+
+  const errLower = (err || '').toLowerCase();
+  let userMsg = 'Something went wrong. ';
+  if (errLower.includes('enotfound') || errLower.includes('econnrefused') || errLower.includes('etimedout') || errLower.includes('network')) {
+    userMsg = 'Lost connection — check your internet. ';
+  } else if (errLower.includes('401') || errLower.includes('unauthorized') || errLower.includes('auth')) {
+    userMsg = 'Session expired. ';
+  }
+
   const bubble = addClaudeBubble();
-  textBuffer = `Something went wrong: ${err}\n\nTry sending your message again.`;
+  textBuffer = `${userMsg}Restarting session...\n\nIf this keeps happening, try restarting the app.`;
   finalizeBubble();
   bubble.style.borderColor = 'rgba(239,68,68,.3)';
+
+  // Auto-restart session after a brief pause
+  setTimeout(() => {
+    sessionActive = true;
+    merlin.startSession();
+  }, 2000);
 });
 
 // ── Update Toast ────────────────────────────────────────────
@@ -562,11 +619,11 @@ document.getElementById('qr-modal').addEventListener('click', (e) => {
 // ── Magic Panel ─────────────────────────────────────────────
 // ── Brand + Integration Filtering ────────────────────────────
 const verticalIntegrations = {
-  ecom:    ['meta','tiktok','shopify','klaviyo','google','pinterest','fal','elevenlabs','heygen','attentive','slack'],
-  game:    ['meta','tiktok','google','fal','heygen','elevenlabs','slack'],
-  saas:    ['meta','google','klaviyo','fal','elevenlabs','slack'],
-  local:   ['meta','google','fal','slack'],
-  agency:  ['meta','tiktok','shopify','klaviyo','google','pinterest','fal','elevenlabs','heygen','attentive','slack'],
+  ecom:    ['meta','tiktok','shopify','klaviyo','google','pinterest','fal','elevenlabs','heygen'],
+  game:    ['meta','tiktok','google','fal','heygen','elevenlabs'],
+  saas:    ['meta','google','klaviyo','fal','elevenlabs'],
+  local:   ['meta','google','fal'],
+  agency:  ['meta','tiktok','shopify','klaviyo','google','pinterest','fal','elevenlabs','heygen'],
 };
 
 function loadBrands() {
@@ -669,6 +726,7 @@ document.getElementById('magic-btn').addEventListener('click', () => {
   // Load brands first (sets vertical filter), then connections (hides connected from available)
   if (!panel.classList.contains('hidden')) {
     loadBrands().then(() => loadConnections());
+    loadSpells();
     merlin.getCredits().then((credits) => {
       if (!credits) return;
       // Update tiles with credit info
@@ -752,10 +810,24 @@ document.getElementById('request-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') document.getElementById('request-send').click();
 });
 
-// Add scheduled task button
-document.getElementById('add-task-btn').addEventListener('click', () => {
+// ── Spellbook ──────────────────────────────────────────────
+function formatCron(cron) {
+  if (!cron) return '';
+  const parts = cron.split(' ');
+  if (parts.length < 5) return cron;
+  const [min, hour, , , dow] = parts;
+  const h = parseInt(hour);
+  if (isNaN(h) || h < 0 || h > 23) return cron; // invalid hour — show raw
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  const timeStr = `${h12}${min !== '0' ? ':' + min.padStart(2, '0') : ''} ${ampm}`;
+  const dayMap = { '*': '', '1-5': 'Weekdays', '0,6': 'Weekends', '1': 'Mon', '2': 'Tue', '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat', '0': 'Sun' };
+  const dayStr = dayMap[dow] || '';
+  return dayStr ? `${dayStr} ${timeStr}` : timeStr;
+}
+
+function sendChatFromPanel(msg) {
   document.getElementById('magic-panel').classList.add('hidden');
-  const msg = 'I want to add a new scheduled task. What would be useful?';
   addUserBubble(msg);
   showTypingIndicator();
   turnStartTime = Date.now();
@@ -763,22 +835,75 @@ document.getElementById('add-task-btn').addEventListener('click', () => {
   sessionActive = true;
   startTickingTimer();
   merlin.sendMessage(msg);
+}
+
+async function loadSpells() {
+  let spells;
+  try { spells = await merlin.listSpells(); } catch { spells = []; }
+  const list = document.getElementById('spellbook-list');
+  const empty = document.getElementById('spellbook-empty');
+  list.innerHTML = '';
+
+  if (!spells || spells.length === 0) {
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  spells.forEach(spell => {
+    const row = document.createElement('div');
+    row.className = 'spell-row';
+    row.dataset.id = spell.id;
+
+    const dot = document.createElement('span');
+    dot.className = `spell-dot ${spell.enabled ? 'dot-active' : 'dot-pending'}`;
+
+    const name = document.createElement('span');
+    name.className = 'spell-name';
+    name.textContent = spell.description || spell.name;
+
+    const time = document.createElement('span');
+    time.className = 'spell-time';
+    time.textContent = formatCron(spell.cron);
+
+    const toggle = document.createElement('button');
+    toggle.className = `spell-toggle ${spell.enabled ? 'spell-on' : ''}`;
+    toggle.textContent = spell.enabled ? 'On' : 'Off';
+    toggle.onclick = (e) => {
+      e.stopPropagation();
+      merlin.toggleSpell(spell.id, !spell.enabled);
+      setTimeout(loadSpells, 500); // refresh after toggle
+    };
+
+    row.appendChild(dot);
+    row.appendChild(name);
+    row.appendChild(time);
+    row.appendChild(toggle);
+
+    row.addEventListener('click', () => {
+      sendChatFromPanel(`Tell me about the "${spell.name}" spell and let me configure it.`);
+    });
+
+    list.appendChild(row);
+  });
+}
+
+// Cast a new spell
+document.getElementById('add-task-btn').addEventListener('click', () => {
+  sendChatFromPanel('I want to cast a new spell — a new scheduled marketing task. What would be useful for my brand?');
 });
 
-// Autopilot row clicks
-document.querySelectorAll('.autopilot-row').forEach(row => {
-  row.addEventListener('click', () => {
-    document.getElementById('magic-panel').classList.add('hidden');
-    const taskName = row.textContent.trim().replace(/\d+\s*(AM|PM|Mon).*/, '').trim();
-    const msg = `Tell me about the "${taskName}" scheduled task and let me configure it.`;
-    addUserBubble(msg);
-    showTypingIndicator();
-    turnStartTime = Date.now();
-    turnTokens = 0;
-    sessionActive = true;
-    startTickingTimer();
-    merlin.sendMessage(msg);
-  });
+// Real-time spell updates
+merlin.onSpellActivity(() => {
+  const panel = document.getElementById('magic-panel');
+  if (panel && !panel.classList.contains('hidden')) setTimeout(loadSpells, 1000);
+});
+merlin.onSpellCompleted(({ taskId, timestamp }) => {
+  if (taskId && typeof taskId === 'string') {
+    merlin.updateSpellMeta(taskId, { lastRun: timestamp });
+  }
+  const panel = document.getElementById('magic-panel');
+  if (panel && !panel.classList.contains('hidden')) loadSpells();
 });
 
 // ── Input Handling ──────────────────────────────────────────
@@ -822,9 +947,16 @@ function showTypingIndicator() {
   wrapper.appendChild(bubble);
   messages.appendChild(wrapper);
   scrollToBottom();
+  // Auto-hide after 2 minutes to prevent stuck indicator
+  if (typingStuckTimeout) clearTimeout(typingStuckTimeout);
+  typingStuckTimeout = setTimeout(() => {
+    removeTypingIndicator();
+    typingStuckTimeout = null;
+  }, 120000);
 }
 
 function removeTypingIndicator() {
+  if (typingStuckTimeout) { clearTimeout(typingStuckTimeout); typingStuckTimeout = null; }
   const existing = document.querySelector('.typing-indicator');
   if (existing) existing.remove();
 }
