@@ -22,7 +22,7 @@ let sessionTotalTokens = 0;
     btn.classList.add('hidden-sub');
   } else {
     const days = sub?.daysLeft ?? 7;
-    document.getElementById('trial-text').textContent = days === 0 ? 'Trial ended' : `${days} day${days === 1 ? '' : 's'} left`;
+    document.getElementById('trial-text').textContent = days === 0 ? 'Trial Ended' : `${days}D Left`;
   }
 })();
 
