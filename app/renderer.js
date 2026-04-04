@@ -553,7 +553,7 @@ const verticalIntegrations = {
 };
 
 function loadBrands() {
-  merlin.getBrands().then((brands) => {
+  return merlin.getBrands().then((brands) => {
     const select = document.getElementById('brand-select');
     select.innerHTML = '';
     if (!brands || brands.length === 0) {
@@ -647,10 +647,9 @@ function loadConnections() {
 document.getElementById('magic-btn').addEventListener('click', () => {
   const panel = document.getElementById('magic-panel');
   panel.classList.toggle('hidden');
-  // Load brands, connections, + fetch credits when panel opens
+  // Load brands first (sets vertical filter), then connections (hides connected from available)
   if (!panel.classList.contains('hidden')) {
-    loadBrands();
-    loadConnections();
+    loadBrands().then(() => loadConnections());
     merlin.getCredits().then((credits) => {
       if (!credits) return;
       // Update tiles with credit info
