@@ -24,19 +24,55 @@ let turnTokens = 0;
 let sessionTotalTokens = 0;
 
 // ── Subscription ────────────────────────────────────────────
+let _trialExpired = false;
+
 (async function checkSubscription() {
   const sub = await merlin.getSubscription();
   const btn = document.getElementById('subscribe-btn');
   if (sub?.subscribed) {
-    btn.classList.add('hidden-sub');
+    // Show "Manage Pro" instead of hiding entirely
+    document.getElementById('trial-text').textContent = '✦ Pro';
+    document.querySelector('.subscribe-cta').textContent = 'Manage';
+    btn.classList.add('subscribed');
   } else {
     const days = sub?.daysLeft ?? 7;
-    document.getElementById('trial-text').textContent = days === 0 ? 'Trial Ended' : `${days}D Left`;
+    _trialExpired = days === 0;
+    document.getElementById('trial-text').textContent = _trialExpired ? 'Expired' : `${days}D Left`;
   }
 })();
 
-document.getElementById('subscribe-btn').addEventListener('click', () => {
-  merlin.openSubscribe();
+document.getElementById('subscribe-btn').addEventListener('click', async () => {
+  const sub = await merlin.getSubscription();
+  if (sub?.subscribed) {
+    // Subscribed user → open Stripe Customer Portal to manage billing
+    merlin.openManage();
+    return;
+  }
+  // Trial/expired user → show activation prompt
+  const key = prompt('Enter your license key, or click OK to subscribe:');
+  if (key && key.trim().length > 0) {
+    merlin.activateKey(key).then((result) => {
+      if (result.success) {
+        document.getElementById('trial-text').textContent = '✦ Pro';
+        document.querySelector('.subscribe-cta').textContent = 'Manage';
+        document.getElementById('subscribe-btn').classList.add('subscribed');
+        _trialExpired = false;
+      } else {
+        alert(result.error || 'Invalid key.');
+      }
+    });
+  } else if (key !== null) {
+    merlin.openSubscribe();
+  }
+});
+
+// Auto-activate when Stripe payment completes (polled from main.js)
+merlin.onSubscriptionActivated(() => {
+  document.getElementById('subscribe-btn').classList.add('hidden-sub');
+  _trialExpired = false;
+  const bubble = addClaudeBubble();
+  textBuffer = '✦ Payment received — welcome to Merlin Pro! All features are unlocked.';
+  finalizeBubble();
 });
 
 // ── Window Controls ─────────────────────────────────────────
@@ -60,22 +96,26 @@ async function init() {
   welcomeBubble.classList.remove('streaming');
 
   const welcomeLines = [
-    { text: '✦ Hey — I\'m Merlin, your marketing wizard.' },
-    { text: 'One moment while I check things out...' },
+    '✦ Hey — I\'m Merlin, your marketing wizard.',
+    'Brewing up your workspace...',
+    'Scanning for brands and products...',
+    'Checking your connected platforms...',
+    'Almost ready — summoning the magic...',
   ];
 
   let lineIndex = 0;
-  welcomeBubble.innerHTML = welcomeLines[0].text;
+  welcomeBubble.innerHTML = welcomeLines[0];
 
   window._welcomeInterval = setInterval(() => {
     lineIndex++;
     if (lineIndex < welcomeLines.length) {
-      welcomeBubble.innerHTML += '<br><br>' + welcomeLines[lineIndex].text;
+      // Replace the status line (keep the greeting, update the progress)
+      welcomeBubble.innerHTML = welcomeLines[0] + '<br><br>' + welcomeLines[lineIndex];
       scrollToBottom();
     } else {
       clearInterval(window._welcomeInterval);
     }
-  }, 1500);
+  }, 2000);
 
   // Start session in background — when SDK connects, it takes over
   merlin.checkSetup().then((result) => {
@@ -189,6 +229,22 @@ function finalizeBubble() {
   textBuffer = '';
   isStreaming = false;
   scrollToBottom();
+  // First-time sparkle menu hint — show once after Claude's first response
+  if (!hasShownSparkleHint) {
+    hasShownSparkleHint = true;
+    setTimeout(() => {
+      // Pulse the sparkle button
+      const sparkle = document.getElementById('magic-btn');
+      sparkle.classList.add('sparkle-hint');
+      // Show hint bubble
+      const hint = addClaudeBubble();
+      textBuffer = '✦ **Tip:** Your spells, connections, and brand settings live behind the ✦ button up top. Click it anytime to manage your marketing autopilot.';
+      finalizeBubble();
+      // Remove pulse after 8 seconds
+      setTimeout(() => sparkle.classList.remove('sparkle-hint'), 8000);
+    }, 1500);
+  }
+
   // Refresh connections if panel is open (picks up newly connected platforms)
   const panel = document.getElementById('magic-panel');
   if (panel && !panel.classList.contains('hidden')) {
@@ -315,6 +371,7 @@ function escapeHtml(text) {
 
 // ── SDK Message Handling ────────────────────────────────────
 let firstMessage = true;
+let hasShownSparkleHint = false;
 
 merlin.onSdkMessage((msg) => {
   // When first real SDK content arrives, clean up welcome state
@@ -619,11 +676,11 @@ document.getElementById('qr-modal').addEventListener('click', (e) => {
 // ── Magic Panel ─────────────────────────────────────────────
 // ── Brand + Integration Filtering ────────────────────────────
 const verticalIntegrations = {
-  ecom:    ['meta','tiktok','shopify','klaviyo','google','pinterest','fal','elevenlabs','heygen'],
+  ecom:    ['meta','tiktok','shopify','klaviyo','google','pinterest','amazon','fal','elevenlabs','heygen'],
   game:    ['meta','tiktok','google','fal','heygen','elevenlabs'],
   saas:    ['meta','google','klaviyo','fal','elevenlabs'],
   local:   ['meta','google','fal'],
-  agency:  ['meta','tiktok','shopify','klaviyo','google','pinterest','fal','elevenlabs','heygen'],
+  agency:  ['meta','tiktok','shopify','klaviyo','google','pinterest','amazon','fal','elevenlabs','heygen'],
 };
 
 function loadBrands() {
@@ -768,6 +825,7 @@ document.addEventListener('click', (e) => {
     shopify: 'Connect my Shopify store',
     klaviyo: 'Connect my Klaviyo account',
     google: 'Connect my Google Ads account',
+    amazon: 'Connect my Amazon account for ads and product management',
     pinterest: 'Connect my Pinterest Ads account',
     fal: 'Set up fal.ai for image generation',
     elevenlabs: 'Set up ElevenLabs for voice',
@@ -842,6 +900,17 @@ async function loadSpells() {
   try { spells = await merlin.listSpells(); } catch { spells = []; }
   const list = document.getElementById('spellbook-list');
   const empty = document.getElementById('spellbook-empty');
+  const warning = document.getElementById('spellbook-warning');
+
+  // Check if Claude Desktop is running (spells won't fire if it's closed)
+  if (spells && spells.length > 0) {
+    try {
+      const running = await merlin.checkClaudeRunning();
+      warning.style.display = running ? 'none' : 'block';
+    } catch { warning.style.display = 'none'; }
+  } else {
+    warning.style.display = 'none';
+  }
   list.innerHTML = '';
 
   if (!spells || spells.length === 0) {
@@ -964,6 +1033,26 @@ function removeTypingIndicator() {
 function sendMessage() {
   const text = input.value.trim();
   if (!text || isStreaming) return;
+
+  // Trial expiry gate — soft block, allow key activation
+  if (_trialExpired) {
+    const key = prompt('Your free trial has ended. Enter a license key to continue, or click OK to subscribe:');
+    if (key && key.trim().length > 0) {
+      merlin.activateKey(key).then((result) => {
+        if (result.success) {
+          document.getElementById('subscribe-btn').classList.add('hidden-sub');
+          _trialExpired = false;
+          alert('Activated! Welcome to Merlin Pro.');
+          sendMessage(); // retry the message
+        } else {
+          alert(result.error || 'Invalid key.');
+        }
+      });
+    } else if (key !== null) {
+      merlin.openSubscribe();
+    }
+    return;
+  }
 
   addUserBubble(text);
   showTypingIndicator();

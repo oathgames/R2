@@ -348,6 +348,20 @@ For images:
 | Google performance | `{"action": "google-ads-insights"}` |
 | Pause Google campaign | `{"action": "google-ads-kill", "campaignId": "..."}` |
 | Clone to scaling | `{"action": "google-ads-duplicate", "campaignId": "...", "targetCampaign": "Merlin - Scaling"}` |
+| **Amazon** | |
+| Amazon Ads status | `{"action": "amazon-ads-status"}` |
+| Amazon Ads setup | `{"action": "amazon-ads-setup"}` |
+| Push Amazon ad | `{"action": "amazon-ads-push", "campaignId": "...", "adGroupName": "...", "keywords": [...], "defaultBid": 0.75}` |
+| Amazon performance | `{"action": "amazon-ads-insights"}` |
+| Pause Amazon campaign | `{"action": "amazon-ads-kill", "campaignId": "..."}` |
+| List products | `{"action": "amazon-products"}` |
+| Recent orders | `{"action": "amazon-orders", "days": 7}` |
+| **Shopify** | |
+| List products | `{"action": "shopify-products"}` |
+| Order metrics | `{"action": "shopify-orders", "batchCount": 7}` |
+| Import products to brand | `{"action": "shopify-import"}` |
+| **Dashboard** | |
+| Unified MER/ROAS | `{"action": "dashboard", "batchCount": 7}` |
 | **Marketing Calendar** | |
 | Analyze launch cadence | `{"action": "calendar"}` |
 
@@ -761,7 +775,10 @@ Bash({ command: '.claude/tools/Merlin.exe --config .claude/tools/merlin-config.j
 
 **NEVER ask users to create custom apps, copy tokens, or navigate Shopify admin settings.** The OAuth flow handles everything.
 
-After connecting, launch a background SEO audit:
+After connecting:
+1. **Auto-import products**: Run `{"action": "shopify-import"}` to pull all product data + images into the brand folder automatically. This eliminates manual photo dropping.
+2. **Pull order metrics**: Run `{"action": "shopify-orders", "batchCount": 7}` to get recent revenue data for the dashboard.
+3. Launch a background SEO audit:
 
 **Background SEO Audit** (run via Agent tool while displaying the token instructions):
 
@@ -966,6 +983,42 @@ Returns yesterday's metrics per campaign with verdicts (WINNER/LOSER/KILL/OK). U
 ```
 .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"google-ads-kill","campaignId":"12345678"}'
 .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"google-ads-duplicate","campaignId":"12345678","targetCampaign":"Merlin - Scaling"}'
+```
+
+## Amazon (Ads + Seller)
+
+**One-click OAuth** (use 5-minute timeout):
+```
+Bash({ command: '.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd \'{"action":"amazon-login"}\'', timeout: 300000 })
+```
+Save `amazonAccessToken`, `amazonRefreshToken`, `amazonProfileId`, `amazonSellerId` to config.
+
+### Campaign setup
+```
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"amazon-ads-setup"}'
+```
+Creates "Merlin - Testing" (manual targeting, $10/day) and "Merlin - Scaling" (auto targeting, $50/day) Sponsored Products campaigns.
+
+### Publishing ads
+```
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"amazon-ads-push","campaignId":"...","adGroupName":"SP - Product Name","keywords":["keyword1","keyword2"],"defaultBid":0.75}'
+```
+
+### Performance review
+```
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"amazon-ads-insights"}'
+```
+Returns campaign metrics with ACOS, ROAS, and WINNER/LOSER/KILL verdicts.
+
+### Kill / Scale
+```
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"amazon-ads-kill","campaignId":"..."}'
+```
+
+### Product management
+```
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"amazon-products"}'
+.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"amazon-orders","days":7}'
 ```
 
 ## Marketing Calendar

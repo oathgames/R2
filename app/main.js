@@ -155,6 +155,9 @@ function translateTool(toolName, input) {
       'tiktok-push':   { label: 'Publish this ad to TikTok', cost: '$5/day budget' },
       'tiktok-login':  { label: 'Connect to your TikTok Ads account', cost: 'Free' },
       'shopify-login': { label: 'Connect to your Shopify store', cost: 'Free' },
+      'amazon-login':  { label: 'Connect to your Amazon account', cost: 'Free' },
+      'amazon-ads-push': { label: 'Create a Sponsored Products ad on Amazon', cost: '$10/day budget' },
+      'amazon-ads-kill': { label: 'Pause this Amazon campaign', cost: 'Free' },
       'api-key-setup': { label: 'Set up an image generation account', cost: 'Free' },
       'verify-key':    { label: 'Verify your API connection', cost: 'Free' },
     };
@@ -183,6 +186,15 @@ async function handleToolApproval(toolName, input) {
   // Auto-approve safe Bash commands (read-only, setup, file management)
   if (toolName === 'Bash' && isSafeBash(input.command)) {
     return { behavior: 'allow', updatedInput: input };
+  }
+
+  // Auto-approve OAuth login flows — user already clicked the tile to connect
+  if (toolName === 'Bash' && input.command && input.command.includes('Merlin')) {
+    const cmdMatch = input.command.match(/"action"\s*:\s*"([^"]+)"/);
+    const action = cmdMatch ? cmdMatch[1] : '';
+    if (action.endsWith('-login')) {
+      return { behavior: 'allow', updatedInput: input };
+    }
   }
 
   if (toolName === 'AskUserQuestion') {
@@ -242,6 +254,18 @@ async function startSession() {
       canUseTool: handleToolApproval,
     },
   });
+
+  // Capture user email from Claude account (for telemetry + Stripe pre-fill)
+  try {
+    const acctInfo = await activeQuery.accountInfo();
+    if (acctInfo?.email) {
+      const cfg = readConfig();
+      if (!cfg._userEmail || cfg._userEmail !== acctInfo.email) {
+        cfg._userEmail = acctInfo.email;
+        writeConfig(cfg);
+      }
+    }
+  } catch {}
 
   try {
     for await (const msg of activeQuery) {
@@ -347,6 +371,26 @@ ipcMain.handle('answer-question', (_, toolUseID, answers) => {
 
 ipcMain.handle('open-claude-download', () => { shell.openExternal('https://claude.ai/download'); });
 
+ipcMain.handle('check-claude-running', async () => {
+  const { exec } = require('child_process');
+  return new Promise((resolve) => {
+    const cmd = process.platform === 'win32'
+      ? 'tasklist /FI "IMAGENAME eq Claude.exe" /NH'
+      : 'pgrep -x "Claude" || pgrep -f "Claude Desktop"';
+    const child = exec(cmd, { timeout: 5000 });
+    let output = '';
+    child.stdout.on('data', (d) => { output += d; });
+    child.on('close', () => {
+      if (process.platform === 'win32') {
+        resolve(output.toLowerCase().includes('claude.exe'));
+      } else {
+        resolve(output.trim().length > 0);
+      }
+    });
+    child.on('error', () => resolve(false));
+  });
+});
+
 // ── Config helpers ──────────────────────────────────────────
 function readConfig() {
   const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
@@ -375,6 +419,7 @@ ipcMain.handle('get-connected-platforms', () => {
     if (cfg.falApiKey) connected.push('fal');
     if (cfg.elevenLabsApiKey) connected.push('elevenlabs');
     if (cfg.heygenApiKey) connected.push('heygen');
+    if (cfg.amazonAccessToken) connected.push('amazon');
     if (cfg.slackBotToken || cfg.slackWebhookUrl) connected.push('slack');
     return connected;
   } catch { return []; }
@@ -542,30 +587,137 @@ ipcMain.handle('save-pasted-media', (_, dataUrl, filename) => {
   }
 });
 
-ipcMain.handle('get-subscription', () => {
-  // Check for subscription file
+// ── Subscription / Trial / License ──────────────────────────
+
+// Whitelist keys for testers — stored as HMAC hashes, never plaintext
+// Whitelist keys validated via HMAC hash comparison
+const VALID_KEY_HASHES = {
+  'dd1a602f79a5fd7d': 5,  // test key — 5 uses max
+  'cd1c3ef01b913d64': 99, // beta key
+};
+
+function hashKey(key) {
+  const crypto = require('crypto');
+  return crypto.createHmac('sha256', 'merlin-salt-2026').update(key).digest('hex').slice(0, 16);
+}
+
+// Machine fingerprint for Stripe checkout + license polling (persistent)
+function getMachineId() {
+  const machineIdFile = path.join(appRoot, '.merlin-machine-id');
+  try {
+    const existing = fs.readFileSync(machineIdFile, 'utf8').trim();
+    if (existing && existing.length >= 16) return existing;
+  } catch {}
+
+  const crypto = require('crypto');
+  const raw = `${os.hostname()}|${os.userInfo().username}|${os.platform()}|${os.arch()}|${Date.now()}`;
+  const id = crypto.createHash('sha256').update(raw).digest('hex');
+  try {
+    fs.mkdirSync(path.dirname(machineIdFile), { recursive: true });
+    fs.writeFileSync(machineIdFile, id);
+  } catch {}
+  return id;
+}
+
+function getSubscriptionState() {
   const subFile = path.join(appRoot, '.merlin-subscription');
   try {
     if (fs.existsSync(subFile)) {
       const data = JSON.parse(fs.readFileSync(subFile, 'utf8'));
-      return data; // { subscribed: true } or { trialStart: timestamp }
+      if (data.subscribed) return { subscribed: true, tier: data.tier || 'sage', key: data.key || '' };
     }
   } catch {}
-  // Default: 7-day trial from first launch
+
+  // Trial: 7-day from first launch
   const trialFile = path.join(appRoot, '.merlin-trial');
   let trialStart;
   if (fs.existsSync(trialFile)) {
     trialStart = parseInt(fs.readFileSync(trialFile, 'utf8'));
   } else {
     trialStart = Date.now();
-    fs.writeFileSync(trialFile, String(trialStart));
+    try { fs.writeFileSync(trialFile, String(trialStart)); } catch {}
   }
   const daysLeft = Math.max(0, 7 - Math.floor((Date.now() - trialStart) / (1000 * 60 * 60 * 24)));
-  return { subscribed: false, daysLeft, trialStart };
+  return { subscribed: false, daysLeft, trialStart, expired: daysLeft === 0 };
+}
+
+ipcMain.handle('get-subscription', () => getSubscriptionState());
+
+ipcMain.handle('activate-key', (_, key) => {
+  if (!key || typeof key !== 'string') return { success: false, error: 'Invalid key' };
+  const trimmed = key.trim().toLowerCase();
+  const hashed = hashKey(trimmed);
+
+  // Check whitelist (hash the input, compare against stored hashes)
+  const maxUses = VALID_KEY_HASHES[hashed];
+  if (maxUses !== undefined) {
+    // Track usage count in a local file
+    const usageFile = path.join(appRoot, '.merlin-key-usage.json');
+    let usage = {};
+    try { usage = JSON.parse(fs.readFileSync(usageFile, 'utf8')); } catch {}
+    const used = usage[hashed] || 0;
+    if (used >= maxUses) {
+      return { success: false, error: 'This key has reached its activation limit.' };
+    }
+    usage[hashed] = used + 1;
+    try { fs.writeFileSync(usageFile, JSON.stringify(usage, null, 2)); } catch {}
+
+    const subFile = path.join(appRoot, '.merlin-subscription');
+    try {
+      fs.mkdirSync(path.dirname(subFile), { recursive: true });
+      fs.writeFileSync(subFile, JSON.stringify({ subscribed: true, tier: 'pro', activatedAt: Date.now() }, null, 2));
+    } catch (err) {
+      return { success: false, error: 'Could not save activation' };
+    }
+    return { success: true, tier: 'pro' };
+  }
+
+  return { success: false, error: 'Invalid key. Check your email or visit merlingotme.com' };
 });
 
-ipcMain.handle('open-subscribe', () => {
-  shell.openExternal('https://buy.stripe.com/5kQfZggqt73f7MMca85wI00');
+let _activationPoller = null;
+
+ipcMain.handle('open-subscribe', async () => {
+  const machineId = getMachineId();
+  // Pre-fill email from Claude account if available
+  let emailParam = '';
+  try {
+    if (activeQuery) {
+      const info = await activeQuery.accountInfo();
+      if (info?.email) emailParam = `&prefilled_email=${encodeURIComponent(info.email)}`;
+    }
+  } catch {}
+  shell.openExternal(`https://buy.stripe.com/5kQfZggqt73f7MMca85wI00?client_reference_id=${machineId}${emailParam}`);
+
+  // Poll for activation every 10s for 10 minutes after opening checkout
+  if (_activationPoller) clearInterval(_activationPoller);
+  let attempts = 0;
+  _activationPoller = setInterval(async () => {
+    attempts++;
+    if (attempts > 60) { clearInterval(_activationPoller); _activationPoller = null; return; }
+
+    try {
+      const raw = await httpsGet(`https://merlingotme.com/api/check-license?id=${machineId}`);
+      const data = JSON.parse(raw.toString());
+      if (data.activated) {
+        clearInterval(_activationPoller);
+        _activationPoller = null;
+        // Write subscription file
+        const subFile = path.join(appRoot, '.merlin-subscription');
+        fs.mkdirSync(path.dirname(subFile), { recursive: true });
+        fs.writeFileSync(subFile, JSON.stringify({ subscribed: true, tier: 'pro', activatedAt: Date.now(), via: 'stripe' }, null, 2));
+        // Notify renderer
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('subscription-activated', { tier: 'pro' });
+        }
+      }
+    } catch {}
+  }, 10000);
+});
+
+ipcMain.handle('open-manage', () => {
+  // Stripe Customer Portal — users manage billing, cancel, update payment
+  shell.openExternal('https://billing.stripe.com/p/login/5kQfZggqt73f7MMca85wI00');
 });
 
 ipcMain.handle('apply-update', () => { downloadAndApplyUpdate(); });
@@ -577,14 +729,19 @@ function httpsGet(url, _depth = 0) {
   if (_depth > 10) return Promise.reject(new Error('Too many redirects'));
   const https = require('https');
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'Merlin-Desktop' } }, (res) => {
+    const req = https.get(url, { headers: { 'User-Agent': 'Merlin-Desktop' }, timeout: 15000 }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         return httpsGet(res.headers.location, _depth + 1).then(resolve).catch(reject);
+      }
+      if (res.statusCode !== 200) {
+        return reject(new Error(`HTTP ${res.statusCode}`));
       }
       let body = [];
       res.on('data', (c) => body.push(c));
       res.on('end', () => resolve(Buffer.concat(body)));
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
   });
 }
 
@@ -692,6 +849,29 @@ app.whenReady().then(async () => {
   await createWindow();
   setTimeout(checkForUpdates, 10000);
   setInterval(checkForUpdates, 4 * 60 * 60 * 1000);
+
+  // Lightweight telemetry — one ping on launch, no PII
+  setTimeout(() => {
+    try {
+      const sub = getSubscriptionState();
+      const cfg = readConfig();
+      const payload = JSON.stringify({
+        id: getMachineId(),
+        v: getCurrentVersion(),
+        p: process.platform,
+        e: 'launch',
+        vt: cfg.vertical || '',
+        t: sub.subscribed ? 'pro' : 'trial',
+      });
+      const https = require('https');
+      const req = https.request('https://merlin-wisdom.ryan-fec.workers.dev/api/ping', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000,
+      });
+      req.write(payload);
+      req.end();
+      req.on('error', () => {});
+    } catch {}
+  }, 5000);
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

@@ -56,6 +56,7 @@
   <!-- Spellbook (Scheduled Tasks) -->
   <div class="magic-section">
     <div class="magic-section-label">Spellbook</div>
+    <div id="spellbook-warning" class="spellbook-warning" style="display:none">Claude Desktop is closed — spells are paused</div>
     <div id="spellbook-list" class="spellbook-list"></div>
     <div id="spellbook-empty" class="spellbook-empty">No spells to cast yet</div>
     <button id="add-task-btn" class="add-task-btn">+ Cast a new spell</button>
@@ -84,6 +85,7 @@
       <button class="magic-tile" data-platform="fal" title="Click to ask Merlin to set up image generation"><div class="tile-icon"><svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="10" fill="#7C3AED"/><path fill="#fff" d="M8 16l4-10 4 10M9.5 13h5" stroke="#fff" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div><div class="tile-name">fal.ai</div></button>
       <button class="magic-tile" data-platform="elevenlabs" title="Click to ask Merlin to set up voice"><div class="tile-icon"><svg viewBox="0 0 24 24" width="22" height="22"><rect width="24" height="24" rx="6" fill="#1a1a2e"/><rect x="8" y="5" width="3" height="14" rx="1.5" fill="#fff"/><rect x="13" y="5" width="3" height="14" rx="1.5" fill="#fff"/></svg></div><div class="tile-name">ElevenLabs</div></button>
       <button class="magic-tile" data-platform="heygen" title="Click to ask Merlin to set up video avatars"><div class="tile-icon"><svg viewBox="0 0 24 24" width="22" height="22"><rect width="24" height="24" rx="6" fill="#5046e5"/><path fill="#fff" d="M8 7v10l9-5z"/></svg></div><div class="tile-name">HeyGen</div></button>
+      <button class="magic-tile" data-platform="amazon" title="Click to ask Merlin to connect Amazon"><div class="tile-icon"><svg viewBox="0 0 24 24" width="22" height="22"><rect width="24" height="24" rx="6" fill="#FF9900"/><path fill="#232F3E" d="M6.5 14.5c3 2.5 7.5 2.5 10.5 0" stroke="#232F3E" stroke-width="1.5" fill="none" stroke-linecap="round"/><path fill="#232F3E" d="M15.5 13l1.5 2-2 .5"/></svg></div><div class="tile-name">Amazon</div></button>
       <!-- Attentive, Discord, Slack hidden for now — will add back later -->
     </div>
     <div id="request-platform" class="request-platform">
@@ -146,7 +148,8 @@
     <h1>Merlin</h1>
     <p class="setup-sub">Your AI CMO Wizard</p>
     <p id="setup-status" class="setup-desc" style="white-space:pre-line">Checking for Claude...</p>
-    <button id="setup-install-btn" class="btn-primary">Get Claude</button>
+    <p class="setup-explain">Merlin runs on Claude &mdash; an AI subscription (Max plan recommended) that powers everything.<br>Install it once, then Merlin handles the rest.</p>
+    <button id="setup-install-btn" class="btn-primary">Get Claude &mdash; claude.ai/download</button>
     <button id="setup-retry-btn" class="btn-secondary">I have it &mdash; retry</button>
   </div>
 </div>

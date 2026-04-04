@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('merlin', {
   // Subscription
   getSubscription: () => ipcRenderer.invoke('get-subscription'),
   openSubscribe: () => ipcRenderer.invoke('open-subscribe'),
+  openManage: () => ipcRenderer.invoke('open-manage'),
+  activateKey: (key) => ipcRenderer.invoke('activate-key', key),
 
   // Setup
   checkSetup: () => ipcRenderer.invoke('check-setup'),
@@ -31,6 +33,7 @@ contextBridge.exposeInMainWorld('merlin', {
   getBrands: () => ipcRenderer.invoke('get-brands'),
 
   // Spellbook
+  checkClaudeRunning: () => ipcRenderer.invoke('check-claude-running'),
   listSpells: () => ipcRenderer.invoke('list-spells'),
   toggleSpell: (id, enabled) => ipcRenderer.invoke('toggle-spell', id, enabled),
   updateSpellMeta: (id, meta) => ipcRenderer.invoke('update-spell-meta', id, meta),
@@ -53,6 +56,7 @@ contextBridge.exposeInMainWorld('merlin', {
   onAskUserQuestion: (cb) => ipcRenderer.on('ask-user-question', (_, data) => cb(data)),
   onSdkError: (cb) => ipcRenderer.on('sdk-error', (_, err) => cb(err)),
   onRemoteUserMessage: (cb) => ipcRenderer.on('remote-user-message', (_, text) => cb(text)),
+  onSubscriptionActivated: (cb) => ipcRenderer.on('subscription-activated', (_, data) => cb(data)),
   onSpellActivity: (cb) => ipcRenderer.on('spell-activity', (_, data) => cb(data)),
   onSpellCompleted: (cb) => ipcRenderer.on('spell-completed', (_, data) => cb(data)),
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_, info) => cb(info)),
