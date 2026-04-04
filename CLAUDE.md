@@ -1,104 +1,150 @@
-# Merlin — Your AI CMO Wizard
+# Merlin — Development Workspace
 
-Open in Claude Code. Type `/cmo`. Everything else is automatic.
+You are building Merlin, not using it. Ryan is the developer.
 
-The `/cmo` command handles all setup on first run:
-- Downloads the binary if missing
-- Creates the config file if missing
-- Asks for a fal.ai API key (the only requirement)
-- Walks through brand + product setup
-- Sets up daily automation if wanted
+## What is Merlin?
 
-## Session Protocol
+Merlin is an AI-powered CMO that runs as a desktop app (Electron + Claude Agent SDK). Users download a 6MB installer, open Merlin, and talk naturally — it handles ad creation, campaign management, performance optimization, email, SEO, and scaling. The Go binary does the heavy lifting (API calls, media processing), Claude orchestrates the workflow.
 
-### On Start
-1. Scan `assets/brands/` for brands and products
-2. Read active brand's `brand.md` + product's `product.md`
-3. Read `memory.md` — past learnings
+## Product Principles
 
-### On Every Run
-1. Resolve brand + product from user's request
-2. Load brand.md + product.md + reference photos + quality benchmarks
-3. After pipeline → show output inline, get approval before posting
-4. After approval → update `memory.md`
+- **UX so good a 5th grader can use it.** If it requires explanation, it's broken.
+- **Zero manual tokens, zero API key hunting.** OAuth opens a browser, user clicks Authorize, done.
+- **Security is production-grade.** Encrypted key storage, auth tokens, no secrets in plaintext, no credentials in git.
+- **Every push must be release-quality.** No broken states, no half-finished features, no "we'll fix it later."
+- **Fix source code, never work around it.** When testing breaks, fix the Go binary, rebuild, retest.
 
-## Folder Structure
+## Directory Structure
 
 ```
-assets/brands/
-└── <brand>/                    ← e.g., "madchill"
-    ├── brand.md                ← Brand voice, audience, CTA (auto-generated)
-    ├── quality-benchmark/      ← S-tier ad examples (quality bar)
-    ├── voices/                 ← Voice samples for cloning
-    ├── avatars/                ← Creator faces/videos
-    ├── competitors.md          ← Auto-discovered competitors
-    ├── seo.md                  ← SEO audit findings (if Shopify connected)
-    └── products/
-        └── <product>/          ← e.g., "full-zip"
-            ├── references/     ← Product photos (auto-pulled from store)
-            └── product.md      ← Product details (auto-generated)
-
-results/                        ← All output (timestamped)
-memory.md                       ← Learning memory (grows over time)
+D:\autoCMO-claude\
+├── autoCMO/             ← PUBLIC repo (oathgames/Merlin)
+│   ├── app/             ← Electron desktop app (main.js, renderer.js, etc.)
+│   ├── pwa/             ← Mobile PWA (stubbed, pending tunnel security)
+│   ├── .claude/commands/ ← /merlin, /cmo, /r2, /update slash commands
+│   ├── .claude/tools/   ← Binary + config (not in git)
+│   ├── assets/brands/   ← Brand configs, reference photos
+│   ├── CLAUDE.md        ← User-facing instructions
+│   ├── package.json     ← Electron + SDK dependencies
+│   └── version.json     ← Version tracking + update manifest
+│
+├── autocmo-core/        ← PRIVATE repo (oathgames/merlin-core)
+│   ├── *.go             ← All Go source (meta, tiktok, fal, shopify, etc.)
+│   ├── oauth.go         ← Universal OAuth + API key setup flows
+│   ├── adbrief.go       ← Structured ad brief prompt builder
+│   ├── bootstrapper/    ← Tiny installer that downloads the full app
+│   ├── landing/         ← Landing page (Cloudflare Worker)
+│   ├── wisdom-api/      ← Merlin's Wisdom (collective intelligence, Cloudflare Worker)
+│   ├── .github/workflows/ ← CI: build + release pipeline
+│   └── build.ps1        ← Local build script
+│
+└── autocmo-work/        ← TEST INSTANCE (not a git repo)
+    ├── .claude/tools/   ← Compiled binary + real config with API keys
+    ├── assets/brands/   ← Test brand data (MadChill)
+    └── results/         ← Test output
 ```
 
-### Adding a new brand
-Run `/cmo` — setup flow asks for website + writes brand.md.
+## Build → Deploy → Test Loop
 
-### Adding a new product
-Create a subfolder under `assets/brands/<brand>/products/` with a `references/` folder inside. Drop photos in it. Claude auto-generates `product.md` on first use.
+1. Edit source in `autocmo-core/`
+2. Build: `cd autocmo-core && go build -o Merlin.exe .`
+3. Copy: `cp autocmo-core/Merlin.exe autocmo-work/.claude/tools/Merlin.exe`
+4. Test: `cd autocmo-work && .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{...}'`
+5. If it works → commit to autocmo-core, push
+6. If it fails → fix source, rebuild, re-test
 
-## Updates
-Type `/update` to check for and install new versions.
-Downloads the latest binary + framework files from GitHub while preserving user data (memory.md, brand folders, config).
-Backups are saved to `.merlin-backup/{version}/` before overwriting.
+## Release Pipeline
 
-## How Merlin Improves Over Time
-Merlin learns from anonymous, aggregated performance trends across all users.
-When you check ad performance, Merlin contributes metrics like CTR and CPC
-(never brand names, ad copy, or personal data) to improve recommendations for
-everyone. This is what makes hook suggestions, format picks, and timing
-recommendations smarter with every release.
+1. Edit Go source in `autocmo-core/`, test from `autocmo-work/`
+2. Tag: `cd autocmo-core && git tag v0.X.Y && git push --tags`
+3. CI builds cross-platform binaries with `garble` (obfuscation) + bootstrapper installers
+4. CI publishes to `oathgames/Merlin` GitHub Releases
+5. Users: download bootstrapper from landing page → installs + launches Merlin
+6. Existing users: auto-update toast detects new version → downloads silently → restart
 
-## Key Rules
-- Only `falApiKey` required to start. Everything else optional.
-- Show cost estimate before running. Get confirmation.
-- Show output inline before posting anywhere. `skipSlack: true` by default.
-- Scheduled/automated runs skip confirmation.
-- Memory compounds — every run improves the next.
-- Brand-level assets (voice, avatar, quality bar) are shared across all products.
-- Product-level assets (reference photos) are unique per item.
+## Version Bump Checklist (EVERY release)
 
-## Technical Reference (read before executing)
+When bumping a version, ALL of these must be updated. Missing ANY endpoint means users get stale links or broken updates:
 
-### Quality Gate (universal)
-Every piece of content — email images, ad creatives, social posts, blog featured images — must pass through QA before use. Verify product images match reference photos. Images get full 3-attempt retry. Video gets a lighter check (script + first frame) due to cost.
+1. `autoCMO/package.json` → `"version": "X.Y.Z"`
+2. `autoCMO/version.json` → `"version": "X.Y.Z"` + `"notes"`
+3. `autocmo-core/landing/index.html` → download links (`.dmg` and `.exe` filenames contain version)
+4. Commit + push `autoCMO/` (public repo)
+5. Commit + push `autocmo-core/` (private repo)
+6. Tag `autocmo-core` with `vX.Y.Z` + push tag (triggers CI)
+7. **Deploy landing page**: `cd autocmo-core/landing && npx wrangler deploy`
+8. Verify: `curl -s https://merlingotme.com | grep -o "X\.Y\.Z"` returns the new version
 
-### Email Templates
-- 600px wide (Klaviyo standard). Table-based HTML with inline styles.
-- Use the real logo PNG (downloaded during onboarding to `logo/logo.png`), never AI-generated text.
-- Use real product photos from Shopify CDN, never AI-generated product shots.
-- Brand colors are exact hex codes from the website's CSS (stored in `brand.md` → Brand Colors section).
-- Puppeteer for HTML screenshots: set `NODE_PATH` to global npm modules path on Windows.
+Never skip step 7. The landing page is a Cloudflare Worker — git push does NOT auto-deploy it. You must run `wrangler deploy` separately.
 
-### Slack File Upload (3-step — the ONLY method that works)
-1. `GET https://slack.com/api/files.getUploadURLExternal?filename=X&length=Y` (with query params, NOT JSON body)
-2. `POST` the raw file bytes to the returned `upload_url`
-3. `POST https://slack.com/api/files.completeUploadExternal` with JSON: `{files: [{id, title}], channel_id, initial_comment}`
-- `files.upload` and `files.uploadV2` are deprecated and will fail.
-- Bot requires scopes: `channels:read`, `channels:join`, `files:read`, `files:write`, `chat:write`.
-- `files:write` alone will upload but silently fail to share to channels.
+## Sync Rules
 
-### Meta Ads API
-- The Merlin app must be in **Live mode** (not Development) to create ad creatives. This is a hard Meta platform restriction.
-- Campaigns, ad sets, image uploads all work in dev mode — only ad creative creation is blocked.
-- Error subcode `1885183` = app in development mode. No workaround exists (page tokens, system user tokens all fail).
-- `metaFindCampaign` uses URL-encoded filtering to avoid duplicate campaign creation.
-- `is_adset_budget_sharing_enabled` is required on ALL campaigns (Meta v22.0+).
-- CBO campaigns need `is_campaign_budget_optimization: true` + `daily_budget` at campaign level.
-- On partial failure (creative/ad fails after ad set created), the ad set is auto-cleaned up.
+- Changes to CLAUDE.md, commands, or version.json → sync to BOTH `autoCMO/` and `autocmo-work/`
+- Never commit API keys, .env files, or merlin-config.json to git
+- The `.gitignore` blocks: `*.go`, `*.exe`, `merlin-config.json`, `node_modules/`, `results/`
+- Always verify both repos are clean before pushing: `grep -r "OLD_NAME" --include="*.go" --include="*.md"`
 
-### AI Image Generation
-- fal.ai cannot produce pixel-perfect logos or text — only use for lifestyle/hero imagery.
-- Always use real logos, real product photos, and real brand colors for production content.
-- Brand colors extracted from website CSS custom properties (`--color-button`, `--color-foreground`, etc.) during onboarding.
+## Security Checklist (every push)
+
+- [ ] No API keys or tokens in committed files
+- [ ] No plaintext secrets — use `safeStorage` in Electron, encrypted config on disk
+- [ ] OAuth tokens stored in memory only (session-scoped)
+- [ ] WebSocket auth requires token handshake
+- [ ] All user-facing errors are friendly — no stack traces, no raw JSON
+- [ ] Approval cards show plain English, never tool names or command JSON
+
+## Architecture Decisions
+
+### Electron Desktop App
+- Claude Agent SDK spawns Claude Code subprocess — uses user's existing Claude Pro/Max subscription
+- No API key needed — SDK inherits auth from Claude Desktop installation
+- `canUseTool` callback translates every tool call to plain English for approval cards
+- Auto-update checks GitHub Releases every 4 hours, downloads silently, offers restart
+
+### Go Binary (Merlin.exe)
+- All platform API calls (Meta, TikTok, Shopify, fal.ai, etc.)
+- OAuth flows with embedded credentials (garble-obfuscated)
+- Structured AdBrief prompt builder for S-tier image generation
+- Composite mode: real product cutout + AI scene for 100% product accuracy
+- Background removal via fal-ai/birefnet
+
+### Landing Page
+- Cloudflare Worker at merlingotme.com
+- Auto-detects OS for download button (Windows/Mac/Linux)
+- Interactive savings calculator + demo overlay
+- Cursor sparkle wand effect (desktop only)
+
+### PWA Mobile (Stubbed)
+- WebSocket bridge from phone → desktop Electron app
+- QR code auth — scan to connect
+- Pending: Cloudflare Tunnel for production security, approval sync between clients
+
+## Current Test Brand
+- Brand: MadChill (mad-chill.com) — streetwear
+- Product: Sweatpants (product ID 7431710507085)
+- Meta Ad Account: act_435598072824789
+- Meta Page: 595992153596478
+- Meta Pixel: 1149516046441530
+- Meta App ID: 823058806852722 (pending App Review for Live mode)
+
+## Binary Actions Reference
+| Action | Description |
+|---|---|
+| `image` | Generate AI images via structured AdBrief |
+| `meta-login` | One-click OAuth for Meta Ads |
+| `meta-setup` | Create Testing/Scaling/Retargeting campaigns |
+| `meta-push` | Upload image/video + create full ad |
+| `meta-insights` | Pull yesterday's performance data |
+| `meta-kill` | Pause an ad |
+| `meta-duplicate` | Copy winner to scaling campaign |
+| `meta-discover` | Auto-detect ad accounts, pages, pixels from token |
+| `api-key-setup` | Open browser to provider's key page |
+| `verify-key` | Validate an API key works |
+| `tiktok-login` | One-click OAuth for TikTok (scaffolded) |
+| `google-login` | One-click OAuth for Google Ads (scaffolded) |
+| `shopify-login` | One-click OAuth for Shopify (scaffolded) |
+
+## Known Issues / Blockers
+- Meta App (823058806852722) is in Development Mode — ad creatives blocked until App Review passes
+- No workaround for Meta dev mode — error subcode 1885183 is a hard platform restriction
+- Seedance 2 not yet available via any API (HeyGen UI-only, fal.ai "coming soon")
