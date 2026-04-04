@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('merlin', {
   // Platform
   platform: process.platform,
 
+  // Version
+  getVersion: () => ipcRenderer.invoke('get-version'),
+
   // Window controls
   winMinimize: () => ipcRenderer.invoke('win-minimize'),
   winMaximize: () => ipcRenderer.invoke('win-maximize'),
@@ -26,6 +29,11 @@ contextBridge.exposeInMainWorld('merlin', {
   getCredits: () => ipcRenderer.invoke('get-credits'),
   getConnectedPlatforms: () => ipcRenderer.invoke('get-connected-platforms'),
   getBrands: () => ipcRenderer.invoke('get-brands'),
+
+  // Spellbook
+  listSpells: () => ipcRenderer.invoke('list-spells'),
+  toggleSpell: (id, enabled) => ipcRenderer.invoke('toggle-spell', id, enabled),
+  updateSpellMeta: (id, meta) => ipcRenderer.invoke('update-spell-meta', id, meta),
   savePastedMedia: (dataUrl, filename) => ipcRenderer.invoke('save-pasted-media', dataUrl, filename),
   sendMessage: (text) => ipcRenderer.invoke('send-message', text),
 
@@ -45,6 +53,8 @@ contextBridge.exposeInMainWorld('merlin', {
   onAskUserQuestion: (cb) => ipcRenderer.on('ask-user-question', (_, data) => cb(data)),
   onSdkError: (cb) => ipcRenderer.on('sdk-error', (_, err) => cb(err)),
   onRemoteUserMessage: (cb) => ipcRenderer.on('remote-user-message', (_, text) => cb(text)),
+  onSpellActivity: (cb) => ipcRenderer.on('spell-activity', (_, data) => cb(data)),
+  onSpellCompleted: (cb) => ipcRenderer.on('spell-completed', (_, data) => cb(data)),
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_, info) => cb(info)),
   onUpdateProgress: (cb) => ipcRenderer.on('update-progress', (_, msg) => cb(msg)),
   onUpdateReady: (cb) => ipcRenderer.on('update-ready', (_, info) => cb(info)),

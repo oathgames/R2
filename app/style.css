@@ -524,6 +524,13 @@ a:hover{text-decoration:underline}
 }
 .subscribe-header-btn.hidden-sub{display:none}
 
+.version-label{
+  font-size:10px;
+  color:rgba(255,255,255,.25);
+  margin-right:6px;
+  user-select:none;
+  -webkit-app-region:no-drag;
+}
 .magic-btn-inline{
   width:32px;height:32px;
   border:none;
@@ -623,28 +630,33 @@ a:hover{text-decoration:underline}
   display:none;
 }
 
-/* Autopilot */
-.autopilot-status{display:flex;flex-direction:column;gap:8px}
-.autopilot-row{
-  display:flex;align-items:center;gap:8px;
-  font-size:13px;color:var(--text-muted);
-}
-.autopilot-dot{
-  width:8px;height:8px;border-radius:50%;flex-shrink:0;
-}
+/* Spell status dots (used by Spellbook) */
 .dot-active{background:var(--success)}
 .dot-pending{background:var(--text-dim);opacity:.4}
-.autopilot-time{
-  margin-left:auto;
-  font-size:12px;color:var(--text-muted);
-  font-weight:500;
+/* ── Spellbook ──────────────────────────────────────────── */
+.spellbook-list{display:flex;flex-direction:column;gap:4px}
+.spell-row{
+  display:flex;align-items:center;gap:8px;
+  font-size:13px;color:var(--text-muted);
+  cursor:pointer;padding:6px 8px;border-radius:8px;transition:background .2s;
 }
-.autopilot-last{
-  font-size:11px;color:var(--text-dim);
-  margin-top:12px;
-  padding-top:8px;
-  border-top:1px solid var(--border);
+.spell-row:hover{background:var(--surface)}
+.spell-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.spell-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spell-time{font-size:11px;color:var(--text-dim);flex-shrink:0}
+.spell-toggle{
+  font-size:10px;padding:2px 8px;border-radius:4px;
+  border:1px solid var(--border);background:transparent;
+  color:var(--text-dim);cursor:pointer;flex-shrink:0;
+  transition:all .2s;font-family:var(--font);
 }
+.spell-toggle:hover{background:var(--surface);color:var(--text)}
+.spell-toggle.spell-on{color:var(--success);border-color:rgba(52,211,153,.3)}
+.spellbook-empty{
+  font-size:12px;color:var(--text-dim);text-align:center;
+  padding:12px 0;font-style:italic;
+}
+.spellbook-empty:empty{display:none}
 /* ── Brand Selector ──────────────────────────────────────── */
 .brand-selector-section{padding-bottom:8px}
 .brand-selector{display:flex;gap:6px;align-items:center}
