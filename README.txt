@@ -59,5 +59,5 @@ UPDATES
 
 LINKS
 
-  Landing page:  https://merlin-landing.ryan-fec.workers.dev
+  Landing page:  https://merlingotme.com
   GitHub:        https://github.com/oathgames/Merlin
