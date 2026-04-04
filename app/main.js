@@ -24,10 +24,10 @@ async function createWindow() {
   nativeTheme.themeSource = 'dark';
 
   win = new BrowserWindow({
-    width: 480,
-    height: 720,
-    minWidth: 380,
-    minHeight: 500,
+    width: 900,
+    height: 670,
+    minWidth: 500,
+    minHeight: 400,
     icon: path.join(__dirname, process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     backgroundColor: '#1a1a1c',
     frame: false,
