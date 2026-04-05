@@ -740,8 +740,8 @@ merlin.onApprovalRequest(({ toolUseID, label, cost }) => {
 
   approval.classList.remove('hidden');
 
-  // 5-minute countdown
-  let secondsLeft = 300;
+  // 15-minute countdown (matches backend APPROVAL_TIMEOUT_MS)
+  let secondsLeft = 900;
   _approvalCountdown = setInterval(() => {
     secondsLeft--;
     if (secondsLeft <= 60) {
@@ -1613,5 +1613,49 @@ document.addEventListener('click', (e) => {
   });
 })();
 
-// ── Init ────────────────────────────────────────────────────
-init();
+// ── Trial Expired ──────────────────────────────────────────
+merlin.onTrialExpired(() => {
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.id = 'trial-overlay';
+  overlay.innerHTML = `
+    <div class="setup-card">
+      <div class="setup-mascot">✦</div>
+      <h1>Trial Ended</h1>
+      <p class="setup-sub">Your free trial has expired</p>
+      <p class="setup-explain">Subscribe to keep using Merlin. Your brands, products, and creative learnings are all saved and waiting.</p>
+      <button class="btn-primary" id="trial-subscribe-btn">Subscribe</button>
+      <button class="btn-secondary" id="trial-key-btn">I have a license key</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('trial-subscribe-btn').addEventListener('click', () => merlin.openSubscribe());
+  document.getElementById('trial-key-btn').addEventListener('click', () => {
+    overlay.remove();
+    addUserBubble('I have a license key');
+    merlin.sendMessage('I have a license key to activate');
+  });
+});
+
+// ── Init (after ToS check) ─────────────────────────────────
+(async function checkToS() {
+  const accepted = await merlin.checkTosAccepted();
+  if (accepted) {
+    document.getElementById('tos-overlay').classList.add('hidden');
+    init();
+  } else {
+    document.getElementById('tos-overlay').classList.remove('hidden');
+    const cb = document.getElementById('tos-checkbox');
+    const btn = document.getElementById('tos-accept-btn');
+    cb.addEventListener('change', () => { btn.disabled = !cb.checked; });
+    btn.addEventListener('click', async () => {
+      await merlin.acceptTos();
+      document.getElementById('tos-overlay').style.animation = 'fadeOut .3s ease forwards';
+      setTimeout(() => {
+        document.getElementById('tos-overlay').classList.add('hidden');
+        document.getElementById('tos-overlay').style.animation = '';
+        init();
+      }, 300);
+    });
+  }
+})();

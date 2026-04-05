@@ -7,6 +7,25 @@ const { generateQRDataUri } = require('./qr');
 
 Menu.setApplicationMenu(null);
 
+// Report crashes to Wisdom API for structured error monitoring
+process.on('uncaughtException', (err) => {
+  console.error('[CRASH]', err);
+  try {
+    const https = require('https');
+    const payload = JSON.stringify({
+      id: '', v: require('../package.json').version, p: process.platform,
+      e: 'crash', error: err.message, stack: (err.stack || '').slice(0, 500),
+    });
+    const req = https.request('https://api.merlingotme.com/api/ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+    });
+    req.write(payload);
+    req.end();
+  } catch {}
+});
+process.on('unhandledRejection', (reason) => { console.error('[UNHANDLED]', reason); });
+
 const appRoot = app.isPackaged
   ? (process.platform === 'darwin'
     ? path.join(path.dirname(app.getPath('exe')), '..', 'Resources')
@@ -15,6 +34,7 @@ const appRoot = app.isPackaged
 
 let win = null;
 let resolveNextMessage = null;
+let pendingMessageQueue = []; // Queue messages sent before SDK is ready
 let pendingApprovals = new Map();
 let activeQuery = null;
 
@@ -255,6 +275,13 @@ function inferBrandDomain() {
 }
 
 async function startSession() {
+  // Hard trial enforcement — block session if expired and not subscribed
+  const sub = getSubscriptionState();
+  if (!sub.subscribed && sub.expired) {
+    if (win && !win.isDestroyed()) win.webContents.send('trial-expired');
+    return;
+  }
+
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
 
   // Try to infer brand domain from cached Claude account email
@@ -265,6 +292,10 @@ async function startSession() {
 
   async function* messageGenerator() {
     yield { type: 'user', message: { role: 'user', content: `Run /merlin silently — do the preflight checks but do NOT print anything. No greetings, no banners, no feature lists. The app UI already showed my welcome message. Check assets/brands/ for existing brand folders (ignore "example"). If a brand ALREADY exists, skip setup — just say "✦ [Brand] is ready — [X] products loaded. What would you like to create?" If NO brands exist, use the AskUserQuestion tool to ask "What's your website?" with these options: (1) label: "Set up my brand", description: "Enter your website URL and we'll auto-detect your brand, products, and colors" (2) label: "Just exploring", description: "See what Merlin can do — no setup needed".${domainHint} IMPORTANT: When the user provides their website URL (or picks their domain from the options), start working IMMEDIATELY — scrape the site with WebFetch, extract brand colors, find products, identify competitors with WebSearch. Do ALL of this in parallel with the binary download. Don't wait for the binary. Show results as you find them: "Found your brand colors: #xxx, #yyy", "Spotted 12 products", "Your top competitors look like X, Y, Z". This gives the user instant value. The binary download and config setup happen in the background via preflight. If the user selects "Just exploring", give a 3-sentence pitch of what Merlin does and ask what they'd like to try. IMPORTANT RULE: When showing images, include the full file path in your response text like this: results/img_20260403_164511/image_1_portrait.jpg — the app will render it inline automatically. Always include the path, never just describe the image.` } };
+    // Drain any messages queued before SDK was ready
+    while (pendingMessageQueue.length > 0) {
+      yield pendingMessageQueue.shift();
+    }
     while (true) {
       const msg = await new Promise((resolve) => { resolveNextMessage = resolve; });
       if (msg === null) return;
@@ -441,8 +472,12 @@ ipcMain.handle('get-account-info', async () => {
 
 ipcMain.handle('send-message', (_, text) => {
   if (typeof text !== 'string' || text.length > 50000) return { success: false };
+  const msg = { type: 'user', message: { role: 'user', content: text } };
   if (resolveNextMessage) {
-    resolveNextMessage({ type: 'user', message: { role: 'user', content: text } });
+    resolveNextMessage(msg);
+  } else {
+    // SDK not ready yet — queue the message for when it connects
+    pendingMessageQueue.push(msg);
   }
   wsServer.broadcast('user-message', { text });
   return { success: true };
@@ -470,6 +505,33 @@ ipcMain.handle('answer-question', (_, toolUseID, answers) => {
 });
 
 ipcMain.handle('open-claude-download', () => { shell.openExternal('https://claude.ai/download'); });
+ipcMain.handle('open-merlin-folder', () => { shell.openPath(appRoot); });
+
+ipcMain.handle('check-tos-accepted', () => {
+  const stateFile = path.join(appRoot, '.merlin-state.json');
+  try {
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    return !!state.tosAccepted;
+  } catch { return false; }
+});
+
+ipcMain.handle('accept-tos', () => {
+  const stateFile = path.join(appRoot, '.merlin-state.json');
+  let state = {};
+  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+  state.tosAccepted = new Date().toISOString();
+  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+  return { success: true };
+});
+
+ipcMain.handle('get-decrypted-config-path', () => {
+  const cfg = readConfig();
+  if (!cfg || Object.keys(cfg).length === 0) return null;
+  const tmpPath = path.join(os.tmpdir(), `.merlin-config-${Date.now()}.json`);
+  fs.writeFileSync(tmpPath, JSON.stringify(cfg, null, 2));
+  setTimeout(() => { try { fs.unlinkSync(tmpPath); } catch {} }, 60000);
+  return tmpPath;
+});
 
 ipcMain.handle('check-claude-running', async () => {
   const { exec } = require('child_process');
@@ -511,15 +573,30 @@ ipcMain.handle('load-state', () => {
 // ── Config helpers ──────────────────────────────────────────
 function readConfig() {
   const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
-  try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { return {}; }
+  try {
+    const buf = fs.readFileSync(configPath);
+    if (safeStorage.isEncryptionAvailable()) {
+      try {
+        return JSON.parse(safeStorage.decryptString(buf));
+      } catch {
+        // Not encrypted yet (migration from plaintext) — parse as-is, re-encrypts on next write
+        return JSON.parse(buf.toString('utf8'));
+      }
+    }
+    return JSON.parse(buf.toString('utf8'));
+  } catch { return {}; }
 }
 function writeConfig(cfg) {
   const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
   try {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    // Atomic write: write to temp file, then rename (prevents corruption on crash)
+    const data = JSON.stringify(cfg, null, 2);
     const tmpPath = configPath + '.tmp';
-    fs.writeFileSync(tmpPath, JSON.stringify(cfg, null, 2));
+    if (safeStorage.isEncryptionAvailable()) {
+      fs.writeFileSync(tmpPath, safeStorage.encryptString(data));
+    } else {
+      fs.writeFileSync(tmpPath, data);
+    }
     fs.renameSync(tmpPath, configPath);
   } catch (err) { console.error('[config] write failed:', err.message); }
 }
@@ -1098,7 +1175,13 @@ async function downloadAndApplyUpdate() {
       const binaryPath = path.join(appRoot, '.claude', 'tools', process.platform === 'win32' ? 'Merlin.exe' : 'Merlin');
       if (fs.existsSync(binaryPath)) fs.copyFileSync(binaryPath, binaryPath + '.backup');
       fs.writeFileSync(binaryPath, binary);
-      if (process.platform !== 'win32') fs.chmodSync(binaryPath, 0o755);
+      if (process.platform !== 'win32') {
+        fs.chmodSync(binaryPath, 0o755);
+        // macOS: clear quarantine + ad-hoc sign so Gatekeeper allows execution
+        const { execSync } = require('child_process');
+        try { execSync(`xattr -d com.apple.quarantine "${binaryPath}" 2>/dev/null`); } catch {}
+        try { execSync(`codesign --force --sign - "${binaryPath}" 2>/dev/null`); } catch {}
+      }
       try { fs.unlinkSync(binaryPath + '.backup'); } catch {}
     }
 

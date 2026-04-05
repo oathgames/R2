@@ -128,7 +128,7 @@ Check if it exists. If missing, **try to download it** (non-blocking — continu
 # Windows:
 curl -L -o .claude/tools/Merlin.exe "https://github.com/oathgames/Merlin/releases/latest/download/{platform-asset}" 2>/dev/null
 # macOS/Linux:
-curl -L -o .claude/tools/Merlin "https://github.com/oathgames/Merlin/releases/latest/download/{platform-asset}" 2>/dev/null && chmod +x .claude/tools/Merlin && xattr -cr .claude/tools/Merlin 2>/dev/null
+curl -L -o .claude/tools/Merlin "https://github.com/oathgames/Merlin/releases/latest/download/{platform-asset}" 2>/dev/null && chmod +x .claude/tools/Merlin && xattr -cr .claude/tools/Merlin 2>/dev/null && codesign --force --sign - .claude/tools/Merlin 2>/dev/null
 ```
 
 3. If download fails, **continue anyway** — you can still help with content strategy, brand analysis, copywriting, and any task that doesn't require platform API calls. Never tell the user "I can't do anything without the app."

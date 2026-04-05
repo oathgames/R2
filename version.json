@@ -1,5 +1,5 @@
 {
-  "version": "0.4.1",
+  "version": "0.4.2",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -18,5 +18,5 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v0.4.1: Folder restructure — results organized by type/month/brand, per-brand memory, brand status filtering, auto-indexing, preflight product.md stubs, metadata.json with full brand/product linkage."
+  "notes": "v0.4.2: Production hardening — config encryption, ToS acceptance, trial enforcement, error telemetry, crash reporter, macOS quarantine fix, onboarding improvements, Shopify app credentials updated."
 }

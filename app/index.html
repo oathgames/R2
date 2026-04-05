@@ -210,6 +210,22 @@
   <button id="help-nudge-close" class="help-nudge-close">&times;</button>
 </div>
 
+<!-- ToS acceptance (first launch only) -->
+<div id="tos-overlay" class="overlay hidden">
+  <div class="setup-card">
+    <div class="setup-mascot">✦</div>
+    <h1>Welcome to Merlin</h1>
+    <p class="setup-sub">Your AI Marketing Wizard</p>
+    <div style="margin:16px 0;text-align:left">
+      <label style="display:flex;align-items:start;gap:8px;cursor:pointer">
+        <input type="checkbox" id="tos-checkbox" style="margin-top:4px">
+        <span style="font-size:13px;color:var(--muted)">I agree to the <a href="https://merlingotme.com/terms" target="_blank" style="color:var(--accent)">Terms of Service</a> and <a href="https://merlingotme.com/privacy" target="_blank" style="color:var(--accent)">Privacy Policy</a></span>
+      </label>
+    </div>
+    <button id="tos-accept-btn" class="btn-primary" disabled>Get Started</button>
+  </div>
+</div>
+
 <!-- Setup overlay (only shown if Claude Desktop not installed) -->
 <div id="setup" class="overlay">
   <div class="setup-card">

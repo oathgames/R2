@@ -18,9 +18,12 @@ contextBridge.exposeInMainWorld('merlin', {
   openManage: () => ipcRenderer.invoke('open-manage'),
   activateKey: (key) => ipcRenderer.invoke('activate-key', key),
 
-  // Setup
+  // Setup + Legal
   checkSetup: () => ipcRenderer.invoke('check-setup'),
   openClaudeDownload: () => ipcRenderer.invoke('open-claude-download'),
+  openMerlinFolder: () => ipcRenderer.invoke('open-merlin-folder'),
+  checkTosAccepted: () => ipcRenderer.invoke('check-tos-accepted'),
+  acceptTos: () => ipcRenderer.invoke('accept-tos'),
 
   // Mobile
   getMobileQR: () => ipcRenderer.invoke('get-mobile-qr'),
@@ -75,4 +78,5 @@ contextBridge.exposeInMainWorld('merlin', {
   onUpdateProgress: (cb) => ipcRenderer.on('update-progress', (_, msg) => cb(msg)),
   onUpdateReady: (cb) => ipcRenderer.on('update-ready', (_, info) => cb(info)),
   onUpdateError: (cb) => ipcRenderer.on('update-error', (_, err) => cb(err)),
+  onTrialExpired: (cb) => ipcRenderer.on('trial-expired', () => cb()),
 });
