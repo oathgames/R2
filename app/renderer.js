@@ -925,6 +925,8 @@ merlin.onSdkError((err) => {
 
 // ── Update Toast ────────────────────────────────────────────
 merlin.onUpdateAvailable(({ current, latest }) => {
+  // Double-check: don't show if versions are equal
+  if (current === latest) return;
   document.getElementById('update-text').textContent = `Merlin ${latest} is available`;
   document.getElementById('update-btn').textContent = 'Update';
   document.getElementById('update-toast').classList.remove('hidden');

@@ -473,7 +473,17 @@ async function startSession() {
 // ── IPC Handlers ────────────────────────────────────────────
 
 ipcMain.handle('check-setup', async () => {
-  const { execSync } = require('child_process');
+  const { exec } = require('child_process');
+
+  function tryCmd(cmd) {
+    return new Promise((resolve) => {
+      const child = exec(`"${cmd}" --version`, { timeout: 5000, shell: true });
+      child.on('close', (code) => resolve(code === 0));
+      child.on('error', () => resolve(false));
+      // Safety: resolve false if neither event fires
+      setTimeout(() => resolve(false), 6000);
+    });
+  }
 
   // Check common Claude CLI locations
   const candidates = ['claude'];
@@ -492,14 +502,12 @@ ipcMain.handle('check-setup', async () => {
     );
   }
 
-  for (const cmd of candidates) {
-    try {
-      execSync(`"${cmd}" --version`, { timeout: 10000, shell: true, stdio: 'pipe' });
-      return { ready: true };
-    } catch {
-      // This candidate failed, try next
-    }
-  }
+  // Try ALL candidates in parallel (fast — doesn't block UI)
+  const results = await Promise.all(candidates.map(cmd => tryCmd(cmd)));
+  if (results.some(r => r)) return { ready: true };
+
+  // None found — try one more time with just 'claude' (in case PATH is slow to resolve)
+  if (await tryCmd('claude')) return { ready: true };
 
   const macTip = process.platform === 'darwin'
     ? '\n\nAlready have Claude Desktop? Open it → Settings → Developer → "Install Claude Code CLI"'
@@ -1615,13 +1623,14 @@ async function checkForUpdates() {
     const currentVersion = getCurrentVersion();
     const raw = await httpsGet('https://api.github.com/repos/oathgames/Merlin/releases/latest');
     const data = JSON.parse(raw.toString());
-    if (!data || !data.tag_name) return; // validate response
+    if (!data || !data.tag_name) return;
     const latestVersion = data.tag_name.replace(/^v/, '');
+    console.log(`[update] current=${currentVersion} latest=${latestVersion} newer=${isNewerVersion(latestVersion, currentVersion)}`);
     if (!latestVersion || !isNewerVersion(latestVersion, currentVersion)) return;
     if (win && !win.isDestroyed()) {
       win.webContents.send('update-available', { current: currentVersion, latest: latestVersion });
     }
-  } catch { /* silent — don't break app if update check fails */ }
+  } catch (err) { console.log('[update] check failed:', err.message); }
 }
 
 async function downloadAndApplyUpdate() {

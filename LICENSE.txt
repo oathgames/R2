@@ -1,9 +1,9 @@
-MERLIN — END USER LICENSE AGREEMENT
+MERLIN - END USER LICENSE AGREEMENT
 
 By installing Merlin, you agree to the Terms of Service and Privacy Policy
 available at https://merlingotme.com/terms and https://merlingotme.com/privacy.
 
-IMPORTANT — PLEASE READ CAREFULLY:
+IMPORTANT - PLEASE READ CAREFULLY:
 
 1. AI-GENERATED CONTENT: Merlin uses artificial intelligence to generate
    advertising content, recommendations, and analytics. AI outputs may
