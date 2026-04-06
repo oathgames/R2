@@ -172,6 +172,10 @@ async function init() {
   const activeBrand = savedState?.activeBrand || (isReturning ? existingBrands[0].name : null);
   const activeBrandObj = existingBrands?.find(b => b.name === activeBrand) || existingBrands?.[0];
   const brandName = activeBrandObj?.displayName || activeBrand || (isReturning ? existingBrands[0].name : null);
+  // Persist active brand so main.js initial prompt uses the same one
+  if (activeBrand && (!savedState?.activeBrand || savedState.activeBrand !== activeBrand)) {
+    merlin.saveState({ activeBrand });
+  }
   const productCount = isReturning ? existingBrands.reduce((sum, b) => sum + (b.productCount || 0), 0) : 0;
 
   if (isReturning) {
@@ -298,7 +302,7 @@ function addUserBubble(text) {
   div.className = 'msg msg-user';
   div.textContent = text;
   messages.appendChild(div);
-  scrollToBottom();
+  scrollToBottom(true); // User sent a message — always scroll to show it
 }
 
 function addClaudeBubble() {
@@ -368,6 +372,7 @@ function finalizeBubble() {
   isStreaming = false;
   setInputDisabled(false);
   scrollToBottom();
+  input.focus();
   // Sparkle hint — show after the user has sent a few messages (past initial setup)
   // This avoids overwhelming new users during their first interaction
   if (!hasShownSparkleHint) {
@@ -409,9 +414,31 @@ function scheduleTypingIndicator() {
   }, 2000); // 2s delay — calm, no rush
 }
 
-function scrollToBottom() {
+// Only auto-scroll if user is near the bottom (respects scroll-up intent)
+let _userScrolledUp = false;
+const scrollBtn = document.getElementById('scroll-bottom-btn');
+
+chat.addEventListener('scroll', () => {
+  const distFromBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight;
+  _userScrolledUp = distFromBottom > 80;
+  // Show/hide scroll-to-bottom button
+  if (_userScrolledUp) {
+    scrollBtn.classList.remove('hidden');
+  } else {
+    scrollBtn.classList.add('hidden');
+  }
+});
+
+scrollBtn.addEventListener('click', () => {
+  scrollToBottom(true);
+  scrollBtn.classList.add('hidden');
+});
+
+function scrollToBottom(force) {
+  if (_userScrolledUp && !force) return;
   requestAnimationFrame(() => {
     chat.scrollTop = chat.scrollHeight;
+    _userScrolledUp = false;
   });
 }
 
@@ -519,7 +546,7 @@ function renderMarkdown(text) {
 
   // Video file paths → inline <video>
   html = html.replace(/(?:\.\/)?([a-zA-Z0-9_\-\.\/]+\.(?:mp4|webm|mov))/gi, (match, p1) => {
-    if (p1.includes('/')) return `<video src="merlin://${p1}" controls playsinline preload="metadata" style="max-width:100%;border-radius:10px;margin:8px 0"></video>`;
+    if (p1.includes('/')) return `<div class="video-wrap" data-file="${p1}"><video src="merlin://${p1}" controls playsinline preload="metadata" style="max-width:100%;border-radius:10px"></video></div>`;
     return match;
   });
 
@@ -583,6 +610,9 @@ let hasShownSparkleHint = false;
 let _userMessageCount = 0;
 
 merlin.onSdkMessage((msg) => {
+  // Suppress internal action responses (spell toggle/create) — no chat bubbles
+  if (msg._internal) return;
+
   // When first real SDK content arrives, clean up welcome state
   if (firstMessage && msg.type === 'stream_event') {
     if (window._welcomeInterval) clearInterval(window._welcomeInterval);
@@ -657,6 +687,7 @@ merlin.onSdkMessage((msg) => {
         scrollToBottom();
         turnStartTime = null;
       }
+      input.focus();
       break;
   }
 });
@@ -1025,6 +1056,115 @@ document.getElementById('add-brand-btn').addEventListener('click', () => {
   sendChatFromPanel('Set up a new brand for me');
 });
 
+// ── Revenue Tracker (Merlin Made Me) ────────────────────────
+function fmtMoney(n) {
+  if (n == null || isNaN(n)) return '--';
+  if (n >= 1000000) return '$' + (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1000) return '$' + (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  return '$' + Math.round(n);
+}
+
+function setStatsEmpty() {
+  ['stats-revenue','stats-ads','stats-winners','stats-roas','stats-spend'].forEach(id => {
+    document.getElementById(id).textContent = '--';
+  });
+  document.getElementById('stats-period').textContent = 'No data yet — run a performance check first';
+}
+
+function populateStatsCard(cache) {
+  // Revenue field names any platform might return
+  const revenueKeys = ['totalRevenue', 'revenue', 'total_revenue', 'grossRevenue', 'gross_revenue', 'sales', 'totalSales'];
+  const spendKeys = ['totalSpend', 'spend', 'total_spend', 'adSpend', 'ad_spend', 'cost', 'totalCost'];
+  const roasKeys = ['blendedROAS', 'roas', 'blended_roas', 'ROAS', 'returnOnAdSpend'];
+  const adsKeys = ['totalAds', 'adsCreated', 'ads_created', 'adCount', 'total_ads', 'activeAds'];
+  const winnerKeys = ['winners', 'winnersFound', 'winners_found', 'winnerCount'];
+
+  function findKey(obj, keys) {
+    for (const k of keys) { if (obj[k] != null) return obj[k]; }
+    return null;
+  }
+
+  let revenue = null, spend = null, roas = null, ads = null, winners = null;
+  let lastUpdated = null;
+
+  if (!cache) {
+    setStatsEmpty();
+    return;
+  }
+
+  // Dashboard is the most complete — check it first
+  // Then scan ALL cached entries (any platform) for fallback values
+  const priorityOrder = ['dashboard'];
+  const allKeys = Object.keys(cache);
+  allKeys.forEach(k => { if (k !== 'dashboard') priorityOrder.push(k); });
+
+  for (const key of priorityOrder) {
+    const entry = cache[key];
+    if (!entry?.data) continue;
+    try {
+      const d = JSON.parse(entry.data);
+      if (revenue == null) revenue = findKey(d, revenueKeys);
+      if (spend == null) spend = findKey(d, spendKeys);
+      if (roas == null) roas = findKey(d, roasKeys);
+      if (ads == null) ads = findKey(d, adsKeys);
+      if (winners == null) winners = findKey(d, winnerKeys);
+      if (!lastUpdated || entry.timestamp > lastUpdated) lastUpdated = entry.timestamp;
+    } catch {}
+  }
+
+  document.getElementById('stats-revenue').textContent = revenue != null ? fmtMoney(Number(revenue)) : '--';
+  document.getElementById('stats-spend').textContent = spend != null ? fmtMoney(Number(spend)) : '--';
+  document.getElementById('stats-roas').textContent = roas != null ? Number(roas).toFixed(1) + 'x' : '--';
+  document.getElementById('stats-ads').textContent = ads != null ? String(ads) : '--';
+  document.getElementById('stats-winners').textContent = winners != null ? String(winners) : '--';
+
+  // Show freshness
+  const period = document.getElementById('stats-period');
+  if (lastUpdated) {
+    const ago = Math.round((Date.now() - new Date(lastUpdated).getTime()) / 3600000);
+    period.textContent = ago < 1 ? 'Updated just now' : ago < 24 ? `Updated ${ago}h ago` : `Updated ${Math.round(ago / 24)}d ago`;
+  } else {
+    setStatsEmpty();
+  }
+}
+
+document.getElementById('brand-stats-btn').addEventListener('click', async () => {
+  const brand = document.getElementById('brand-select').value;
+  if (!brand) return;
+  const overlay = document.getElementById('stats-overlay');
+  overlay.classList.remove('hidden');
+
+  // Convert slug to clean brand name: "ivory-ella" → "Ivory Ella", "madchill" → "Madchill"
+  const cleanBrand = brand.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  document.getElementById('stats-brand-name').textContent = cleanBrand;
+
+  // Read from cache — instant, no API call
+  const cache = await merlin.getStatsCache();
+  populateStatsCard(cache);
+});
+
+document.getElementById('stats-close').addEventListener('click', () => {
+  document.getElementById('stats-overlay').classList.add('hidden');
+});
+document.getElementById('stats-overlay').addEventListener('click', (e) => {
+  if (e.target.id === 'stats-overlay') document.getElementById('stats-overlay').classList.add('hidden');
+});
+
+// Share button — copy stats as shareable text
+document.getElementById('stats-share').addEventListener('click', async () => {
+  const btn = document.getElementById('stats-share');
+  const brand = document.getElementById('stats-brand-name').textContent;
+  const rev = document.getElementById('stats-revenue').textContent;
+  const period = document.getElementById('stats-period').textContent;
+  const roas = document.getElementById('stats-roas').textContent;
+  const text = `✦ Merlin Got Me\n${brand} — ${period}\n${rev} revenue · ${roas} ROAS\nmerlingotme.com`;
+  try { await navigator.clipboard.writeText(text); } catch {}
+  const orig = btn.innerHTML;
+  btn.textContent = 'Copied!';
+  btn.style.background = 'var(--success)';
+  setTimeout(() => { btn.innerHTML = orig; btn.style.background = ''; }, 2000);
+});
+
 function loadConnections() {
   merlin.getConnectedPlatforms().then((connected) => {
     const connectedSection = document.getElementById('connected-tiles');
@@ -1060,6 +1200,7 @@ function loadConnections() {
 }
 
 document.getElementById('magic-btn').addEventListener('click', () => {
+  document.getElementById('archive-panel').classList.add('hidden'); // close archive
   const panel = document.getElementById('magic-panel');
   panel.classList.toggle('hidden');
   // Load brands first (sets vertical filter), then connections (hides connected from available)
@@ -1132,10 +1273,10 @@ document.getElementById('request-send').addEventListener('click', () => {
   const text = document.getElementById('request-input').value.trim();
   if (!text) return;
   // Send silently via fetch to a webhook (no window/email popup)
-  fetch('https://merlin-wisdom.ryan-fec.workers.dev/feedback', {
+  fetch('https://merlingotme.com/api/feedback', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: 'platform-request', text, ts: Date.now() }),
+    body: JSON.stringify({ type: 'platform-request', text }),
   }).catch(() => {});
   document.getElementById('request-form').classList.add('hidden');
   document.getElementById('request-thanks').classList.remove('hidden');
@@ -1215,10 +1356,9 @@ async function loadSpells() {
   let spells;
   try { spells = await merlin.listSpells(); } catch { spells = []; }
   const list = document.getElementById('spellbook-list');
-  const empty = document.getElementById('spellbook-empty');
   const warning = document.getElementById('spellbook-warning');
 
-  // Check if Claude Desktop is running (spells won't fire if it's closed)
+  // Check if Claude Desktop is running
   if (spells && spells.length > 0) {
     try {
       const running = await merlin.checkClaudeRunning();
@@ -1227,110 +1367,201 @@ async function loadSpells() {
   } else {
     warning.style.display = 'none';
   }
+
   list.innerHTML = '';
 
-  const templates = document.getElementById('spell-templates');
-  if (!spells || spells.length === 0) {
-    empty.style.display = 'none';
-    // Show templates by default when no spells exist
-    if (templates) templates.style.display = '';
-    return;
-  }
-  empty.style.display = 'none';
+  // Hide the old templates section — we merge everything into the unified list
+  const oldTemplates = document.getElementById('spell-templates');
+  if (oldTemplates) oldTemplates.style.display = 'none';
+  const addBtn = document.getElementById('add-task-btn');
+  if (addBtn) addBtn.style.display = 'none';
 
-  spells.forEach(spell => {
+  // Build set of active spell IDs for deduplication
+  const activeIds = new Set((spells || []).map(s => s.id));
+
+  // Render active spells first (from disk)
+  (spells || []).forEach(spell => {
+    list.appendChild(buildSpellRow(spell, true));
+  });
+
+  // Then render available templates that aren't active yet (gray dots)
+  const templateData = [
+    { spell: 'daily-ads', cron: '0 9 * * 1-5', name: 'Daily Ads', desc: 'Fresh creatives every morning', prompt: 'Create fresh ad creatives every weekday morning' },
+    { spell: 'performance-check', cron: '0 10 * * 1-5', name: 'Performance Check', desc: 'Kill losers, scale winners', prompt: 'Review ad performance, kill losers, scale winners' },
+    { spell: 'morning-briefing', cron: '0 5 * * 1-5', name: 'Morning Briefing', desc: 'Overnight results ready at 5 AM', prompt: 'Pull overnight ad results, revenue, and content activity — cache as a morning briefing card that shows instantly when you open Merlin. Save output as JSON to .merlin-briefing.json with fields: date, ads, content, revenue, recommendation.' },
+    { spell: 'weekly-digest', cron: '0 9 * * 1', name: 'Weekly Digest', desc: 'Monday morning summary', prompt: 'Weekly summary of spend, revenue, and wins' },
+    { spell: 'seo-blog', cron: '0 9 * * 2,4', name: 'SEO Blog Writer', desc: 'Publish posts Tue + Thu', prompt: 'Write and publish SEO blog posts' },
+    { spell: 'competitor-scan', cron: '0 9 * * 5', name: 'Competitor Watch', desc: 'Friday intel report', prompt: 'Scan competitor ads and report new trends' },
+    { spell: 'email-flows', cron: '0 9 * * 3', name: 'Email Flows', desc: 'Build + optimize automations', prompt: 'Build and optimize email flows — welcome series, abandoned cart, win-back' },
+  ];
+
+  // Merge active + templates into one list, collapse after 5
+  const allRows = [];
+
+  templateData.forEach(t => {
+    if (activeIds.has(`merlin-${t.spell}`)) return;
     const row = document.createElement('div');
-    row.className = 'spell-row';
-    row.dataset.id = spell.id;
+    row.className = 'spell-row spell-row-template';
+    row.innerHTML = `
+      <span class="spell-dot dot-pending"></span>
+      <div class="spell-info">
+        <div class="spell-name">${escapeHtml(t.name)}</div>
+        <div class="spell-meta">${escapeHtml(t.desc)}</div>
+      </div>
+    `;
+    row.addEventListener('click', () => activateSpell(t, row));
+    allRows.push(row);
+  });
 
-    const dot = document.createElement('span');
-    dot.className = `spell-dot ${spell.enabled ? 'dot-active' : 'dot-pending'}`;
+  // Add "Create custom spell" row at the end
+  const customRow = document.createElement('div');
+  customRow.className = 'spell-row spell-row-template';
+  customRow.innerHTML = `
+    <span class="spell-dot" style="background:var(--accent);opacity:.5"></span>
+    <div class="spell-info">
+      <div class="spell-name">+ Custom spell</div>
+      <div class="spell-meta">Create your own automation</div>
+    </div>
+  `;
+  customRow.addEventListener('click', () => {
+    document.getElementById('magic-panel').classList.add('hidden');
+    addUserBubble('I want to create a custom scheduled task');
+    showTypingIndicator();
+    turnStartTime = Date.now();
+    turnTokens = 0;
+    sessionActive = true;
+    startTickingTimer();
+    merlin.sendMessage('I want to create a custom scheduled task. Ask me what I want to automate, what schedule I want, then create it using mcp__scheduled-tasks__create_scheduled_task.');
+  });
+  allRows.push(customRow);
 
-    const info = document.createElement('div');
-    info.className = 'spell-info';
+  // Collapse: show first 5, hide rest behind "Show more"
+  const totalInList = list.children.length; // active spells already added
+  const visibleLimit = Math.max(0, 5 - totalInList); // how many template slots remain
 
-    const nameRow = document.createElement('div');
-    nameRow.className = 'spell-name';
-    nameRow.textContent = spell.description || spell.name;
-
-    const meta = document.createElement('div');
-    meta.className = 'spell-meta';
-    const parts = [];
-    if (spell.cron) parts.push(formatCron(spell.cron));
-    if (spell.lastRun) {
-      const ago = formatTimeAgo(spell.lastRun);
-      parts.push(`Last: ${ago}`);
-    }
-    meta.textContent = parts.join(' · ');
-
-    info.appendChild(nameRow);
-    info.appendChild(meta);
-
-    const toggle = document.createElement('button');
-    toggle.className = `spell-toggle ${spell.enabled ? 'spell-on' : ''}`;
-    toggle.textContent = spell.enabled ? 'On' : 'Off';
-    toggle.onclick = (e) => {
-      e.stopPropagation();
-      merlin.toggleSpell(spell.id, !spell.enabled);
-      setTimeout(loadSpells, 500);
-    };
-
-    row.appendChild(dot);
-    row.appendChild(info);
-    row.appendChild(toggle);
-
-    row.addEventListener('click', () => {
-      sendChatFromPanel(`Tell me about the "${spell.name}" spell and let me configure it.`);
-    });
-
+  allRows.forEach((row, i) => {
+    if (i >= visibleLimit) row.classList.add('spell-collapsed');
     list.appendChild(row);
   });
 
-  // Update templates — dim ones that are already active
-  document.querySelectorAll('.spell-template').forEach(tmpl => {
-    const spellId = 'merlin-' + tmpl.dataset.spell;
-    const isActive = spells.some(s => s.id === spellId);
-    tmpl.classList.toggle('spell-template-active', isActive);
-    tmpl.disabled = isActive;
-  });
+  if (allRows.length > visibleLimit && visibleLimit < allRows.length) {
+    const hiddenCount = allRows.length - visibleLimit;
+    const showMore = document.createElement('div');
+    showMore.className = 'spell-show-more';
+    showMore.textContent = `Show ${hiddenCount} more`;
+    showMore.addEventListener('click', (e) => {
+      e.stopPropagation();
+      list.querySelectorAll('.spell-collapsed').forEach(r => r.classList.remove('spell-collapsed'));
+      showMore.remove();
+    });
+    list.appendChild(showMore);
+  }
 }
 
-// Spell templates — toggle visibility on "Cast a new spell" click
-document.getElementById('add-task-btn').addEventListener('click', () => {
-  const templates = document.getElementById('spell-templates');
-  if (templates.style.display === 'none') {
-    templates.style.display = 'flex';
-    document.getElementById('add-task-btn').textContent = '− Cancel';
-  } else {
-    templates.style.display = 'none';
-    document.getElementById('add-task-btn').textContent = '+ Cast a new spell';
-  }
-});
+function buildSpellRow(spell, isActive) {
+  const row = document.createElement('div');
+  row.className = 'spell-row';
+  row.dataset.id = spell.id;
 
-// Template click — one-click spell activation
-document.querySelectorAll('.spell-template').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const spell = btn.dataset.spell;
-    const cron = btn.dataset.cron;
-    const desc = btn.dataset.desc;
-    document.getElementById('spell-templates').style.display = 'none';
-    document.getElementById('add-task-btn').textContent = '+ Cast a new spell';
-    sendChatFromPanel(`Set up a "${desc}" spell for me. Use task ID "merlin-${spell}" with schedule "${cron}". Create it now — don't ask me questions, just set it up and confirm.`);
+  const dot = document.createElement('span');
+  let dotClass = 'dot-pending';
+  if (spell.enabled) {
+    if (spell.consecutiveFailures >= 2) dotClass = 'dot-error';
+    else if (spell.consecutiveFailures === 1) dotClass = 'dot-warning';
+    else dotClass = 'dot-active';
+  }
+  dot.className = `spell-dot ${dotClass}`;
+  if (spell.lastSummary && spell.lastStatus === 'failed') {
+    dot.title = `Last failure: ${spell.lastSummary}`;
+  } else if (spell.lastRun) {
+    dot.title = `Last run: ${new Date(spell.lastRun).toLocaleString()} — ${spell.lastStatus || 'success'}`;
+  }
+
+  const info = document.createElement('div');
+  info.className = 'spell-info';
+
+  const nameRow = document.createElement('div');
+  nameRow.className = 'spell-name';
+  nameRow.textContent = spell.description || spell.name;
+
+  const meta = document.createElement('div');
+  meta.className = 'spell-meta';
+  const parts = [];
+  if (spell.cron) parts.push(formatCron(spell.cron));
+  if (spell.lastRun) parts.push(`Last: ${formatTimeAgo(spell.lastRun)}`);
+  meta.textContent = parts.join(' · ');
+
+  info.appendChild(nameRow);
+  info.appendChild(meta);
+
+  const toggle = document.createElement('button');
+  toggle.className = `spell-toggle ${spell.enabled ? 'spell-on' : ''}`;
+  toggle.textContent = spell.enabled ? 'On' : 'Off';
+  toggle.onclick = (e) => {
+    e.stopPropagation();
+    merlin.toggleSpell(spell.id, !spell.enabled);
+    setTimeout(loadSpells, 500);
+  };
+
+  row.appendChild(dot);
+  row.appendChild(info);
+  row.appendChild(toggle);
+  return row;
+}
+
+function activateSpell(template, row) {
+  // Optimistic: show creating state
+  row.querySelector('.spell-dot').className = 'spell-dot dot-creating';
+  row.querySelector('.spell-meta').textContent = 'Setting up...';
+  row.style.pointerEvents = 'none';
+
+  merlin.createSpell(`merlin-${template.spell}`, template.cron, template.name, template.prompt).then(result => {
+    if (result.success) {
+      row.querySelector('.spell-dot').className = 'spell-dot dot-active';
+      row.querySelector('.spell-meta').textContent = 'Active ✓';
+      setTimeout(() => loadSpells(), 1000);
+    } else {
+      row.querySelector('.spell-dot').className = 'spell-dot dot-error';
+      row.querySelector('.spell-meta').textContent = 'Failed — tap to retry';
+      row.style.pointerEvents = '';
+    }
   });
-});
+}
 
 // Real-time spell updates
 merlin.onSpellActivity(() => {
   const panel = document.getElementById('magic-panel');
   if (panel && !panel.classList.contains('hidden')) setTimeout(loadSpells, 1000);
 });
-merlin.onSpellCompleted(({ taskId, timestamp }) => {
-  if (taskId && typeof taskId === 'string') {
-    merlin.updateSpellMeta(taskId, { lastRun: timestamp });
-  }
+merlin.onSpellCompleted(({ taskId, status, summary, timestamp }) => {
+  // Config already updated by main.js — just refresh UI
   const panel = document.getElementById('magic-panel');
   if (panel && !panel.classList.contains('hidden')) loadSpells();
+
+  // Toast notification
+  const name = (taskId || '').replace('merlin-', '').replace(/-/g, ' ');
+  // Only toast on failures — success is shown by the green dot
+  if (status === 'failed' || status === 'error') {
+    showSpellToast(`⚠ ${name} failed`, summary, 'error');
+  }
 });
+
+// Spell toast with stacking
+let _toastCount = 0;
+function showSpellToast(title, detail, type) {
+  const offset = _toastCount * 56;
+  _toastCount++;
+  const toast = document.createElement('div');
+  toast.className = `spell-toast spell-toast-${type}`;
+  toast.style.bottom = `${80 + offset}px`;
+  toast.innerHTML = `<strong>${escapeHtml(title)}</strong>`;
+  if (detail) toast.innerHTML += `<br><span style="font-size:11px;opacity:.7">${escapeHtml(detail).slice(0, 80)}</span>`;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => { toast.remove(); _toastCount = Math.max(0, _toastCount - 1); }, 300);
+  }, 5000);
+}
 
 // ── Input Handling ──────────────────────────────────────────
 // ── Ticking Timer ───────────────────────────────────────────
@@ -1428,6 +1659,7 @@ function sendMessage() {
 
   checkFrustration(text);
   _userMessageCount = (_userMessageCount || 0) + 1;
+  _lastUserMessage = text;
   addUserBubble(text);
   showTypingIndicator();
   turnStartTime = Date.now();
@@ -1439,10 +1671,32 @@ function sendMessage() {
   autoResize();
 }
 
+let _lastUserMessage = '';
+
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
+  }
+  // Escape to stop generation
+  if (e.key === 'Escape' && (isStreaming || sessionActive)) {
+    e.preventDefault();
+    merlin.stopGeneration();
+    finalizeBubble();
+    removeTypingIndicator();
+    stopTickingTimer();
+    sessionActive = false;
+    isStreaming = false;
+    setInputDisabled(false);
+    input.focus();
+  }
+  // Up arrow in empty input to recall last message
+  if (e.key === 'ArrowUp' && input.value === '' && _lastUserMessage) {
+    e.preventDefault();
+    input.value = _lastUserMessage;
+    autoResize();
+    // Put cursor at end
+    input.selectionStart = input.selectionEnd = input.value.length;
   }
 });
 
@@ -1569,11 +1823,109 @@ document.addEventListener('click', (e) => {
   lb.className = 'lightbox';
   const lbImg = document.createElement('img');
   lbImg.src = img.src;
+  lbImg.dataset.file = img.src.replace('merlin://', '');
   lb.appendChild(lbImg);
   document.body.appendChild(lb);
-  lb.addEventListener('click', () => lb.remove());
+  lb.addEventListener('click', (ev) => { if (ev.target === lb) lb.remove(); });
   const escHandler = (ev) => { if (ev.key === 'Escape') { lb.remove(); document.removeEventListener('keydown', escHandler); } };
   document.addEventListener('keydown', escHandler);
+});
+
+// ── Copy Toast ──────────────────────────────────────────────
+function showCopyToast(text) {
+  const toast = document.createElement('div');
+  toast.className = 'copy-toast';
+  toast.textContent = text;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 1500);
+}
+
+// ── Media Context Menu (right-click: copy, save, open folder, delete) ──
+let _ctxMenu = null;
+
+function closeCtxMenu() {
+  if (_ctxMenu) { _ctxMenu.remove(); _ctxMenu = null; }
+}
+
+// Single persistent listeners — no accumulation
+document.addEventListener('click', (e) => {
+  if (_ctxMenu && !_ctxMenu.contains(e.target)) closeCtxMenu();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && _ctxMenu) closeCtxMenu();
+});
+
+document.addEventListener('contextmenu', (e) => {
+  const media = e.target.closest('.video-wrap')
+    || e.target.closest('img[src^="merlin://"]')
+    || e.target.closest('video[src^="merlin://"]')
+    || e.target.closest('.archive-preview img, .archive-preview video')
+    || e.target.closest('.lightbox img')
+    || e.target.closest('.archive-card');
+  if (!media) { closeCtxMenu(); return; }
+  e.preventDefault();
+  closeCtxMenu();
+
+  const mediaEl = media.matches('img, video') ? media
+    : media.querySelector('img[src^="merlin://"], video[src^="merlin://"]');
+  const archiveCard = media.closest('.archive-card');
+  const src = media.dataset?.file || mediaEl?.dataset?.file || mediaEl?.src?.replace('merlin://', '') || '';
+  const filePath = src;
+  const folderPath = filePath ? filePath.split('/').slice(0, -1).join('/') : (archiveCard?.dataset?.folder || '');
+  const isVideo = mediaEl?.tagName === 'VIDEO'
+    || media.closest('.video-wrap')
+    || archiveCard?.dataset?.type === 'video'
+    || archiveCard?.querySelector('.badge-video');
+
+  let menuItems = '';
+  if (!isVideo && filePath) menuItems += '<button data-action="copy">Copy Image</button>';
+  if (filePath) menuItems += '<button data-action="save">Save As...</button>';
+  if (folderPath) menuItems += '<button data-action="folder">Open Folder</button>';
+  if (folderPath) menuItems += '<div class="img-context-divider"></div><button data-action="delete" class="img-context-danger">Delete</button>';
+  if (!menuItems) return;
+
+  _ctxMenu = document.createElement('div');
+  _ctxMenu.className = 'img-context-menu';
+  _ctxMenu.innerHTML = menuItems;
+  _ctxMenu.style.left = e.clientX + 'px';
+  _ctxMenu.style.top = e.clientY + 'px';
+  document.body.appendChild(_ctxMenu);
+
+  const rect = _ctxMenu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) _ctxMenu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+  if (rect.bottom > window.innerHeight) _ctxMenu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+
+  _ctxMenu.addEventListener('click', async (ev) => {
+    const action = ev.target.dataset.action;
+    if (!action) return;
+    if (action === 'copy') {
+      const result = await merlin.copyImage(filePath);
+      closeCtxMenu();
+      showCopyToast(result?.success ? 'Copied!' : 'Copy failed');
+    } else if (action === 'save') {
+      const a = document.createElement('a');
+      a.href = mediaEl?.src || `merlin://${filePath}`;
+      a.download = filePath.split('/').pop();
+      a.click();
+      closeCtxMenu();
+    } else if (action === 'folder') {
+      merlin.openFolder(folderPath);
+      closeCtxMenu();
+    } else if (action === 'delete') {
+      const result = await merlin.deleteFile(folderPath);
+      closeCtxMenu();
+      if (result?.success) {
+        showCopyToast('Deleted');
+        const card = media.closest('.archive-card');
+        if (card) { card.style.opacity = '0'; setTimeout(() => card.remove(), 300); }
+        const preview = media.closest('.archive-preview');
+        if (preview) { preview.remove(); document.getElementById('archive-panel').classList.remove('hidden'); loadArchive(); }
+      } else {
+        showCopyToast('Delete failed');
+      }
+    }
+  });
 });
 
 // ── Tooltips (fixed position, never clipped by overflow) ────
@@ -1612,6 +1964,340 @@ document.addEventListener('click', (e) => {
     if (e.target.closest('[data-tip]') && tip) { tip.remove(); tip = null; }
   });
 })();
+
+// ── Performance Status Bar (always visible) ─────────────────
+async function loadPerfBar(days) {
+  const bar = document.getElementById('perf-bar');
+  const text = document.getElementById('perf-text');
+
+  try {
+    const perf = await merlin.getPerfSummary(days);
+
+    if (!perf || (!perf.revenue && !perf.spend)) {
+      text.innerHTML = 'No data yet — connect an ad platform to start tracking';
+      return;
+    }
+
+    const rev = perf.revenue > 0 ? `<strong>$${perf.revenue.toLocaleString()}</strong> revenue` : '';
+    const spend = perf.spend > 0 ? `$${Math.round(perf.spend).toLocaleString()} spent` : '';
+    const mer = perf.mer > 0 ? `<strong>${perf.mer.toFixed(1)}x</strong> MER` : '';
+
+    const parts = [rev, spend, mer].filter(Boolean).join(' · ');
+    let trendHtml = '';
+    if (perf.trend !== null && perf.trend !== undefined) {
+      const cls = perf.trend >= 0 ? 'perf-trend-up' : 'perf-trend-down';
+      const arrow = perf.trend >= 0 ? '▲' : '▼';
+      trendHtml = ` · <span class="${cls}">${arrow} ${Math.abs(perf.trend)}%</span>`;
+    }
+
+    text.innerHTML = parts + trendHtml;
+  } catch {
+    text.innerHTML = 'No data yet — connect an ad platform to start tracking';
+  }
+}
+
+// Load on startup
+loadPerfBar(7);
+
+// Period selector buttons
+document.querySelectorAll('.perf-period-btn').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation(); // don't trigger the bar click (revenue overlay)
+    document.querySelectorAll('.perf-period-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    loadPerfBar(parseInt(btn.dataset.days));
+  });
+});
+
+// Click bar to open revenue tracker (load brands first if needed)
+document.getElementById('perf-bar').addEventListener('click', async (e) => {
+  if (e.target.closest('.perf-period-group')) return; // don't trigger on period buttons
+  const overlay = document.getElementById('stats-overlay');
+  if (!overlay) return;
+
+  // Ensure we have a brand loaded
+  let brand = document.getElementById('brand-select').value;
+  if (!brand) {
+    try {
+      const brands = await merlin.getBrands();
+      if (brands && brands.length > 0) brand = brands[0].name;
+    } catch {}
+  }
+
+  if (brand) {
+    const cleanBrand = brand.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    document.getElementById('stats-brand-name').textContent = cleanBrand;
+  }
+
+  overlay.classList.remove('hidden');
+  try {
+    const cache = await merlin.getStatsCache();
+    populateStatsCard(cache);
+  } catch {}
+});
+
+// ── Activity Feed (full panel view, toggled via Activity button) ──
+let _archiveView = 'grid'; // 'grid' or 'activity'
+
+function showArchiveView() {
+  _archiveView = 'grid';
+  document.getElementById('activity-btn').textContent = 'Activity';
+  document.querySelector('.archive-filters').style.display = '';
+  document.getElementById('archive-grid').style.display = '';
+  document.getElementById('archive-empty').style.display = 'none';
+  const feed = document.getElementById('activity-feed-section');
+  if (feed) feed.remove();
+  loadArchive();
+}
+
+function showActivityView() {
+  _archiveView = 'activity';
+  document.getElementById('activity-btn').textContent = 'Gallery';
+  document.querySelector('.archive-filters').style.display = 'none';
+  document.getElementById('archive-grid').style.display = 'none';
+  document.getElementById('archive-empty').style.display = 'none';
+  document.getElementById('archive-loading').style.display = 'none';
+  loadActivityFeed();
+}
+
+document.getElementById('activity-btn').addEventListener('click', () => {
+  if (_archiveView === 'grid') showActivityView();
+  else showArchiveView();
+});
+
+async function loadActivityFeed() {
+  const panel = document.getElementById('archive-panel');
+  const existing = document.getElementById('activity-feed-section');
+  if (existing) existing.remove();
+
+  try {
+    const items = await merlin.getActivityFeed(null, 50);
+
+    const section = document.createElement('div');
+    section.id = 'activity-feed-section';
+    section.className = 'activity-section';
+
+    if (!items || items.length === 0) {
+      section.innerHTML = '<div class="activity-section-label">Activity</div><div style="color:var(--text-dim);padding:20px 0;text-align:center;font-size:12px">No activity yet — Merlin will log actions here as you create content and run campaigns.</div>';
+      const grid = document.getElementById('archive-grid');
+      grid.parentNode.insertBefore(section, grid);
+      return;
+    }
+
+    let lastDate = '';
+    items.forEach(item => {
+      const d = item.ts ? new Date(item.ts) : new Date();
+      const dateStr = formatArchiveDate(d);
+      if (dateStr !== lastDate) {
+        const header = document.createElement('div');
+        header.className = 'activity-section-label';
+        header.textContent = dateStr;
+        section.appendChild(header);
+        lastDate = dateStr;
+      }
+
+      const div = document.createElement('div');
+      div.className = 'activity-item';
+
+      const validTypes = ['create', 'optimize', 'publish', 'report', 'error'];
+      const safeType = validTypes.includes(item.type) ? item.type : 'create';
+      const dotClass = `activity-dot activity-dot-${safeType}`;
+      const action = item.action || '';
+      const detail = item.detail || '';
+      const product = item.product ? ` · ${item.product}` : '';
+
+      let desc = '';
+      switch (action) {
+        case 'video': desc = `Created video${product}`; break;
+        case 'image': desc = `Generated image${product}`; break;
+        case 'blog': desc = `Published blog post`; break;
+        case 'kill': desc = `Paused ad: ${detail}`; break;
+        case 'scale': desc = `Scaled winner: ${detail}`; break;
+        case 'meta-push': desc = `Published ad to Meta`; break;
+        case 'dashboard': desc = `Dashboard: ${detail}`; break;
+        default: desc = `${action}${detail ? ': ' + detail : ''}`;
+      }
+
+      const time = item.ts ? new Date(item.ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '';
+      div.innerHTML = `<span class="${dotClass}"></span><span>${escapeHtml(desc)}</span><span class="activity-time">${time}</span>`;
+      section.appendChild(div);
+    });
+
+    const grid = document.getElementById('archive-grid');
+    grid.parentNode.insertBefore(section, grid);
+  } catch (err) { console.warn('[activity]', err); }
+}
+
+// ── Archive Panel ──────────────────────────────────────────
+document.getElementById('archive-btn').addEventListener('click', () => {
+  document.getElementById('magic-panel').classList.add('hidden');
+  const panel = document.getElementById('archive-panel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) { showArchiveView(); }
+});
+document.getElementById('archive-close').addEventListener('click', () => {
+  document.getElementById('archive-panel').classList.add('hidden');
+});
+
+// Archive filter buttons
+document.querySelectorAll('.archive-filter').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.archive-filter').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    loadArchive();
+  });
+});
+
+// Archive search (debounced)
+let _archiveSearchTimeout;
+document.getElementById('archive-search').addEventListener('input', () => {
+  clearTimeout(_archiveSearchTimeout);
+  _archiveSearchTimeout = setTimeout(() => loadArchive(), 300);
+});
+
+async function loadArchive() {
+  const grid = document.getElementById('archive-grid');
+  const empty = document.getElementById('archive-empty');
+  const loading = document.getElementById('archive-loading');
+
+  loading.style.display = 'block';
+  grid.innerHTML = '';
+  empty.style.display = 'none';
+
+  const typeFilter = document.querySelector('.archive-filter.active')?.dataset.filter || 'all';
+  const search = document.getElementById('archive-search').value.trim();
+
+  try {
+    const items = await merlin.getArchiveItems({
+      type: typeFilter === 'all' ? '' : typeFilter,
+      search,
+    });
+    loading.style.display = 'none';
+
+    if (!items || items.length === 0) {
+      empty.style.display = 'block';
+      return;
+    }
+
+    let lastDate = '';
+    items.forEach(item => {
+      const d = new Date(item.timestamp);
+      const dateStr = formatArchiveDate(d);
+      if (dateStr !== lastDate) {
+        const header = document.createElement('div');
+        header.className = 'archive-date-header';
+        header.textContent = dateStr;
+        grid.appendChild(header);
+        lastDate = dateStr;
+      }
+      grid.appendChild(createArchiveCard(item));
+    });
+  } catch (err) {
+    console.warn('[archive]', err);
+    loading.style.display = 'none';
+    empty.style.display = 'block';
+  }
+}
+
+function formatArchiveDate(d) {
+  const now = new Date();
+  const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
+  const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+  const weekAgo = new Date(todayStart); weekAgo.setDate(weekAgo.getDate() - 6);
+
+  if (d >= todayStart) return 'Today';
+  if (d >= yesterdayStart) return 'Yesterday';
+  if (d >= weekAgo) return d.toLocaleDateString('en-US', { weekday: 'long' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function createArchiveCard(item) {
+  const card = document.createElement('div');
+  card.className = 'archive-card';
+  card.dataset.folder = item.folder || '';
+  card.dataset.type = item.type || 'image';
+
+  const isVideo = item.type === 'video';
+  const badgeClass = isVideo ? 'badge-video' : 'badge-image';
+  const badgeText = isVideo ? 'Video' : 'Image';
+  // Human-readable title: prefer product > brand > model > friendly type
+  let title = '';
+  if (item.product) title = item.product.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  else if (item.brand) title = item.brand.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  else if (item.model) title = item.model.split('/').pop().split('(')[0].trim();
+  else title = isVideo ? 'Video Ad' : 'Ad Image';
+  const time = new Date(item.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
+  if (item.thumbnail) {
+    card.innerHTML = `<img class="archive-card-thumb" src="merlin://${item.thumbnail}" alt="" loading="lazy">`;
+  } else {
+    card.innerHTML = `<div class="archive-card-thumb" style="display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--text-dim)">${isVideo ? '▶' : '✦'}</div>`;
+  }
+  card.innerHTML += `
+    <div class="archive-card-info">
+      <div class="archive-card-title">${escapeHtml(title)}</div>
+      <div class="archive-card-meta">
+        <span class="archive-card-badge ${badgeClass}">${badgeText}</span>
+        <span>${time}</span>
+      </div>
+    </div>`;
+
+  card.addEventListener('click', () => openArchivePreview(item));
+  return card;
+}
+
+function openArchivePreview(item) {
+  // Don't close the sidebar — just overlay on top
+
+  const overlay = document.createElement('div');
+  overlay.className = 'archive-preview';
+
+  const isVideo = item.type === 'video';
+  let mediaPath = '';
+
+  if (isVideo) {
+    const best = (item.files || []).find(f => f === 'captioned.mp4') || (item.files || []).find(f => f === 'final.mp4');
+    if (best) mediaPath = `merlin://${item.folder}/${best}`;
+  } else if (item.thumbnail) {
+    // Use the same file as the thumbnail — single source of truth
+    mediaPath = `merlin://${item.thumbnail}`;
+  }
+
+  if (isVideo && mediaPath) {
+    overlay.innerHTML = `<video src="${mediaPath}" controls autoplay playsinline></video>`;
+  } else if (mediaPath) {
+    overlay.innerHTML = `<img src="${mediaPath}" alt="" data-folder="${escapeHtml(item.folder)}" data-file="${escapeHtml(mediaPath.replace('merlin://', ''))}">`;
+  } else {
+    overlay.innerHTML = `<div style="color:var(--text-muted);font-size:14px">No preview available</div>`;
+  }
+
+  function closePreview() {
+    overlay.remove();
+    document.removeEventListener('keydown', escHandler);
+  }
+
+  // Close button
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'archive-preview-close';
+  closeBtn.innerHTML = '&times;';
+  closeBtn.addEventListener('click', closePreview);
+  overlay.appendChild(closeBtn);
+
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closePreview(); });
+  const escHandler = (e) => { if (e.key === 'Escape') closePreview(); };
+  document.addEventListener('keydown', escHandler);
+  document.body.appendChild(overlay);
+}
+
+// Close archive on click outside
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('archive-panel');
+  const btn = document.getElementById('archive-btn');
+  if (panel && !panel.classList.contains('hidden') && !panel.contains(e.target) && e.target !== btn && !e.target.closest('#archive-btn')) {
+    if (e.target.closest('#approval') || e.target.closest('.merlin-modal-card') || e.target.closest('.merlin-tooltip') || e.target.closest('.archive-preview')) return;
+    panel.classList.add('hidden');
+  }
+});
 
 // ── Trial Expired ──────────────────────────────────────────
 merlin.onTrialExpired(() => {

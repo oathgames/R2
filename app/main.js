@@ -37,6 +37,7 @@ let resolveNextMessage = null;
 let pendingMessageQueue = []; // Queue messages sent before SDK is ready
 let pendingApprovals = new Map();
 let activeQuery = null;
+let _suppressNextResponse = false; // Suppress SDK responses for internal actions (spell toggle/create)
 
 // Auto-expire pending approvals after 5 minutes to prevent memory leaks
 const APPROVAL_TIMEOUT_MS = 15 * 60 * 1000;
@@ -84,6 +85,14 @@ async function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, 'index.html'));
+
+  // Open external links in OS default browser (opens Discord app if installed)
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' }; // Never open new Electron windows
+  });
 
   // Grant microphone permission for voice input (Web Speech API)
   win.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
@@ -213,6 +222,11 @@ async function handleToolApproval(toolName, input) {
     return { behavior: 'allow', updatedInput: input };
   }
 
+  // Auto-approve MCP scheduled-task operations (spell create/update/delete)
+  if (toolName.includes('scheduled-tasks') || toolName.includes('scheduled_tasks')) {
+    return { behavior: 'allow', updatedInput: input };
+  }
+
   // Auto-approve safe Bash commands (read-only, setup, file management)
   if (toolName === 'Bash' && isSafeBash(input.command)) {
     return { behavior: 'allow', updatedInput: input };
@@ -284,6 +298,23 @@ async function startSession() {
 
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
 
+  // Determine the active brand — must match what the welcome message shows
+  let activeBrand = '';
+  const savedState = readState();
+  if (savedState.activeBrand) activeBrand = savedState.activeBrand;
+  if (!activeBrand) {
+    try {
+      const brandsDir = path.join(appRoot, 'assets', 'brands');
+      const dirs = fs.readdirSync(brandsDir, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== 'example')
+        .map(d => d.name).sort();
+      if (dirs.length > 0) activeBrand = dirs[0];
+    } catch {}
+  }
+  const brandHint = activeBrand
+    ? ` ACTIVE BRAND: The user's active brand is "${activeBrand}". When brands exist, use THIS brand specifically — the welcome message already showed it. Say "✦ ${activeBrand.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase())} is ready — [X] products loaded. What would you like to create?"`
+    : '';
+
   // Try to infer brand domain from cached Claude account email
   const inferredDomain = inferBrandDomain();
   const domainHint = inferredDomain
@@ -291,7 +322,7 @@ async function startSession() {
     : '';
 
   async function* messageGenerator() {
-    yield { type: 'user', message: { role: 'user', content: `Run /merlin silently — do the preflight checks but do NOT print anything. No greetings, no banners, no feature lists. The app UI already showed my welcome message. Check assets/brands/ for existing brand folders (ignore "example"). If a brand ALREADY exists, skip setup — just say "✦ [Brand] is ready — [X] products loaded. What would you like to create?" If NO brands exist, use the AskUserQuestion tool to ask "What's your website?" with these options: (1) label: "Set up my brand", description: "Enter your website URL and we'll auto-detect your brand, products, and colors" (2) label: "Just exploring", description: "See what Merlin can do — no setup needed".${domainHint} IMPORTANT: When the user provides their website URL (or picks their domain from the options), start working IMMEDIATELY — scrape the site with WebFetch, extract brand colors, find products, identify competitors with WebSearch. Do ALL of this in parallel with the binary download. Don't wait for the binary. Show results as you find them: "Found your brand colors: #xxx, #yyy", "Spotted 12 products", "Your top competitors look like X, Y, Z". This gives the user instant value. The binary download and config setup happen in the background via preflight. If the user selects "Just exploring", give a 3-sentence pitch of what Merlin does and ask what they'd like to try. IMPORTANT RULE: When showing images, include the full file path in your response text like this: results/img_20260403_164511/image_1_portrait.jpg — the app will render it inline automatically. Always include the path, never just describe the image.` } };
+    yield { type: 'user', message: { role: 'user', content: `Run /merlin silently — do the preflight checks but do NOT print anything. No greetings, no banners, no feature lists. The app UI already showed my welcome message.${brandHint} Check assets/brands/ for existing brand folders (ignore "example"). If a brand ALREADY exists, skip setup — just say "✦ [Brand] is ready — [X] products loaded. What would you like to create?" If NO brands exist, use the AskUserQuestion tool to ask "What's your website?" with these options: (1) label: "Set up my brand", description: "Enter your website URL and we'll auto-detect your brand, products, and colors" (2) label: "Just exploring", description: "See what Merlin can do — no setup needed".${domainHint} IMPORTANT: When the user provides their website URL (or picks their domain from the options), start working IMMEDIATELY — scrape the site with WebFetch, extract brand colors, find products, identify competitors with WebSearch. Do ALL of this in parallel with the binary download. Don't wait for the binary. Show results as you find them: "Found your brand colors: #xxx, #yyy", "Spotted 12 products", "Your top competitors look like X, Y, Z". This gives the user instant value. The binary download and config setup happen in the background via preflight. If the user selects "Just exploring", give a 3-sentence pitch of what Merlin does and ask what they'd like to try. IMPORTANT RULE: When showing images, include the full file path in your response text like this: results/img_20260403_164511/image_1_portrait.jpg — the app will render it inline automatically. Always include the path, never just describe the image.` } };
     // Drain any messages queued before SDK was ready
     while (pendingMessageQueue.length > 0) {
       yield pendingMessageQueue.shift();
@@ -353,8 +384,18 @@ async function startSession() {
     for await (const msg of activeQuery) {
       if (win && !win.isDestroyed()) {
         const serialized = JSON.parse(JSON.stringify(msg));
+        serialized._internal = _suppressNextResponse;
+        // Clear suppression flag ONLY on 'result' (full turn complete, not partial 'assistant')
+        if (_suppressNextResponse && msg.type === 'result') {
+          _suppressNextResponse = false;
+        }
         win.webContents.send('sdk-message', serialized);
         wsServer.broadcast('sdk-message', serialized);
+
+        // Cache dashboard/insights responses for the revenue tracker
+        if (msg.type === 'tool_result' || msg.type === 'tool_use') {
+          cacheDashboardData(msg);
+        }
 
         // Spellbook: detect task-related MCP tool calls and task lifecycle events
         if (msg.type === 'tool_use' && msg.tool_name && msg.tool_name.includes('scheduled-tasks')) {
@@ -363,10 +404,35 @@ async function startSession() {
         if (msg.type === 'system' && msg.subtype === 'task_notification') {
           const taskId = msg.task_id || '';
           const status = msg.status || '';
-          win.webContents.send('spell-completed', {
-            taskId, status,
-            summary: msg.summary, timestamp: Date.now()
-          });
+          const summary = msg.summary || '';
+          const timestamp = Date.now();
+
+          // Persist status to config immediately
+          const cfg = readConfig();
+          if (!cfg.spells) cfg.spells = {};
+          const prev = cfg.spells[taskId] || {};
+          cfg.spells[taskId] = {
+            ...prev,
+            lastRun: timestamp,
+            lastStatus: status,
+            lastSummary: summary.slice(0, 200),
+            consecutiveFailures: (status === 'failed' || status === 'error')
+              ? (prev.consecutiveFailures || 0) + 1 : 0,
+          };
+          writeConfig(cfg);
+
+          // System notification for failures (shows in Windows/macOS notification center)
+          if (status === 'failed' || status === 'error') {
+            const { Notification: ElectronNotification } = require('electron');
+            if (ElectronNotification.isSupported()) {
+              new ElectronNotification({
+                title: '✦ Merlin Spell Failed',
+                body: `${taskId.replace('merlin-', '')} — ${summary || 'check the app for details'}`,
+              }).show();
+            }
+          }
+
+          win.webContents.send('spell-completed', { taskId, status, summary, timestamp });
           // Report spell completion to wisdom API for aggregate insights
           try {
             const https = require('https');
@@ -395,31 +461,44 @@ async function startSession() {
     // Always reset so session can be restarted after error or completion
     activeQuery = null;
     resolveNextMessage = null;
+    pendingMessageQueue = []; // Clear stale messages from failed session
+    // Clear any orphaned approval cards
+    for (const [id, entry] of pendingApprovals) {
+      clearTimeout(entry.timer);
+    }
+    pendingApprovals.clear();
   }
 }
 
 // ── IPC Handlers ────────────────────────────────────────────
 
 ipcMain.handle('check-setup', async () => {
-  const { exec } = require('child_process');
+  const { execSync } = require('child_process');
 
-  // On macOS, Claude CLI may not be on PATH — check common locations
+  // Check common Claude CLI locations
   const candidates = ['claude'];
   if (process.platform === 'darwin') {
     candidates.push(
       '/usr/local/bin/claude',
       path.join(os.homedir(), '.claude', 'bin', 'claude'),
-      path.join(os.homedir(), '.local', 'bin', 'claude')
+      path.join(os.homedir(), '.local', 'bin', 'claude'),
+      '/opt/homebrew/bin/claude'
+    );
+  } else if (process.platform === 'win32') {
+    candidates.push(
+      path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'),
+      path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'claude'),
+      path.join(os.homedir(), '.claude', 'bin', 'claude.exe')
     );
   }
 
   for (const cmd of candidates) {
-    const found = await new Promise((resolve) => {
-      const child = exec(`"${cmd}" --version`, { timeout: 10000 });
-      child.on('close', (code) => resolve(code === 0));
-      child.on('error', () => resolve(false));
-    });
-    if (found) return { ready: true };
+    try {
+      execSync(`"${cmd}" --version`, { timeout: 10000, shell: true, stdio: 'pipe' });
+      return { ready: true };
+    } catch {
+      // This candidate failed, try next
+    }
   }
 
   const macTip = process.platform === 'darwin'
@@ -442,23 +521,23 @@ ipcMain.handle('get-briefing', () => {
     const ageHours = (now - briefingDate) / (1000 * 60 * 60);
     if (ageHours > 36) return null; // stale — more than 36 hours old
     // Only show once per day — check if already dismissed today
-    const stateFile = path.join(appRoot, '.merlin-state.json');
-    try {
-      const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-      if (state.lastBriefingDismissed === now.toISOString().slice(0, 10)) return null;
-    } catch {}
+    const state = readState();
+    if (state.lastBriefingDismissed === now.toISOString().slice(0, 10)) return null;
     return data;
   } catch { return null; }
 });
 
 ipcMain.handle('dismiss-briefing', () => {
   const stateFile = path.join(appRoot, '.merlin-state.json');
-  try {
-    let state = {};
-    try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
-    state.lastBriefingDismissed = new Date().toISOString().slice(0, 10);
-    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
-  } catch {}
+  writeState({ lastBriefingDismissed: new Date().toISOString().slice(0, 10) });
+  return { success: true };
+});
+
+ipcMain.handle('stop-generation', () => {
+  // Signal the message generator to stop, ending the current turn
+  if (resolveNextMessage) {
+    resolveNextMessage(null);
+  }
   return { success: true };
 });
 
@@ -470,16 +549,17 @@ ipcMain.handle('get-account-info', async () => {
   } catch { return null; }
 });
 
-ipcMain.handle('send-message', (_, text) => {
+ipcMain.handle('send-message', (_, text, options = {}) => {
   if (typeof text !== 'string' || text.length > 50000) return { success: false };
+  // Support silent/internal messages (no broadcast, suppressed response)
+  if (options.silent) _suppressNextResponse = true;
   const msg = { type: 'user', message: { role: 'user', content: text } };
   if (resolveNextMessage) {
     resolveNextMessage(msg);
   } else {
-    // SDK not ready yet — queue the message for when it connects
     pendingMessageQueue.push(msg);
   }
-  wsServer.broadcast('user-message', { text });
+  if (!options.silent) wsServer.broadcast('user-message', { text });
   return { success: true };
 });
 
@@ -507,6 +587,333 @@ ipcMain.handle('answer-question', (_, toolUseID, answers) => {
 ipcMain.handle('open-claude-download', () => { shell.openExternal('https://claude.ai/download'); });
 ipcMain.handle('open-merlin-folder', () => { shell.openPath(appRoot); });
 
+// ── Spell creation: write SKILL.md directly (no Claude, no MCP) ──
+ipcMain.handle('create-spell', (_, taskId, cron, description, prompt) => {
+  try {
+    const tasksDir = path.join(os.homedir(), '.claude', 'scheduled-tasks', taskId);
+    fs.mkdirSync(tasksDir, { recursive: true });
+
+    const skillContent = `---\nname: ${taskId}\ndescription: ${description}\ncronExpression: "${cron}"\n---\n\n${prompt}\n`;
+    fs.writeFileSync(path.join(tasksDir, 'SKILL.md'), skillContent);
+
+    // Also update local config
+    const cfg = readConfig();
+    if (!cfg.spells) cfg.spells = {};
+    cfg.spells[taskId] = { cron, enabled: true, description };
+    writeConfig(cfg);
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+ipcMain.handle('suppress-next-response', () => { _suppressNextResponse = true; });
+
+ipcMain.handle('delete-file', async (_, folderPath) => {
+  try {
+    if (!folderPath || typeof folderPath !== 'string') return { success: false };
+    const fullPath = path.resolve(appRoot, folderPath);
+    const resolvedRoot = path.resolve(appRoot);
+    if (!fullPath.startsWith(resolvedRoot)) return { success: false };
+    const resultsDir = path.join(resolvedRoot, 'results');
+    if (!fullPath.startsWith(resultsDir) || fullPath === resultsDir) return { success: false };
+    if (!fs.existsSync(fullPath)) return { success: false };
+    // Use async rm to avoid blocking the main process (prevents "Not Responding")
+    await fs.promises.rm(fullPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    // Invalidate archive index so it rebuilds
+    try { await fs.promises.unlink(path.join(resultsDir, 'archive-index.json')); } catch {}
+    return { success: true };
+  } catch (err) {
+    console.error('[delete]', err.message);
+    return { success: false };
+  }
+});
+
+ipcMain.handle('copy-image', (_, filePath) => {
+  try {
+    const { nativeImage, clipboard } = require('electron');
+    const fullPath = path.resolve(appRoot, filePath);
+    if (path.relative(path.resolve(appRoot), fullPath).startsWith('..')) return { success: false };
+    const img = nativeImage.createFromPath(fullPath);
+    if (img.isEmpty()) return { success: false };
+    clipboard.writeImage(img);
+    return { success: true };
+  } catch { return { success: false }; }
+});
+
+ipcMain.handle('open-folder', (_, folderPath) => {
+  const fullPath = path.resolve(appRoot, folderPath);
+  // Prevent path traversal: ensure resolved path is inside appRoot
+  if (path.relative(path.resolve(appRoot), fullPath).startsWith('..')) return { success: false };
+  shell.openPath(fullPath);
+  return { success: true };
+});
+
+// ── Performance status bar: read cached dashboard data ──────
+ipcMain.handle('get-perf-summary', (_, requestedDays) => {
+  const days = requestedDays || 7;
+  const resultsDir = path.join(appRoot, 'results');
+  try {
+    // Find all dashboard snapshot files
+    const files = [];
+    try {
+      for (const f of fs.readdirSync(resultsDir)) {
+        if (f.startsWith('dashboard_') && f.endsWith('.json')) {
+          files.push({ name: f, path: path.join(resultsDir, f) });
+        }
+      }
+    } catch {}
+
+    if (files.length === 0) return null;
+
+    // Sort by name (timestamp in filename), newest last
+    files.sort((a, b) => a.name.localeCompare(b.name));
+
+    // For the requested period, find the file closest to N days ago
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = `dashboard_${cutoff.toISOString().slice(0, 10).replace(/-/g, '')}`;
+
+    // Latest snapshot = current state
+    const latest = JSON.parse(fs.readFileSync(files[files.length - 1].path, 'utf8'));
+
+    // Find the snapshot closest to the period start for trend comparison
+    let periodStart = null;
+    for (const f of files) {
+      if (f.name >= cutoffStr) { periodStart = f; break; }
+    }
+
+    // Calculate trend: compare latest to period start
+    let trend = null;
+    if (periodStart && periodStart.name !== files[files.length - 1].name) {
+      try {
+        const prev = JSON.parse(fs.readFileSync(periodStart.path, 'utf8'));
+        if (prev.mer > 0 && latest.mer > 0) {
+          trend = Math.round(((latest.mer - prev.mer) / prev.mer) * 100);
+        }
+      } catch {}
+    }
+
+    // If only one snapshot, compare to second-most-recent if available
+    if (trend === null && files.length >= 2) {
+      try {
+        const prev = JSON.parse(fs.readFileSync(files[files.length - 2].path, 'utf8'));
+        if (prev.mer > 0 && latest.mer > 0) {
+          trend = Math.round(((latest.mer - prev.mer) / prev.mer) * 100);
+        }
+      } catch {}
+    }
+
+    return {
+      revenue: latest.revenue || 0,
+      spend: latest.total_spend || 0,
+      mer: latest.mer || 0,
+      platforms: (latest.platforms || []).filter(p => p.spend > 0).length,
+      trend,
+      periodDays: days,
+      generatedAt: latest.generated_at || null,
+    };
+  } catch { return null; }
+});
+
+// ── Activity feed: read brand's activity.jsonl ──────────────
+ipcMain.handle('get-activity-feed', (_, brandName, limit = 30) => {
+  if (!brandName) {
+    // Try to find the first brand with an activity log
+    const brandsDir = path.join(appRoot, 'assets', 'brands');
+    try {
+      const dirs = fs.readdirSync(brandsDir, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== 'example');
+      for (const d of dirs) {
+        const logPath = path.join(brandsDir, d.name, 'activity.jsonl');
+        if (fs.existsSync(logPath)) { brandName = d.name; break; }
+      }
+    } catch {}
+  }
+  if (!brandName) return [];
+
+  const logPath = path.join(appRoot, 'assets', 'brands', brandName, 'activity.jsonl');
+  try {
+    if (!fs.existsSync(logPath)) return [];
+    const stat = fs.statSync(logPath);
+
+    // For large files (>1MB), read only the last 64KB to avoid memory issues
+    let content;
+    if (stat.size > 1024 * 1024) {
+      const fd = fs.openSync(logPath, 'r');
+      const tailSize = Math.min(stat.size, 64 * 1024);
+      const buf = Buffer.alloc(tailSize);
+      fs.readSync(fd, buf, 0, tailSize, stat.size - tailSize);
+      fs.closeSync(fd);
+      content = buf.toString('utf8');
+      // Drop the first partial line
+      const firstNewline = content.indexOf('\n');
+      if (firstNewline > 0) content = content.slice(firstNewline + 1);
+    } else {
+      content = fs.readFileSync(logPath, 'utf8');
+    }
+
+    content = content.trim();
+    if (!content) return [];
+
+    const lines = content.split('\n').filter(l => l.trim());
+    const recent = lines.slice(-limit).reverse(); // newest first
+    const items = [];
+    for (const line of recent) {
+      try { items.push(JSON.parse(line)); } catch {}
+    }
+    return items;
+  } catch { return []; }
+});
+
+// ── Archive: scan results for content grid ──────────────────
+ipcMain.handle('get-archive-items', async (_, filters = {}) => {
+  const resultsDir = path.join(appRoot, 'results');
+  if (!fs.existsSync(resultsDir)) return [];
+
+  const crypto = require('crypto');
+  const indexPath = path.join(resultsDir, 'archive-index.json');
+
+  // Build folder list from all result directories (flat + hierarchical)
+  function findRunFolders(dir, relativeTo) {
+    const folders = [];
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const name = e.name;
+        if (name === 'archive' || name === '.') continue;
+        const fullPath = path.join(dir, name);
+        const relPath = path.relative(relativeTo, fullPath).replace(/\\/g, '/');
+
+        // Is this a run folder? (starts with ad_ or img_)
+        if (name.startsWith('ad_') || name.startsWith('img_')) {
+          folders.push({ name, fullPath, relPath });
+        } else {
+          // Recurse into type/month/brand hierarchy
+          folders.push(...findRunFolders(fullPath, relativeTo));
+        }
+      }
+    } catch {}
+    return folders;
+  }
+
+  const runFolders = findRunFolders(resultsDir, appRoot);
+
+  // Hash check: skip rebuild if unchanged
+  const hashInput = runFolders.map(f => {
+    try { return `${f.name}:${fs.statSync(f.fullPath).mtimeMs}`; } catch { return f.name; }
+  }).sort().join('|');
+  const currentHash = crypto.createHash('md5').update(hashInput).digest('hex');
+
+  let cached = null;
+  try {
+    cached = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    if (cached.hash === currentHash && cached.items) {
+      // Apply filters to cached items
+      return applyArchiveFilters(cached.items, filters);
+    }
+  } catch {}
+
+  // Rebuild index
+  const items = [];
+  for (const folder of runFolders) {
+    const item = {
+      id: folder.name,
+      type: folder.name.startsWith('ad_') ? 'video' : 'image',
+      timestamp: 0,
+      brand: '',
+      product: '',
+      status: 'completed',
+      qaPassed: true,
+      model: '',
+      thumbnail: '',
+      files: [],
+      folder: folder.relPath,
+    };
+
+    // Parse timestamp from folder name: ad_YYYYMMDD_HHMMSS or img_YYYYMMDD_HHMMSS
+    const tsMatch = folder.name.match(/(\d{8})_(\d{6})$/);
+    if (tsMatch) {
+      const d = tsMatch[1], t = tsMatch[2];
+      const parsed = new Date(
+        `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}T${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)}`
+      ).getTime();
+      if (!isNaN(parsed)) item.timestamp = parsed;
+    }
+
+    // Read metadata.json if present
+    const metaPath = path.join(folder.fullPath, 'metadata.json');
+    try {
+      if (fs.existsSync(metaPath)) {
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+        if (meta.brand) item.brand = meta.brand;
+        if (meta.product) item.product = meta.product;
+        if (meta.status) item.status = meta.status;
+        if (meta.model) item.model = meta.model;
+        if (meta.qaPassed !== undefined) item.qaPassed = meta.qaPassed;
+        if (meta.type) item.type = meta.type;
+        if (meta.createdAt) {
+          const createdTime = new Date(meta.createdAt).getTime();
+          if (!isNaN(createdTime)) item.timestamp = createdTime;
+        }
+      }
+    } catch (err) { console.warn(`[archive] Bad metadata in ${folder.name}:`, err.message); }
+
+    // Find thumbnail — use portrait as single source of truth (same image in card + preview)
+    try {
+      const files = fs.readdirSync(folder.fullPath);
+      item.files = files;
+      const portrait = files.find(f => f.includes('_portrait') && /\.(jpg|png|webp)$/i.test(f));
+      const anyImage = files.find(f => /\.(jpg|jpeg|png|webp)$/i.test(f) && !f.includes('_square'));
+      const thumb = portrait || anyImage;
+      if (thumb) item.thumbnail = folder.relPath + '/' + thumb;
+    } catch {}
+
+    // Skip completely empty folders
+    if (item.files.length === 0) continue;
+
+    // Skip corrupted videos — must have at least one video file > 10KB
+    if (item.type === 'video') {
+      const videoFiles = item.files.filter(f => /\.(mp4|webm|mov)$/i.test(f));
+      if (videoFiles.length === 0) continue;
+      const hasValidVideo = videoFiles.some(f => {
+        try { return fs.statSync(path.join(folder.fullPath, f)).size > 10240; } catch { return false; }
+      });
+      if (!hasValidVideo) continue;
+    }
+
+    items.push(item);
+  }
+
+  // Sort newest first
+  items.sort((a, b) => b.timestamp - a.timestamp);
+
+  // Cache index
+  try {
+    fs.writeFileSync(indexPath, JSON.stringify({ hash: currentHash, items }, null, 2));
+  } catch {}
+
+  return applyArchiveFilters(items, filters);
+});
+
+function applyArchiveFilters(items, filters = {}) {
+  let filtered = items;
+  if (filters.type) {
+    filtered = filtered.filter(i => i.type === filters.type);
+  }
+  if (filters.search) {
+    const q = filters.search.toLowerCase();
+    filtered = filtered.filter(i =>
+      (i.brand && i.brand.toLowerCase().includes(q)) ||
+      (i.product && i.product.toLowerCase().includes(q)) ||
+      (i.model && i.model.toLowerCase().includes(q)) ||
+      i.id.toLowerCase().includes(q)
+    );
+  }
+  return filtered;
+}
+
 ipcMain.handle('check-tos-accepted', () => {
   const stateFile = path.join(appRoot, '.merlin-state.json');
   try {
@@ -516,11 +923,7 @@ ipcMain.handle('check-tos-accepted', () => {
 });
 
 ipcMain.handle('accept-tos', () => {
-  const stateFile = path.join(appRoot, '.merlin-state.json');
-  let state = {};
-  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
-  state.tosAccepted = new Date().toISOString();
-  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+  writeState({ tosAccepted: new Date().toISOString() });
   return { success: true };
 });
 
@@ -553,50 +956,43 @@ ipcMain.handle('check-claude-running', async () => {
   });
 });
 
-// ── Session State Persistence ───────────────────────────────
+// ── Session State Persistence (centralized, atomic) ─────────
 const stateFile = path.join(appRoot, '.merlin-state.json');
 
-ipcMain.handle('save-state', (_, data) => {
+function readState() {
+  try { return JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch { return {}; }
+}
+
+function writeState(data) {
   try {
-    let state = {};
-    try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
-    Object.assign(state, data);
-    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
-    return { success: true };
-  } catch { return { success: false }; }
+    const state = { ...readState(), ...data };
+    const tmpPath = stateFile + '.tmp';
+    fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
+    fs.renameSync(tmpPath, stateFile);
+    return true;
+  } catch { return false; }
+}
+
+ipcMain.handle('save-state', (_, data) => {
+  return { success: writeState(data) };
 });
 
-ipcMain.handle('load-state', () => {
-  try { return JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch { return {}; }
-});
+ipcMain.handle('load-state', () => readState());
 
 // ── Config helpers ──────────────────────────────────────────
+// Config MUST stay as plaintext JSON — the Go binary reads it via --config flag.
+// Only subscription/license files use safeStorage encryption.
 function readConfig() {
   const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
-  try {
-    const buf = fs.readFileSync(configPath);
-    if (safeStorage.isEncryptionAvailable()) {
-      try {
-        return JSON.parse(safeStorage.decryptString(buf));
-      } catch {
-        // Not encrypted yet (migration from plaintext) — parse as-is, re-encrypts on next write
-        return JSON.parse(buf.toString('utf8'));
-      }
-    }
-    return JSON.parse(buf.toString('utf8'));
-  } catch { return {}; }
+  try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { return {}; }
 }
 function writeConfig(cfg) {
   const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
   try {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    const data = JSON.stringify(cfg, null, 2);
+    // Atomic write: temp file + rename
     const tmpPath = configPath + '.tmp';
-    if (safeStorage.isEncryptionAvailable()) {
-      fs.writeFileSync(tmpPath, safeStorage.encryptString(data));
-    } else {
-      fs.writeFileSync(tmpPath, data);
-    }
+    fs.writeFileSync(tmpPath, JSON.stringify(cfg, null, 2));
     fs.renameSync(tmpPath, configPath);
   } catch (err) { console.error('[config] write failed:', err.message); }
 }
@@ -623,24 +1019,102 @@ function writeSecureFile(filePath, data) {
   } catch {}
 }
 
+// ── Revenue Tracker — cache raw API responses ──────────────
+const statsFile = path.join(appRoot, '.merlin-stats.json');
+
+// Track the last tool_use action so we can tag the result
+let _lastToolAction = null;
+
+function cacheDashboardData(msg) {
+  // Capture the action from tool_use commands
+  if (msg.type === 'tool_use' && msg.tool_name === 'Bash') {
+    const cmd = msg.input?.command || '';
+    if (cmd.includes('Merlin')) {
+      const match = cmd.match(/"action"\s*:\s*"([^"]+)"/);
+      if (match) _lastToolAction = match[1];
+    }
+    return;
+  }
+
+  // Cache tool_result for dashboard/insights actions
+  if (msg.type === 'tool_result' && _lastToolAction) {
+    const action = _lastToolAction;
+    _lastToolAction = null;
+
+    // Cache any action that returns performance/revenue data
+    // This list auto-extends as new platforms are added to the binary
+    if (!action.includes('insights') && !action.includes('orders') && !action.includes('analytics')
+        && !action.includes('performance') && !action.includes('dashboard') && !action.includes('cohorts')
+        && !action.includes('revenue')) return;
+
+    try {
+      const content = typeof msg.content === 'string' ? msg.content
+        : Array.isArray(msg.content) ? msg.content.map(b => b.text || '').join('')
+        : '';
+      if (!content || content.length < 10) return;
+
+      // Try to extract JSON from the response
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return;
+
+      let stats = {};
+      try { stats = JSON.parse(fs.readFileSync(statsFile, 'utf8')); } catch {}
+      stats[action] = {
+        data: jsonMatch[0].slice(0, 10000), // Cap at 10KB per entry
+        timestamp: new Date().toISOString(),
+      };
+      const tmpPath = statsFile + '.tmp';
+      fs.writeFileSync(tmpPath, JSON.stringify(stats, null, 2));
+      fs.renameSync(tmpPath, statsFile);
+    } catch {}
+  }
+}
+
+ipcMain.handle('get-stats-cache', () => {
+  try {
+    return JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+  } catch { return null; }
+});
+
 // Check which platforms are connected by reading the config
 ipcMain.handle('get-connected-platforms', () => {
   const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
   try {
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const connected = [];
-    if (cfg.metaAccessToken) connected.push('meta');
-    if (cfg.tiktokAccessToken) connected.push('tiktok');
-    if (cfg.shopifyAccessToken && cfg.shopifyStore) connected.push('shopify');
-    if (cfg.klaviyoApiKey || cfg.klaviyoAccessToken) connected.push('klaviyo');
-    if (cfg.googleAccessToken || cfg.googleAdsCustomerId) connected.push('google');
-    if (cfg.pinterestAccessToken) connected.push('pinterest');
-    if (cfg.falApiKey) connected.push('fal');
-    if (cfg.elevenLabsApiKey) connected.push('elevenlabs');
-    if (cfg.heygenApiKey) connected.push('heygen');
-    if (cfg.amazonAccessToken) connected.push('amazon');
-    if (cfg.slackBotToken || cfg.slackWebhookUrl) connected.push('slack');
-    return connected;
+    // OAuth tokens may expire — check timestamp if available
+    const tokenAge = cfg._tokenTimestamps || {};
+    const now = Date.now();
+    const EXPIRE_MS = 55 * 24 * 60 * 60 * 1000; // 55 days (Meta tokens last 60)
+
+    function check(key, platform) {
+      if (!cfg[key]) return;
+      const ts = tokenAge[platform];
+      if (ts && (now - ts) > EXPIRE_MS) {
+        connected.push({ platform, status: 'expired' });
+      } else {
+        connected.push({ platform, status: 'connected' });
+      }
+    }
+
+    // OAuth platforms (tokens can expire)
+    check('metaAccessToken', 'meta');
+    check('tiktokAccessToken', 'tiktok');
+    check('googleAccessToken', 'google');
+    check('pinterestAccessToken', 'pinterest');
+    check('amazonAccessToken', 'amazon');
+
+    // API key platforms (don't expire unless revoked)
+    if (cfg.shopifyAccessToken && cfg.shopifyStore) connected.push({ platform: 'shopify', status: 'connected' });
+    if (cfg.klaviyoApiKey || cfg.klaviyoAccessToken) connected.push({ platform: 'klaviyo', status: 'connected' });
+    if (cfg.falApiKey) connected.push({ platform: 'fal', status: 'connected' });
+    if (cfg.elevenLabsApiKey) connected.push({ platform: 'elevenlabs', status: 'connected' });
+    if (cfg.heygenApiKey) connected.push({ platform: 'heygen', status: 'connected' });
+    if (cfg.slackBotToken || cfg.slackWebhookUrl) connected.push({ platform: 'slack', status: 'connected' });
+
+    // Return flat array for backward compat (renderer expects string[])
+    // but include status for future UI enhancement
+    return connected.map(c => c.platform);
   } catch { return []; }
 });
 
@@ -651,34 +1125,56 @@ ipcMain.handle('list-spells', () => {
 
   const cfg = readConfig();
   const spellMeta = cfg.spells || {};
+  let configDirty = false;
 
   try {
     const dirs = fs.readdirSync(tasksDir, { withFileTypes: true }).filter(d => d.isDirectory());
-    return dirs.map(d => {
-      let name = d.name, description = '';
+    const results = dirs.map(d => {
+      let name = d.name, description = '', cronFromFile = null;
       const skillPath = path.join(tasksDir, d.name, 'SKILL.md');
       try {
         const content = fs.readFileSync(skillPath, 'utf8');
         const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
         if (fmMatch) {
-          const nameMatch = fmMatch[1].match(/name:\s*(.+)/);
-          const descMatch = fmMatch[1].match(/description:\s*["']?(.+?)["']?\s*$/m);
+          const fm = fmMatch[1];
+          const nameMatch = fm.match(/name:\s*(.+)/);
+          const descMatch = fm.match(/description:\s*["']?(.+?)["']?\s*$/m);
+          const cronMatch = fm.match(/cron(?:Expression)?:\s*["']?([^"'\n]+)/);
           if (nameMatch) name = nameMatch[1].trim();
           if (descMatch) description = descMatch[1].trim();
+          if (cronMatch) cronFromFile = cronMatch[1].trim();
         }
       } catch {}
 
       const meta = spellMeta[d.name] || {};
+
+      // Self-heal: if spell exists on disk but not in config, add it
+      if (!spellMeta[d.name] && d.name.startsWith('merlin-')) {
+        spellMeta[d.name] = { cron: cronFromFile, enabled: true, description };
+        configDirty = true;
+      }
+
       return {
         id: d.name,
         name,
         description,
-        cron: meta.cron || null,
+        cron: meta.cron || cronFromFile || null,
         enabled: meta.enabled !== false,
         lastRun: meta.lastRun || null,
+        lastStatus: meta.lastStatus || null,
+        lastSummary: meta.lastSummary || '',
+        consecutiveFailures: meta.consecutiveFailures || 0,
         isMerlin: d.name.startsWith('merlin-'),
       };
     }).filter(t => t.isMerlin);
+
+    // Auto-repair config if spells were missing
+    if (configDirty) {
+      cfg.spells = spellMeta;
+      writeConfig(cfg);
+    }
+
+    return results;
   } catch { return []; }
 });
 
@@ -699,16 +1195,19 @@ ipcMain.handle('toggle-spell', (_, taskId, enabled) => {
   cfg.spells[taskId] = { ...cfg.spells[taskId], enabled };
   writeConfig(cfg);
 
-  // Ask Claude to actually enable/disable via MCP
+  // Ask Claude to actually enable/disable via MCP (suppressed — no chat chatter)
   if (resolveNextMessage) {
+    _suppressNextResponse = true;
     resolveNextMessage({
       type: 'user',
       message: { role: 'user', content:
-        `Silently ${enabled ? 'enable' : 'disable'} the scheduled task "${taskId}" using update_scheduled_task. Don't explain, just do it and confirm in one short sentence.`
+        `Silently ${enabled ? 'enable' : 'disable'} the scheduled task "${taskId}" using update_scheduled_task. Reply with only "done".`
       }
     });
     return { success: true, synced: true };
   }
+  // Also handle when called via send-message with silent flag
+  // (toggle already updates config above, MCP sync is best-effort)
   // Session not active — local state updated but MCP not called
   return { success: true, synced: false };
 });
@@ -903,11 +1402,19 @@ function getSubscriptionState() {
   const subFile = path.join(appRoot, '.merlin-subscription');
   try {
     if (fs.existsSync(subFile)) {
-      // Try encrypted read first, fallback to plaintext for migration
       let raw = readSecureFile(subFile);
-      if (!raw) raw = fs.readFileSync(subFile, 'utf8');
-      const data = JSON.parse(raw);
-      if (data.subscribed) return { subscribed: true, tier: data.tier || 'pro', key: data.key || '' };
+      if (!raw) {
+        // safeStorage decryption failed — try plaintext fallback
+        try { raw = fs.readFileSync(subFile, 'utf8'); } catch {}
+      }
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (data.subscribed) return { subscribed: true, tier: data.tier || 'pro', key: data.key || '' };
+      } else {
+        // File exists but can't be read (keychain reset, machine migration)
+        // Check with server using machine ID as recovery
+        return { subscribed: false, daysLeft: 7, recoveryNeeded: true };
+      }
     }
   } catch {}
 
@@ -920,10 +1427,10 @@ function getSubscriptionState() {
     trialStart = Date.now();
     try { fs.writeFileSync(trialFile, String(trialStart)); } catch {}
   }
-  // Add referral bonus days (max 70 = 10 referrals)
+  // Add referral bonus days (max 21 = 3 friends × 7 days = 1 month total free trial)
   let bonusDays = 0;
   try { bonusDays = parseInt(fs.readFileSync(path.join(appRoot, '.merlin-referral-bonus'), 'utf8')) || 0; } catch {}
-  bonusDays = Math.min(Math.max(bonusDays, 0), 70);
+  bonusDays = Math.min(Math.max(bonusDays, 0), 21);
   const totalTrialDays = 7 + bonusDays;
   const daysLeft = Math.max(0, totalTrialDays - Math.floor((Date.now() - trialStart) / (1000 * 60 * 60 * 24)));
   return { subscribed: false, daysLeft, bonusDays, trialStart, expired: daysLeft === 0 };

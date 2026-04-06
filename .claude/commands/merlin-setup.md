@@ -151,10 +151,22 @@ Example:
 Bash({ command: '.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd \'{"action":"meta-login"}\'', timeout: 300000 })
 ```
 
-When connecting any ad platform, also set up budget defaults:
-   - `maxDailyAdBudget`: $5 (default, mention to user)
-   - `maxMonthlyAdSpend`: $300 (default, mention to user)
-   - `autoPublishAds`: false (always ask before spending money)
+When connecting any ad platform, ask the user ONE question:
+   "How much do you want to spend per day on ads? (e.g., $20, $50, $100)"
+
+   Save their answer as `dailyAdBudget` in merlin-config.json. Merlin infers everything else:
+   - Monthly cap = dailyAdBudget × 30
+   - Testing budget = 60% of daily budget (split across test ads)
+   - Scaling budget = 30% of daily budget (for winners only)
+   - Retargeting budget = 10% of daily budget
+   - Per-ad test budget = Testing budget ÷ number of active test ads (minimum $5/ad)
+   - Kill threshold = 2× per-ad budget with zero purchases → kill
+   - Scale threshold = ROAS > 1.5× after 48 hours → promote to Scaling
+   - Fatigue threshold = CTR drops 30%+ from peak over 3 days → kill and replace
+
+   If user doesn't answer or says "I don't know", default to $20/day. This is enough to test 3-4 ads at $5 each.
+
+   Always tell the user: "You can change this anytime — just say 'change my daily budget to $X'."
 
 **NEVER ask for tokens, IDs, or keys manually.** NEVER fall back to manual steps like "go to Business Settings → System Users → Generate Token". If OAuth fails, tell the user to try again — do NOT switch to manual token instructions. If OAuth isn't available for a platform yet, say so clearly.
 
@@ -162,38 +174,126 @@ When connecting any ad platform, also set up budget defaults:
    - Use `mcp__scheduled-tasks__create_scheduled_task`
    - **taskId**: `merlin-optimize`
    - **cronExpression**: `0 10 * * 1-5` (10 AM weekdays -- 1 hour after generation)
-   - **description**: `Review ad performance, kill losers, scale winners (with budget checks)`
+   - **description**: `Agency-tier ad optimization: kill losers, scale winners, manage budget`
    - **prompt**:
      ```
      == SETUP ==
      Read .claude/tools/merlin-config.json.
-     CONFIG = the parsed config JSON. Check budget limits before any spend action.
+     CONFIG = the parsed config JSON.
+     DAILY_BUDGET = CONFIG.dailyAdBudget (default $20 if not set)
+
+     Derive all thresholds from DAILY_BUDGET — never hardcode:
+       MONTHLY_CAP = DAILY_BUDGET × 30
+       TESTING_BUDGET = DAILY_BUDGET × 0.60 (60% for testing new creatives)
+       SCALING_BUDGET = DAILY_BUDGET × 0.30 (30% for proven winners)
+       RETARGETING_BUDGET = DAILY_BUDGET × 0.10 (10% for retargeting warm audiences)
+       PER_AD_TEST_BUDGET = max($5, TESTING_BUDGET ÷ active_test_count)
 
      == ERROR HANDLING ==
      Same rules as merlin-daily task: log errors, alert on token expiry, skip and continue.
 
-     == BUDGET CHECK (before ANY ad action) ==
-     Read the current month's total spend from assets/brands/<brand>/memory.md "## Monthly Spend" section.
-     If total spend >= CONFIG.maxMonthlyAdSpend: STOP. Log "Monthly budget cap reached ($X/$Y)."
-     Post to Slack: "✦ Monthly ad budget reached. Pausing all ad operations."
-     Skip all ad operations. Still run the digest portion.
+     == STEP 1: BUDGET PACING CHECK ==
+     Read assets/brands/<brand>/memory.md "## Monthly Spend" section.
+     Calculate: days_elapsed = days since 1st of month, days_remaining = days until end of month
+     Expected pace = MONTHLY_CAP × (days_elapsed / days_in_month)
+     Actual spend = sum of all spend entries this month
 
-     == META (if metaAccessToken configured) ==
-     1. Run: .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"meta-insights"}'
-        If this fails, log the error and skip Meta entirely.
-     2. The app returns each ad with a verdict. Act on verdicts:
-        - KILL / FATIGUE → run meta-kill
-        - WINNER → run meta-duplicate to Scaling campaign (only if budget allows)
-        - MASSIVE_WINNER → run meta-lookalike (only ONCE per winner, check assets/brands/<brand>/memory.md)
-     3. For each new ad being scaled, check: dailyBudget <= CONFIG.maxDailyAdBudget
-     4. Auto-retarget: for any WINNER being scaled, run meta-retarget
+     If actual > expected × 1.2: OVERPACING — reduce today's actions (skip new ad creation, only optimize existing)
+     If actual < expected × 0.5: UNDERPACING — increase today's actions (create extra test ads if budget allows)
+     Log: "Budget pacing: $X spent / $Y expected ($Z cap). Status: ON_PACE / OVERPACING / UNDERPACING"
 
-     == TIKTOK (if tiktokAccessToken configured) ==
-     5. Run tiktok-insights. Same verdict logic. Same budget checks.
+     If actual >= MONTHLY_CAP: STOP all ad operations. Post to Slack: "✦ Monthly budget cap reached."
 
-     == WRAP UP ==
-     6. Update assets/brands/<brand>/memory.md "## Monthly Spend": add today's spend totals
-     7. Update assets/brands/<brand>/memory.md with: which ads killed, scaled, retargeted, and why
+     == STEP 2: PULL PERFORMANCE (all platforms) ==
+     For each configured platform (Meta, TikTok, Google):
+       Run insights action. Collect for every ad:
+       - ad_id, ad_name, status, spend, impressions, clicks, CTR, CPC, purchases, revenue, ROAS
+       - days_running (how long since ad was created)
+       - ctr_trend (compare today's CTR to first 48h average — is it rising or falling?)
+
+     == STEP 3: TRIAGE EVERY AD (agency decision framework) ==
+     For EACH active ad, apply these rules IN ORDER:
+
+     RULE 1 — DEAD ON ARRIVAL (kill fast, save money):
+       If spent >= 2× PER_AD_TEST_BUDGET AND purchases == 0 AND CTR < 1.0%:
+       → KILL immediately. This ad will never convert. Don't waste another dollar.
+
+     RULE 2 — LOW PERFORMER (give it a chance, but not much):
+       If spent >= PER_AD_TEST_BUDGET AND ROAS < 0.5 AND days_running >= 2:
+       → KILL. It had a fair shot and underperformed.
+
+     RULE 3 — CREATIVE FATIGUE (was good, now declining):
+       If days_running >= 5 AND ctr_trend is declining 30%+ from peak:
+       → KILL. Log "Fatigued after {days} days. Peak CTR was {X}%, now {Y}%."
+       → Add to memory: "Hook style '{hook}' fatigued after {days} days for {product}."
+       → Queue a replacement: create new ad for same product with DIFFERENT hook style.
+
+     RULE 4 — PROMISING (keep testing):
+       If days_running < 3 AND CTR >= 1.0%:
+       → HOLD. Too early to judge. Let it run.
+
+     RULE 5 — WINNER (promote to scaling):
+       If ROAS >= 1.5 AND days_running >= 2 AND spend >= PER_AD_TEST_BUDGET:
+       → SCALE. Duplicate to Scaling campaign with budget = SCALING_BUDGET ÷ active_winners.
+       → Log: "Winner: {ad_name} — ROAS {X}x, CTR {Y}%, CPC ${Z}"
+       → Add to memory under "## What Works": the hook style, format, product, audience that worked.
+
+     RULE 6 — MASSIVE WINNER (expand audience):
+       If ROAS >= 3.0 AND spend >= DAILY_BUDGET AND purchases >= 5:
+       → SCALE (if not already) + create LOOKALIKE audience from purchasers.
+       → Only create lookalike ONCE per ad (check memory.md for "lookalike:{ad_id}").
+       → Log: "Massive winner: {ad_name} — ROAS {X}x. Lookalike created."
+
+     RULE 7 — RETARGET (warm audience follow-up):
+       If any WINNER or MASSIVE_WINNER exists AND retargeting campaign has no active ads:
+       → Create a retargeting ad using the winner's creative, targeting website visitors (pixel).
+       → Budget = RETARGETING_BUDGET.
+       → Retargeting creative should emphasize urgency/social proof, not awareness.
+
+     == STEP 4: CREATIVE PIPELINE (replace killed ads) ==
+     Count how many ads were killed today. For each killed ad:
+       If TESTING_BUDGET still has room (total test ad budgets < TESTING_BUDGET):
+       → Queue a NEW test ad for the same product but with a different approach:
+         - Different hook style (if "lifestyle" failed, try "UGC" or "before/after")
+         - Different format (if static failed, try video or carousel)
+         - Different angle (if "comfort" failed, try "style" or "value")
+       → Read memory.md "## What Works" and "## What Fails" to avoid repeating failures.
+       → The new ad will be generated by the merlin-daily task tomorrow. Log the request.
+
+     == STEP 5: CROSS-PLATFORM INTELLIGENCE ==
+     If multiple platforms are active:
+       Compare ROAS across platforms for the same product.
+       If Meta ROAS > 2× TikTok ROAS for the same product:
+       → Shift 20% of TikTok budget to Meta (within DAILY_BUDGET cap).
+       → Log: "Reallocating budget: {product} performs 2× better on Meta."
+       If a creative works well on one platform, note it for cross-posting.
+
+     == STEP 6: DAILY DASHBOARD SNAPSHOT ==
+     Run the unified dashboard to capture today's cross-platform metrics:
+       .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"dashboard","batchCount":1}'
+     This saves a timestamped JSON file locally (results/dashboard_YYYY-MM-DD.json).
+     Over time, these accumulate into a full trend history — no cloud storage needed.
+
+     Also run cohort analysis monthly (1st of each month only):
+       .claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"shopify-cohorts","batchCount":180}'
+     This captures LTV, repeat rate, and churn per monthly customer cohort.
+
+     == STEP 7: WRAP UP ==
+     Update assets/brands/<brand>/memory.md:
+       - "## Monthly Spend": add today's spend by platform
+       - "## Run Log": date, ads killed, ads scaled, ads created, budget pacing status
+       - "## What Works": any new winner patterns (hook + format + audience)
+       - "## What Fails": any new failure patterns (so they're never repeated)
+       - "## MER Trend": today's MER from dashboard output (e.g., "2026-04-05: 2.8x MER, $124 spend")
+
+     Post to Slack if configured:
+       "✦ Daily Optimization — {brand}
+       MER: {X}x | Revenue: ${rev} | Spend: ${spent_today}
+       Budget: ${spent_today} / ${DAILY_BUDGET} daily | ${month_total} / ${MONTHLY_CAP} monthly
+       Killed: {N} (reasons: {brief})
+       Scaled: {N} (best: {top_ad_name} at {ROAS}x)
+       Replacements queued: {N}
+       Pacing: {ON_PACE / OVERPACING / UNDERPACING}"
      ```
 
 7. Create a THIRD scheduled task -- weekly digest (always, not just for ads):

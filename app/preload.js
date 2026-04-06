@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('merlin', {
 
   // Session
   startSession: () => ipcRenderer.invoke('start-session'),
+  stopGeneration: () => ipcRenderer.invoke('stop-generation'),
   getAccountInfo: () => ipcRenderer.invoke('get-account-info'),
   getCredits: () => ipcRenderer.invoke('get-credits'),
   getConnectedPlatforms: () => ipcRenderer.invoke('get-connected-platforms'),
@@ -38,6 +39,19 @@ contextBridge.exposeInMainWorld('merlin', {
   // State persistence
   saveState: (data) => ipcRenderer.invoke('save-state', data),
   loadState: () => ipcRenderer.invoke('load-state'),
+
+  // Revenue tracker
+  getStatsCache: () => ipcRenderer.invoke('get-stats-cache'),
+
+  // Performance + Activity
+  getPerfSummary: (days) => ipcRenderer.invoke('get-perf-summary', days),
+  getActivityFeed: (brand, limit) => ipcRenderer.invoke('get-activity-feed', brand, limit),
+
+  // Archive
+  getArchiveItems: (filters) => ipcRenderer.invoke('get-archive-items', filters),
+  openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
+  copyImage: (filePath) => ipcRenderer.invoke('copy-image', filePath),
+  deleteFile: (folderPath) => ipcRenderer.invoke('delete-file', folderPath),
 
   // Morning briefing
   getBriefing: () => ipcRenderer.invoke('get-briefing'),
@@ -53,7 +67,9 @@ contextBridge.exposeInMainWorld('merlin', {
   toggleSpell: (id, enabled) => ipcRenderer.invoke('toggle-spell', id, enabled),
   updateSpellMeta: (id, meta) => ipcRenderer.invoke('update-spell-meta', id, meta),
   savePastedMedia: (dataUrl, filename) => ipcRenderer.invoke('save-pasted-media', dataUrl, filename),
-  sendMessage: (text) => ipcRenderer.invoke('send-message', text),
+  sendMessage: (text, options) => ipcRenderer.invoke('send-message', text, options),
+  sendSilent: (text) => ipcRenderer.invoke('send-message', text, { silent: true }),
+  createSpell: (taskId, cron, desc, prompt) => ipcRenderer.invoke('create-spell', taskId, cron, desc, prompt),
 
   // Approvals
   approveTool: (id) => ipcRenderer.invoke('approve-tool', id),

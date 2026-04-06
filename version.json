@@ -1,5 +1,5 @@
 {
-  "version": "0.4.2",
+  "version": "0.5.0",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -18,5 +18,5 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v0.4.2: Production hardening — config encryption, ToS acceptance, trial enforcement, error telemetry, crash reporter, macOS quarantine fix, onboarding improvements, Shopify app credentials updated."
+  "notes": "v0.5.0: Archive panel, performance status bar, activity logging, Spellbook overhaul (unified list, direct creation, health dots, custom spells), agency-tier ad optimization, NSIS installer, download redirects, legal hardening."
 }

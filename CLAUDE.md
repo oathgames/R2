@@ -17,28 +17,134 @@ The Merlin app is a tool you invoke via Bash for platform API calls. If it's una
 
 **Invoke pattern:** `.claude/tools/Merlin.exe --config .claude/tools/merlin-config.json --cmd '{"action":"ACTION_NAME", ...}'` (substitute `Merlin` for `Merlin.exe` on Mac)
 
+### Cross-Platform (use these for broad questions)
 | Action | What it does | When to use |
 |---|---|---|
-| `meta-login` | OAuth connect to Meta Ads | User says "connect Meta/Facebook" |
-| `meta-push` | Create + publish ad to Meta | User says "run/publish/push an ad" |
-| `meta-insights` | Pull yesterday's ad performance | User says "how are my ads doing" |
-| `meta-kill` | Pause an ad | User says "stop/pause/kill this ad" |
-| `meta-duplicate` | Scale winner to scaling campaign | User says "scale this ad" |
-| `google-login` | OAuth connect to Google Ads | User says "connect Google" |
-| `google-ads-push` | Create Google Performance Max ad | User wants Google ads |
-| `google-ads-insights` | Google ad performance | User asks about Google performance |
-| `amazon-login` | OAuth connect to Amazon | User says "connect Amazon" |
-| `amazon-ads-push` | Create Sponsored Products ad | User wants Amazon ads |
-| `amazon-products` | List Amazon catalog | User asks about their products |
-| `shopify-login` | OAuth connect to Shopify | User says "connect Shopify" |
-| `shopify-products` | List Shopify products | User asks about inventory |
-| `shopify-orders` | Revenue + order metrics | User asks about sales |
-| `shopify-import` | Auto-pull all products + images | After connecting Shopify |
-| `dashboard` | Unified MER/ROAS across all platforms | User says "how's my marketing" |
-| `image` | Generate AI ad image | User wants a creative/image |
-| `seo-audit` | Audit store SEO | User asks about SEO |
-| `email-audit` | Audit email flows | User asks about email |
-| `wisdom` | Pull collective intelligence trends | Internal — better recommendations |
+| `dashboard` | Unified MER/ROAS/CAC across ALL platforms + Shopify revenue | "how's my marketing", "what's my ROAS", "how much have I spent" |
+| `batch` | Generate multiple ad variations at once | "make 5 versions", "generate variations", "test different hooks" |
+| `calendar` | Marketing calendar and content planning | "what's scheduled", "plan my content", "show my calendar" |
+| `wisdom` | Pull collective intelligence trends from all Merlin users | Internal — improves recommendations automatically |
+
+### Meta Ads (Facebook + Instagram)
+| Action | What it does | When to use |
+|---|---|---|
+| `meta-login` | OAuth connect to Meta Ads | "connect Meta", "connect Facebook", "connect Instagram" |
+| `meta-setup` | Create Testing + Scaling + Retargeting campaigns | After connecting Meta (automatic) |
+| `meta-push` | Create + publish ad to Meta | "run an ad", "publish to Facebook", "push this ad" |
+| `meta-insights` | Pull per-ad performance (CTR, CPC, ROAS) | "how are my Meta ads", "Facebook performance" |
+| `meta-kill` | Pause an ad | "stop this ad", "pause", "kill this ad" |
+| `meta-duplicate` | Copy winner to Scaling campaign | "scale this ad", "double down on this" |
+| `meta-lookalike` | Create lookalike audience from buyers | "create lookalike", "find similar audience", "expand reach" |
+| `meta-retarget` | Create retargeting ad for website visitors | "set up retargeting", "retarget visitors" |
+| `meta-setup-retargeting` | Create pixel-based retargeting audiences | "set up retargeting audiences" |
+| `meta-discover` | Auto-detect ad accounts, pages, pixels | After connecting Meta — finds all assets |
+| `competitor-scan` | Search Meta Ad Library for competitor ads | "show me competitor ads", "what are competitors running" |
+
+### TikTok Ads
+| Action | What it does | When to use |
+|---|---|---|
+| `tiktok-login` | OAuth connect to TikTok Ads | "connect TikTok" |
+| `tiktok-setup` | Create Testing + Scaling campaigns | After connecting TikTok (automatic) |
+| `tiktok-push` | Create + publish ad to TikTok | "run a TikTok ad", "publish to TikTok" |
+| `tiktok-insights` | Pull TikTok ad performance | "how are my TikTok ads" |
+| `tiktok-kill` | Pause a TikTok ad | "pause this TikTok ad" |
+| `tiktok-duplicate` | Copy winner to TikTok Scaling campaign | "scale this TikTok ad" |
+| `tiktok-lookalike` | Create TikTok lookalike audience | "TikTok lookalike audience" |
+
+### Google Ads
+| Action | What it does | When to use |
+|---|---|---|
+| `google-login` | OAuth connect to Google Ads | "connect Google", "connect Google Ads" |
+| `google-ads-setup` | Create Performance Max campaign | After connecting Google (automatic) |
+| `google-ads-push` | Create Google Performance Max ad | "run a Google ad", "create Google campaign" |
+| `google-ads-insights` | Google ad performance metrics | "how are my Google ads" |
+| `google-ads-status` | Check Google Ads account status | "Google Ads status" |
+| `google-ads-kill` | Pause a Google ad | "pause this Google ad" |
+| `google-ads-duplicate` | Scale Google ad winner | "scale this Google ad" |
+
+### Amazon Ads
+| Action | What it does | When to use |
+|---|---|---|
+| `amazon-login` | OAuth connect to Amazon Ads + SP-API | "connect Amazon" |
+| `amazon-ads-setup` | Create Sponsored Products campaign | After connecting Amazon (automatic) |
+| `amazon-ads-push` | Create Sponsored Products ad | "run an Amazon ad" |
+| `amazon-ads-insights` | Amazon ad performance metrics | "how are my Amazon ads" |
+| `amazon-ads-status` | Check Amazon Ads account status | "Amazon Ads status" |
+| `amazon-ads-kill` | Pause an Amazon ad | "pause this Amazon ad" |
+| `amazon-products` | List Amazon product catalog | "show my Amazon products" |
+| `amazon-orders` | Amazon order and revenue metrics | "Amazon sales", "Amazon revenue" |
+
+### Shopify
+| Action | What it does | When to use |
+|---|---|---|
+| `shopify-login` | OAuth connect to Shopify store | "connect Shopify" |
+| `shopify-import` | Auto-pull all products + images into brand folder | After connecting Shopify (automatic) |
+| `shopify-products` | List Shopify products with inventory | "show my products", "what's in stock" |
+| `shopify-orders` | Revenue, AOV, top products | "how are sales", "best selling product", "revenue this month" |
+| `shopify-analytics` | Detailed revenue analytics (revenue, AOV, new vs returning) | "Shopify analytics", "store performance" |
+| `shopify-cohorts` | Customer LTV, repeat rate, churn by monthly cohort | "customer lifetime value", "repeat customers", "churn rate" |
+
+### Content Creation
+| Action | What it does | When to use |
+|---|---|---|
+| `image` | Generate AI ad image (portrait + square) | "make an ad image", "create a creative", "generate an image" |
+| `blog-post` | Write + publish SEO blog post to Shopify | "write a blog post", "create blog content" |
+| `blog-list` | List published blog posts | "show my blog posts", "what blogs have I published" |
+| `social-post` | Post to Facebook Page or Instagram | "post to Instagram", "share on Facebook" |
+
+### SEO
+| Action | What it does | When to use |
+|---|---|---|
+| `seo-audit` | Full SEO health audit of Shopify store | "audit my SEO", "check my website SEO" |
+| `seo-keywords` | Keyword research (Google autocomplete + AI estimation) | "what keywords should I target", "keyword research" |
+| `seo-rankings` | Check current keyword ranking positions | "where do I rank", "check my rankings" |
+| `seo-track` | Add keywords to tracking list | "track this keyword", "monitor rankings for X" |
+| `seo-update-rank` | Refresh ranking data for tracked keywords | "update my rankings" |
+| `seo-gaps` | Find content gap opportunities vs competitors | "content gaps", "what should I write about" |
+| `seo-fix-alt` | Fix missing image alt text on Shopify | "fix alt text", "fix image SEO" |
+
+### Email & Klaviyo
+| Action | What it does | When to use |
+|---|---|---|
+| `klaviyo-login` | OAuth connect to Klaviyo | "connect Klaviyo", "connect email" |
+| `email-audit` | Audit email flows (welcome, abandoned cart, etc.) | "audit my emails", "check my email flows" |
+| `klaviyo-performance` | Email metrics (open rate, click rate, revenue) | "email performance", "how are my emails doing" |
+| `klaviyo-campaigns` | List email campaigns and performance | "show my email campaigns" |
+| `klaviyo-lists` | Show subscriber lists and counts | "how many subscribers", "email list size" |
+| `email-revenue` | Revenue attributed to email marketing | "email revenue", "how much does email make" |
+
+### Voice & Avatar
+| Action | What it does | When to use |
+|---|---|---|
+| `clone-voice` | Clone a voice from audio sample for voiceovers | "clone my voice", "create a voice" |
+| `list-voices` | Show available cloned voices | "show my voices" |
+| `delete-voice` | Remove a cloned voice | "delete this voice" |
+| `list-avatars` | Show available HeyGen/creator avatars | "show avatars", "which avatars can I use" |
+
+### Platform Connections (OAuth — all use 5-min timeout)
+| Action | What it does | When to use |
+|---|---|---|
+| `pinterest-login` | OAuth connect to Pinterest Ads | "connect Pinterest" |
+| `snapchat-login` | OAuth connect to Snapchat Ads | "connect Snapchat" |
+| `twitter-login` | OAuth connect to X/Twitter Ads | "connect Twitter", "connect X" |
+| `api-key-setup` | Open browser to API key page (fal.ai, ElevenLabs, etc.) | "set up fal.ai", "add API key" |
+| `verify-key` | Verify an API key is valid | "check my API key", "verify connection" |
+
+### System
+| Action | What it does | When to use |
+|---|---|---|
+| `archive` | Move old result folders to results/archive/ | "clean up old results", "archive results" |
+| `version` | Show current Merlin version | "what version am I on" |
+| `report` | Submit anonymous performance data to Wisdom API | Internal — automatic |
+
+### Routing Rules (when the user's intent is ambiguous)
+- **"How are my ads doing?"** → Use `dashboard` (cross-platform MER/ROAS). Only use platform-specific insights if user names a platform ("how are my Meta ads" → `meta-insights`).
+- **"What's my ROAS?"** → Use `dashboard` (blended ROAS across all platforms).
+- **"How much have I spent?"** → Use `dashboard` (total spend breakdown by platform).
+- **"Pause all my ads"** → Run `meta-kill`, `tiktok-kill`, `google-ads-kill`, `amazon-ads-kill` for each platform that has active ads.
+- **"Change my budget to $X"** → Update `dailyAdBudget` in merlin-config.json. Tell user the new monthly cap ($X × 30).
+- **"What should I do next?"** → Run `dashboard` + check `assets/brands/<brand>/memory.md` for recent learnings. Give a strategic recommendation based on data.
+- **"Make me an ad"** (no platform specified) → Generate the creative with `image` or video pipeline. Ask before publishing: "Want me to push this to Meta, TikTok, Google, or all of them?"
 
 For OAuth actions, always use `timeout: 300000` (5 minutes) so the user has time to authorize in-browser.
 
