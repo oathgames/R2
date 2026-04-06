@@ -1,5 +1,5 @@
 {
-  "version": "0.6.0",
+  "version": "0.6.5",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -18,10 +18,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v0.6.0: Per-brand connections + spells, brand selector in perf bar, test harness (--test-all), preloaded sidebar data, agency report UX, archive scroll stability, input validation hardening, security headers on WS server.",
+  "notes": "v0.6.5: Wisdom insights (app-exclusive), morning briefing, onboarding progress tracker, first-run showcase, spell error retry, XSS fix (code copy), path validation hardening, installer fixes, empty states, Wisdom caching.",
   "whatsNew": [
-    "Manage connections & spells per brand",
-    "Live Ads tab in Archive",
-    "Agency report generator"
+    "Wisdom — collective intelligence from the Merlin network",
+    "Morning briefing on app open",
+    "Onboarding progress tracker + first-run showcase"
   ]
 }

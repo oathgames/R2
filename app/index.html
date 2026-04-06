@@ -21,6 +21,7 @@
   <div class="titlebar-controls">
     <span id="version-label" class="version-label" data-tip="" data-tip-pos="bottom"></span>
     <button id="archive-btn" class="magic-btn-inline" aria-label="Archive" data-tip="Archive" data-tip-pos="bottom"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+    <button id="wisdom-header-btn" class="magic-btn-inline" aria-label="Wisdom" data-tip="Merlin's Wisdom" data-tip-pos="bottom"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg></button>
     <button id="magic-btn" class="magic-btn-inline" aria-label="Merlin's Magic" data-tip="Merlin's Magic" data-tip-pos="bottom">✦</button>
     <button id="btn-min" class="win-ctrl" aria-label="Minimize">&#x2013;</button>
     <button id="btn-max" class="win-ctrl" aria-label="Maximize">&#x25A1;</button>
@@ -43,6 +44,21 @@
     </div>
     <button id="agency-report-btn" class="agency-report-btn">Agency</button>
   </div>
+</div>
+
+<!-- Onboarding Progress Bar (persistent, dismissible) -->
+<div id="progress-bar" class="progress-bar hidden">
+  <div class="progress-track">
+    <div id="progress-fill" class="progress-fill" style="width:0%"></div>
+  </div>
+  <div id="progress-steps" class="progress-steps">
+    <span class="progress-step" data-step="brand">Brand created</span>
+    <span class="progress-step" data-step="products">Products added</span>
+    <span class="progress-step" data-step="platform">Ad platform connected</span>
+    <span class="progress-step" data-step="automation">Automation active</span>
+  </div>
+  <div id="progress-next" class="progress-next"></div>
+  <button id="progress-close" class="progress-close">&times;</button>
 </div>
 
 <!-- Chat -->
@@ -178,8 +194,9 @@
     </div>
     <div id="archive-grid" class="archive-grid"></div>
     <div id="archive-empty" class="archive-empty" style="display:none">
+      <div class="empty-icon">✦</div>
       <p>No content yet</p>
-      <p class="archive-empty-sub">Say "make me an ad" to get started</p>
+      <p class="archive-empty-sub">Tell Merlin "make me an ad" to create your first creative</p>
     </div>
     <div id="archive-loading" class="archive-loading" style="display:none">Loading...</div>
   </div>
@@ -236,6 +253,20 @@
       </button>
       <span class="stats-watermark">✦ Merlin</span>
     </div>
+  </div>
+</div>
+
+<!-- Wisdom Overlay (full-frame takeover) -->
+<div id="wisdom-overlay" class="wisdom-fullframe hidden">
+  <div class="wisdom-header">
+    <div class="wisdom-title-row">
+      <span class="magic-title">✦ Wisdom</span>
+      <span id="wisdom-sample" style="font-size:11px;color:var(--text-dim);margin-left:8px"></span>
+    </div>
+    <button id="wisdom-close" class="magic-close">&times;</button>
+  </div>
+  <div class="wisdom-scroll">
+    <div id="wisdom-grid" class="wisdom-grid"></div>
   </div>
 </div>
 

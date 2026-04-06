@@ -54,6 +54,31 @@ a:hover{text-decoration:underline}
 .hidden{display:none !important}
 
 
+/* ── Onboarding Progress Bar ─────────────────────────────── */
+.progress-bar{
+  flex-shrink:0;
+  padding:8px 16px 10px;
+  border-bottom:1px solid var(--border);
+  background:var(--bg-deep);
+  position:relative;
+}
+.progress-bar.hidden{display:none}
+.progress-track{height:3px;background:var(--surface);border-radius:2px;overflow:hidden;margin-bottom:6px}
+.progress-fill{height:100%;background:linear-gradient(90deg,#a78bfa,#34d399);border-radius:2px;transition:width .6s ease}
+.progress-steps{display:flex;gap:12px;flex-wrap:wrap}
+.progress-step{font-size:10px;color:var(--text-dim)}
+.progress-step.done{color:var(--success)}
+.progress-step.done::before{content:'✓ '}
+.progress-step.active{color:var(--text-muted)}
+.progress-step.active::before{content:'○ '}
+.progress-next{font-size:10px;color:var(--text-dim);margin-top:4px}
+.progress-close{
+  position:absolute;top:6px;right:10px;
+  background:none;border:none;color:var(--text-dim);
+  font-size:14px;cursor:pointer;padding:0 4px;line-height:1;
+}
+.progress-close:hover{color:var(--text)}
+
 /* ── Chat Container ──────────────────────────────────────── */
 #chat{
   flex:1;
@@ -215,6 +240,18 @@ a:hover{text-decoration:underline}
   cursor:pointer;font-family:var(--font);transition:all .2s;
 }
 .briefing-dismiss:hover{background:rgba(255,255,255,.1);color:var(--text)}
+
+/* Onboarding Progress */
+.onboarding-progress{
+  background:linear-gradient(135deg,rgba(167,139,250,.06),rgba(52,211,153,.04));
+  border:1px solid rgba(167,139,250,.15);border-radius:12px;padding:14px 16px;
+}
+.onboarding-bar-track{height:4px;background:var(--surface);border-radius:2px;margin-bottom:10px;overflow:hidden}
+.onboarding-bar-fill{height:100%;background:linear-gradient(90deg,#a78bfa,#34d399);border-radius:2px;transition:width .5s ease}
+.onboarding-steps{display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px}
+.onboarding-step{font-size:12px;color:var(--text-dim)}
+.onboarding-step.done{color:var(--success)}
+.onboarding-next{font-size:12px;color:var(--text-muted)}
 
 /* Tables */
 .msg-bubble table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12.5px}
@@ -758,26 +795,27 @@ a:hover{text-decoration:underline}
   -webkit-app-region:no-drag;
 }
 .magic-btn-inline.sparkle-hint{
-  animation:sparkle-pulse 1s ease-in-out infinite;
-  box-shadow:0 0 12px rgba(167,139,250,.4),0 0 24px rgba(52,211,153,.2);
+  animation:sparkle-pulse 1.2s ease-in-out infinite;
+  box-shadow:0 0 8px rgba(167,139,250,.35),0 0 16px rgba(52,211,153,.15);
 }
 @keyframes sparkle-pulse{
-  0%,100%{transform:scale(1);box-shadow:0 0 12px rgba(167,139,250,.4)}
-  50%{transform:scale(1.15);box-shadow:0 0 20px rgba(167,139,250,.6),0 0 32px rgba(52,211,153,.3)}
+  0%,100%{transform:scale(1);box-shadow:0 0 8px rgba(167,139,250,.35)}
+  50%{transform:scale(1.1);box-shadow:0 0 14px rgba(167,139,250,.5),0 0 22px rgba(52,211,153,.25)}
 }
 .magic-btn-inline{
-  width:32px;height:32px;
+  width:28px;height:28px;
   border:none;
   background:linear-gradient(135deg,rgba(167,139,250,.12),rgba(52,211,153,.12));
-  border-radius:8px;
+  border-radius:7px;
   color:var(--accent);
-  font-size:14px;
+  font-size:13px;
   cursor:pointer;
   margin-right:4px;
   display:flex;align-items:center;justify-content:center;
   transition:all .2s;
 }
 .magic-btn-inline:hover{background:linear-gradient(135deg,rgba(167,139,250,.22),rgba(52,211,153,.22))}
+.magic-btn-inline:focus,.magic-btn-inline:focus-visible{outline:none;box-shadow:none}
 .win-ctrl{
   width:46px;height:100%;
   border:none;background:transparent;
@@ -817,9 +855,9 @@ a:hover{text-decoration:underline}
 .magic-header{
   display:flex;align-items:center;justify-content:space-between;
   padding:16px 20px;
-  border-bottom:1px solid var(--border);
+  border-bottom:1px solid rgba(139,92,246,.15);
   flex-shrink:0;
-  background:var(--bg-deep);
+  background:linear-gradient(135deg,rgba(139,92,246,.08),rgba(52,211,153,.04));
   z-index:1;
   -webkit-app-region:drag;
 }
@@ -976,6 +1014,13 @@ a:hover{text-decoration:underline}
 }
 .spell-toggle:hover{background:var(--surface);color:var(--text)}
 .spell-toggle.spell-on{color:var(--success);border-color:rgba(52,211,153,.3)}
+.spell-retry{
+  font-size:10px;padding:2px 8px;border-radius:4px;
+  border:1px solid rgba(239,68,68,.3);background:rgba(239,68,68,.08);
+  color:#ef4444;cursor:pointer;flex-shrink:0;
+  transition:all .2s;font-family:var(--font);margin-right:4px;
+}
+.spell-retry:hover{background:rgba(239,68,68,.15)}
 .spellbook-warning{
   font-size:11px;color:#f59e0b;
   background:rgba(245,158,11,.08);
@@ -1022,6 +1067,46 @@ a:hover{text-decoration:underline}
   transition:all .2s;font-family:var(--font);
 }
 .add-brand-btn:hover{border-color:var(--accent-border);color:var(--accent)}
+
+/* ── Wisdom (full-frame takeover) ───────────────────────── */
+.wisdom-fullframe{
+  position:absolute;top:36px;left:0;right:0;bottom:0;
+  background:var(--bg);z-index:55;
+  display:flex;flex-direction:column;
+}
+.wisdom-fullframe.hidden{display:none}
+.wisdom-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0;
+  background:linear-gradient(135deg,rgba(139,92,246,.08),rgba(52,211,153,.04));
+}
+.wisdom-title-row{display:flex;align-items:baseline}
+.wisdom-scroll{
+  flex:1;overflow-y:scroll;padding:16px;
+  scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.08) transparent;
+}
+.wisdom-scroll::-webkit-scrollbar{width:4px}
+.wisdom-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:2px}
+.wisdom-grid{
+  display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;
+}
+.wisdom-card-title{
+  font-size:11px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px;
+  background:linear-gradient(135deg,#a78bfa,#34d399);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+.wisdom-rank{margin-bottom:8px}
+.wisdom-rank:last-child{margin-bottom:0}
+.wisdom-rank-row{display:flex;justify-content:space-between;margin-bottom:3px}
+.wisdom-rank-label{font-size:12px;color:var(--text-muted)}
+.wisdom-rank-value{font-size:12px;font-weight:600}
+.wisdom-bar{background:var(--surface);border-radius:3px;height:4px;overflow:hidden}
+.wisdom-bar-fill{height:100%;border-radius:3px;min-width:2px}
+.wisdom-rank-sub{font-size:10px;color:var(--text-dim);margin-top:1px}
+.wisdom-timing-label{font-size:10px;color:var(--text-dim);margin-bottom:2px}
+.wisdom-timing-value{font-size:16px;font-weight:600;color:var(--text);margin-bottom:10px}
 
 /* ── Revenue Tracker (Merlin Made Me) ──────────────────── */
 .stats-card{
@@ -1561,6 +1646,9 @@ a:hover{text-decoration:underline}
   padding: 40px 20px;
   color: var(--text-dim);
   font-size: 13px;
+}
+.archive-empty .empty-icon {
+  font-size: 28px; margin-bottom: 8px; opacity: .4;
 }
 .archive-empty-sub { font-size: 12px; margin-top: 4px; color: var(--text-dim); opacity: .7; }
 

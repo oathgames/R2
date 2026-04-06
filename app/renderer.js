@@ -197,8 +197,9 @@ async function init() {
       if (briefing.content) briefingHtml += `<div class="briefing-section"><div class="briefing-label">Content Published</div><div class="briefing-content">${escapeHtml(briefing.content)}</div></div>`;
       if (briefing.revenue) briefingHtml += `<div class="briefing-section"><div class="briefing-label">Revenue</div><div class="briefing-content">${escapeHtml(briefing.revenue)}</div></div>`;
       if (briefing.recommendation) briefingHtml += `<div class="briefing-section"><div class="briefing-label">💡 Recommendation</div><div class="briefing-content">${escapeHtml(briefing.recommendation)}</div></div>`;
-      briefingHtml += `<button class="briefing-dismiss" onclick="this.closest('.msg').remove();merlin.dismissBriefing()">Got it</button></div>`;
+      briefingHtml += `</div>`;
       welcomeBubble.innerHTML = briefingHtml;
+      merlin.dismissBriefing(); // Mark as seen so it doesn't repeat
       currentBubble = null;
       textBuffer = '';
       // Add a second bubble for the normal welcome
@@ -210,6 +211,36 @@ async function init() {
     } else {
       welcomeBubble.innerHTML = `Welcome back — loading ${escapeHtml(brandName)}...`;
     }
+
+    // Onboarding progress tracker — show if setup incomplete
+    const connections = await merlin.getConnectedPlatforms(activeBrand).catch(() => []);
+    const spells = await merlin.listSpells(activeBrand).catch(() => []);
+    const hasAdPlatform = connections.some(c => ['meta', 'tiktok', 'google'].includes(c));
+    const hasSpells = spells.length > 0;
+    const hasProducts = productCount > 0;
+
+    const steps = [
+      { done: true, label: 'Brand created' },
+      { done: hasProducts, label: 'Products added' },
+      { done: hasAdPlatform, label: 'Ad platform connected' },
+      { done: hasSpells, label: 'Automation active' },
+    ];
+    const completed = steps.filter(s => s.done).length;
+
+    if (completed < steps.length) {
+      const progressBubble = addClaudeBubble();
+      progressBubble.classList.remove('streaming');
+      const nextStep = steps.find(s => !s.done);
+      const pct = Math.round((completed / steps.length) * 100);
+      progressBubble.innerHTML = `<div class="onboarding-progress">
+        <div class="onboarding-bar-track"><div class="onboarding-bar-fill" style="width:${pct}%"></div></div>
+        <div class="onboarding-steps">${steps.map(s => `<span class="onboarding-step ${s.done ? 'done' : ''}">${s.done ? '✓' : '○'} ${escapeHtml(s.label)}</span>`).join('')}</div>
+        <div class="onboarding-next">Next: <strong>${escapeHtml(nextStep.label)}</strong> — just ask and I'll walk you through it.</div>
+      </div>`;
+      currentBubble = null;
+      textBuffer = '';
+    }
+
     // No interval needed — SDK takes over quickly for returning users
     window._welcomeInterval = null;
   } else {
@@ -271,6 +302,7 @@ async function init() {
       turnStartTime = Date.now();
       sessionActive = true;
       merlin.startSession();
+      setTimeout(updateProgressBar, 2000);
       return true;
     }
     return false;
@@ -488,6 +520,8 @@ function finalizeBubble() {
   if (panel && !panel.classList.contains('hidden')) {
     loadConnections();
   }
+  // Update progress bar (may have changed after this turn)
+  updateProgressBar();
   // If session is still active, show typing indicator after a pause
   // Long delay prevents flickering during rapid stream events
   scheduleTypingIndicator();
@@ -574,7 +608,7 @@ function renderMarkdown(text) {
     const langLabel = lang || 'text';
     const blockId = `cb-${Date.now()}-${codeBlocks.length}`;
     codeBlocks.push(
-      `<div class="code-block"><div class="code-block-header"><span>${langLabel}</span><button class="copy-btn" onclick="navigator.clipboard.writeText(decodeURIComponent('${encodeURIComponent(code.replace(/\n$/, ''))}')).then(()=>{this.textContent='Copied!';this.classList.add('copied');setTimeout(()=>{this.textContent='Copy';this.classList.remove('copied')},2000)})">Copy</button></div><pre><code class="lang-${langLabel}">${code}</code></pre></div>`
+      `<div class="code-block"><div class="code-block-header"><span>${langLabel}</span><button class="copy-btn" data-copy="${encodeURIComponent(code.replace(/\n$/, ''))}">Copy</button></div><pre><code class="lang-${langLabel}">${code}</code></pre></div>`
     );
     return `%%CODEBLOCK_${codeBlocks.length - 1}%%`;
   });
@@ -583,8 +617,7 @@ function renderMarkdown(text) {
   html = html.replace(/`([^`]+)`/g, (match, content) => {
     const isActionable = content.length > 20 || /^(https?:|\/|npm |curl |pip |brew |apt |git |cd |mkdir |xattr )/.test(content);
     if (isActionable) {
-      const encoded = encodeURIComponent(content);
-      return `<code>${content}</code><button class="copy-btn inline-copy" onclick="navigator.clipboard.writeText(decodeURIComponent('${encoded}')).then(()=>{this.textContent='✓';setTimeout(()=>{this.textContent='⧉'},1500)})">⧉</button>`;
+      return `<code>${content}</code><button class="copy-btn inline-copy" data-copy="${encodeURIComponent(content)}">⧉</button>`;
     }
     return `<code>${content}</code>`;
   });
@@ -684,12 +717,25 @@ function renderMarkdown(text) {
   artifacts.forEach((art, i) => {
     const encoded = encodeURIComponent(art.code);
     html = html.replace(`%%ARTIFACT_${i}%%`,
-      `<div class="artifact"><div class="code-block-header"><span>preview</span><button class="copy-btn" onclick="navigator.clipboard.writeText(decodeURIComponent('${encoded}')).then(()=>{this.textContent='Copied!';this.classList.add('copied');setTimeout(()=>{this.textContent='Copy HTML';this.classList.remove('copied')},2000)})">Copy HTML</button></div><iframe sandbox="allow-scripts" srcdoc="${art.code.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="width:100%;min-height:200px;border:1px solid var(--border);border-radius:0 0 8px 8px;background:#fff"></iframe></div>`
+      `<div class="artifact"><div class="code-block-header"><span>preview</span><button class="copy-btn" data-copy="${encoded}">Copy HTML</button></div><iframe sandbox="allow-scripts" srcdoc="${art.code.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="width:100%;min-height:200px;border:1px solid var(--border);border-radius:0 0 8px 8px;background:#fff"></iframe></div>`
     );
   });
 
   return html;
 }
+
+// Delegated copy handler for all data-copy buttons (prevents XSS from inline onclick)
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-copy]');
+  if (!btn) return;
+  const text = decodeURIComponent(btn.dataset.copy);
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = orig === '⧉' ? '✓' : 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+  });
+});
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -1252,6 +1298,114 @@ function populateStatsCard(cache) {
 document.getElementById('stats-close').addEventListener('click', () => {
   document.getElementById('stats-overlay').classList.add('hidden');
 });
+
+// ── Wisdom Overlay ─────────────────────────────────────────
+document.getElementById('wisdom-header-btn').addEventListener('click', async () => {
+  document.getElementById('magic-panel').classList.add('hidden');
+  document.getElementById('archive-panel').classList.add('hidden');
+  const overlay = document.getElementById('wisdom-overlay');
+
+  // Toggle — if already open, just close
+  if (!overlay.classList.contains('hidden')) {
+    overlay.classList.add('hidden');
+    return;
+  }
+
+  const grid = document.getElementById('wisdom-grid');
+  const sampleEl = document.getElementById('wisdom-sample');
+
+  grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-dim);padding:20px">Loading...</div>';
+  overlay.classList.remove('hidden');
+
+  let w = null;
+  try { w = await merlin.getWisdom(); } catch {}
+  if (!w) {
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-dim);padding:20px">No data yet — Wisdom grows as ads run.</div>';
+    return;
+  }
+
+  const sample = w.sample_size || 0;
+  sampleEl.textContent = sample > 0 ? `From ${sample.toLocaleString()} anonymized ads` : 'Collecting data...';
+
+  const patterns = w.patterns || {};
+  const topHooks = (patterns.top_hooks || []).slice(0, 4);
+  const topScenes = (patterns.top_scenes || []).slice(0, 4);
+  const topModels = (patterns.top_models || []);
+  const imageModels = topModels.filter(m => m.type === 'image').slice(0, 3);
+  const videoModels = topModels.filter(m => m.type === 'video').slice(0, 3);
+  const formats = w.formats || {};
+  const timing = w.timing || {};
+
+  const formatList = Object.entries(formats)
+    .map(([name, v]) => ({ name, ...v }))
+    .sort((a, b) => (b.avg_roas || 0) - (a.avg_roas || 0))
+    .slice(0, 4);
+
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const bestDays = (timing.best_days || []).map(i => dayNames[i] || i).join(', ');
+  const bestHours = (timing.best_hours || []).map(h => {
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    return (h === 0 ? 12 : h > 12 ? h - 12 : h) + ampm;
+  }).join(', ');
+
+  const empty = '<div style="color:var(--text-dim);font-size:12px">Collecting...</div>';
+
+  function rankRows(items, valFn, color, maxVal) {
+    if (!items.length) return empty;
+    return items.map(item => {
+      const val = valFn(item);
+      const pct = maxVal > 0 ? Math.min(100, (val / maxVal) * 100) : 0;
+      return `<div class="wisdom-rank">
+        <div class="wisdom-rank-row">
+          <span class="wisdom-rank-label">${escapeHtml(item.label)}</span>
+          <span class="wisdom-rank-value" style="color:${color}">${item.display}</span>
+        </div>
+        <div class="wisdom-bar"><div class="wisdom-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+        ${item.sub ? `<div class="wisdom-rank-sub">${escapeHtml(item.sub)}</div>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  const hookItems = topHooks.map(h => ({ label: h.hook, display: h.avg_roas + 'x', sub: h.sample + ' ads', val: h.avg_roas }));
+  const sceneItems = topScenes.map(s => ({ label: s.scene, display: s.avg_roas + 'x', sub: s.sample + ' ads', val: s.avg_roas }));
+  const imgItems = imageModels.map(m => ({ label: m.model, display: m.avg_roas + 'x', sub: m.win_rate + '% wins · ' + m.sample + ' ads', val: m.avg_roas }));
+  const vidItems = videoModels.map(m => ({ label: m.model, display: m.avg_roas + 'x', sub: m.win_rate + '% wins · ' + m.sample + ' ads', val: m.avg_roas }));
+  const fmtItems = formatList.map(f => ({ label: f.name, display: f.avg_roas + 'x', sub: (f.win_rate || 0) + '% wins', val: f.avg_roas }));
+
+  grid.innerHTML = `
+    <div>
+      <div class="wisdom-card-title">Top Hooks</div>
+      ${rankRows(hookItems, i => i.val, '#22c55e', hookItems.length ? Math.max(...hookItems.map(i => i.val)) : 1)}
+    </div>
+    <div>
+      <div class="wisdom-card-title">Creative Styles</div>
+      ${rankRows(sceneItems, i => i.val, '#8b5cf6', sceneItems.length ? Math.max(...sceneItems.map(i => i.val)) : 1)}
+    </div>
+    <div>
+      <div class="wisdom-card-title">Image Models</div>
+      ${rankRows(imgItems, i => i.val, '#3b82f6', imgItems.length ? Math.max(...imgItems.map(i => i.val)) : 1)}
+    </div>
+    <div>
+      <div class="wisdom-card-title">Video Models</div>
+      ${rankRows(vidItems, i => i.val, '#f59e0b', vidItems.length ? Math.max(...vidItems.map(i => i.val)) : 1)}
+    </div>
+    <div>
+      <div class="wisdom-card-title">Best Formats</div>
+      ${rankRows(fmtItems, i => i.val, '#06b6d4', fmtItems.length ? Math.max(...fmtItems.map(i => i.val)) : 1)}
+    </div>
+    <div>
+      <div class="wisdom-card-title">Best Timing</div>
+      <div class="wisdom-timing-label">BEST DAYS</div>
+      <div class="wisdom-timing-value">${escapeHtml(bestDays || 'Collecting...')}</div>
+      <div class="wisdom-timing-label">BEST HOURS</div>
+      <div class="wisdom-timing-value" style="margin-bottom:0">${escapeHtml(bestHours || 'Collecting...')}</div>
+    </div>
+  `;
+});
+
+document.getElementById('wisdom-close').addEventListener('click', () => {
+  document.getElementById('wisdom-overlay').classList.add('hidden');
+});
 document.getElementById('stats-overlay').addEventListener('click', (e) => {
   if (e.target.id === 'stats-overlay') document.getElementById('stats-overlay').classList.add('hidden');
 });
@@ -1307,7 +1461,8 @@ function loadConnections() {
 }
 
 document.getElementById('magic-btn').addEventListener('click', () => {
-  document.getElementById('archive-panel').classList.add('hidden'); // close archive
+  document.getElementById('archive-panel').classList.add('hidden');
+  document.getElementById('wisdom-overlay').classList.add('hidden');
   const panel = document.getElementById('magic-panel');
   panel.classList.toggle('hidden');
   // Load brands first (sets vertical filter), then connections (hides connected from available)
@@ -1623,9 +1778,30 @@ function buildSpellRow(spell, isActive) {
     setTimeout(loadSpells, 500);
   };
 
-  row.appendChild(dot);
-  row.appendChild(info);
-  row.appendChild(toggle);
+  // Show retry button for failed spells
+  if (spell.consecutiveFailures >= 2 && spell.enabled) {
+    const retry = document.createElement('button');
+    retry.className = 'spell-retry';
+    retry.textContent = 'Retry';
+    retry.title = spell.lastSummary || 'Tap to retry now';
+    retry.onclick = (e) => {
+      e.stopPropagation();
+      retry.textContent = '...';
+      retry.disabled = true;
+      // Reset failure count and trigger a run
+      merlin.updateSpellMeta(spell.id, { consecutiveFailures: 0, lastStatus: 'running' });
+      merlin.sendSilent(`Run the scheduled task "${spell.id}" now. It has been failing — diagnose and fix if possible.`);
+      setTimeout(loadSpells, 2000);
+    };
+    row.appendChild(dot);
+    row.appendChild(info);
+    row.appendChild(retry);
+    row.appendChild(toggle);
+  } else {
+    row.appendChild(dot);
+    row.appendChild(info);
+    row.appendChild(toggle);
+  }
   return row;
 }
 
@@ -2446,7 +2622,7 @@ async function loadActivityFeed() {
     section.className = 'activity-section';
 
     if (!items || items.length === 0) {
-      section.innerHTML = '<div class="activity-section-label">Activity</div><div style="color:var(--text-dim);padding:20px 0;text-align:center;font-size:12px">No activity yet — Merlin will log actions here as you create content and run campaigns.</div>';
+      section.innerHTML = '<div class="activity-section-label">Activity</div><div style="color:var(--text-dim);padding:20px 0;text-align:center;font-size:12px"><div style="font-size:24px;opacity:.4;margin-bottom:6px">✦</div>No activity yet<br><span style="opacity:.7">Actions appear here as you create ads and run campaigns</span></div>';
       const grid = document.getElementById('archive-grid');
       grid.parentNode.insertBefore(section, grid);
       return;
@@ -2506,6 +2682,7 @@ async function loadActivityFeed() {
 // ── Archive Panel ──────────────────────────────────────────
 document.getElementById('archive-btn').addEventListener('click', () => {
   document.getElementById('magic-panel').classList.add('hidden');
+  document.getElementById('wisdom-overlay').classList.add('hidden');
   const panel = document.getElementById('archive-panel');
   panel.classList.toggle('hidden');
   if (!panel.classList.contains('hidden')) { showArchiveView(); }
@@ -2830,6 +3007,54 @@ merlin.onTrialExpired(() => {
     addUserBubble('I have a license key');
     merlin.sendMessage('I have a license key to activate');
   });
+});
+
+// ── Onboarding Progress Bar ──────────────────────────────────
+async function updateProgressBar() {
+  try {
+    const state = await merlin.loadState().catch(() => ({}));
+    if (state.progressDismissed) return;
+
+    const brands = await merlin.getBrands().catch(() => []);
+    const connected = await merlin.getConnectedPlatforms().catch(() => []);
+    const spells = await merlin.listSpells().catch(() => []);
+
+    const steps = [
+      { key: 'brand', done: brands && brands.length > 0 },
+      { key: 'products', done: brands && brands.some(b => b.productCount > 0) },
+      { key: 'platform', done: connected && connected.length > 0 },
+      { key: 'automation', done: spells && spells.length > 0 },
+    ];
+    const doneCount = steps.filter(s => s.done).length;
+
+    if (doneCount === 4 || doneCount === 0) {
+      document.getElementById('progress-bar').classList.add('hidden');
+      return;
+    }
+
+    const bar = document.getElementById('progress-bar');
+    bar.classList.remove('hidden');
+    document.getElementById('progress-fill').style.width = `${(doneCount / 4) * 100}%`;
+
+    steps.forEach(s => {
+      const el = document.querySelector(`.progress-step[data-step="${s.key}"]`);
+      if (el) el.className = `progress-step ${s.done ? 'done' : 'active'}`;
+    });
+
+    const nextStep = steps.find(s => !s.done);
+    const hints = {
+      brand: 'Next: Drop your website URL and we\'ll set up your brand.',
+      products: 'Next: Connect Shopify or drop product photos to add products.',
+      platform: 'Next: Connect Meta, Google, or Amazon in the ✦ menu.',
+      automation: 'Next: Set up autopilot — just ask and we\'ll walk you through it.',
+    };
+    document.getElementById('progress-next').textContent = nextStep ? hints[nextStep.key] || '' : '';
+  } catch {}
+}
+
+document.getElementById('progress-close')?.addEventListener('click', () => {
+  document.getElementById('progress-bar').classList.add('hidden');
+  merlin.saveState({ progressDismissed: true });
 });
 
 // ── Init (after ToS check) ─────────────────────────────────

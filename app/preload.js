@@ -57,6 +57,9 @@ contextBridge.exposeInMainWorld('merlin', {
   copyImage: (filePath) => ipcRenderer.invoke('copy-image', filePath),
   deleteFile: (folderPath) => ipcRenderer.invoke('delete-file', folderPath),
 
+  // Wisdom
+  getWisdom: () => ipcRenderer.invoke('get-wisdom'),
+
   // Morning briefing
   getBriefing: () => ipcRenderer.invoke('get-briefing'),
   dismissBriefing: () => ipcRenderer.invoke('dismiss-briefing'),
