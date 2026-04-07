@@ -62,6 +62,9 @@ contextBridge.exposeInMainWorld('merlin', {
   // Wisdom
   getWisdom: () => ipcRenderer.invoke('get-wisdom'),
 
+  // Disconnect platform
+  disconnectPlatform: (platform, brand) => ipcRenderer.invoke('disconnect-platform', platform, brand),
+
   // Morning briefing
   getBriefing: (brand) => ipcRenderer.invoke('get-briefing', brand),
   dismissBriefing: (brand) => ipcRenderer.invoke('dismiss-briefing', brand),
@@ -103,6 +106,7 @@ contextBridge.exposeInMainWorld('merlin', {
   onSubscriptionActivated: (cb) => ipcRenderer.on('subscription-activated', (_, data) => cb(data)),
   onSpellActivity: (cb) => ipcRenderer.on('spell-activity', (_, data) => cb(data)),
   onSpellCompleted: (cb) => ipcRenderer.on('spell-completed', (_, data) => cb(data)),
+  onPerfDataChanged: (cb) => ipcRenderer.on('perf-data-changed', (_, data) => cb(data)),
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_, info) => cb(info)),
   onUpdateProgress: (cb) => ipcRenderer.on('update-progress', (_, msg) => cb(msg)),
   onUpdateReady: (cb) => ipcRenderer.on('update-ready', (_, info) => cb(info)),

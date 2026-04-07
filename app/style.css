@@ -511,7 +511,6 @@ a:hover{text-decoration:underline}
   align-items:center;
   justify-content:center;
   padding:24px;
-  animation:fadeIn .3s ease;
 }
 .setup-card{
   text-align:center;
@@ -1135,6 +1134,18 @@ a:hover{text-decoration:underline}
 .wisdom-rank-sub{font-size:10px;color:var(--text-dim);margin-top:1px}
 .wisdom-timing-label{font-size:10px;color:var(--text-dim);margin-bottom:2px}
 .wisdom-timing-value{font-size:16px;font-weight:600;color:var(--text);margin-bottom:10px}
+
+/* ── Perf Bar Shimmer (loading state) ──────────────────── */
+.perf-shimmer{
+  display:inline-block;width:180px;height:12px;border-radius:3px;
+  background:linear-gradient(90deg,var(--surface) 25%,rgba(255,255,255,.06) 50%,var(--surface) 75%);
+  background-size:200% 100%;
+  animation:shimmer 1.5s infinite;
+}
+@keyframes shimmer{
+  0%{background-position:200% 0}
+  100%{background-position:-200% 0}
+}
 
 /* ── Revenue Tracker (Merlin Made Me) ──────────────────── */
 .stats-card{

@@ -1,5 +1,5 @@
 {
-  "version": "0.7.0",
+  "version": "0.7.1",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -18,10 +18,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v0.7.0: Persistent status indicator, scroll stability, Reports/Wisdom/Archive header buttons, debounced tooltips, bulletproof agency overlay, friendly error messages, file protection hooks, 15-point security hardening, supply chain protection.",
+  "notes": "v0.7.1: Slack OAuth (one-click connect), perf bar state machine (cached brand/period switching), right-click disconnect, friendly error messages, tooltip flicker fix, agency overlay bulletproofing, status indicator persistence, shimmer loading states.",
   "whatsNew": [
-    "Persistent status indicator with spinning sparkle",
-    "Reports, Wisdom, Archive in header bar",
-    "15-point security hardening + supply chain protection"
+    "Slack integration — one-click connect for notifications",
+    "Revenue bar — instant brand/period switching with cache",
+    "Right-click to disconnect any platform"
   ]
 }

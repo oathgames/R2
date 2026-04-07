@@ -346,6 +346,7 @@ function translateTool(toolName, input) {
       'tiktok-push':   { label: 'Publish this ad to TikTok', cost: '$5/day budget' },
       'tiktok-login':  { label: 'Connect to your TikTok Ads account', cost: 'Free' },
       'shopify-login': { label: 'Connect to your Shopify store', cost: 'Free' },
+      'slack-login':   { label: 'Connect Slack for notifications', cost: 'Free' },
       'amazon-login':  { label: 'Connect to your Amazon account', cost: 'Free' },
       'amazon-ads-push': { label: 'Create a Sponsored Products ad on Amazon', cost: '$10/day budget' },
       'amazon-ads-kill': { label: 'Pause this Amazon campaign', cost: 'Free' },
@@ -838,6 +839,104 @@ ipcMain.handle('run-oauth', async (_, platform, brandName, extra) => {
   try { fs.accessSync(binaryPath); } catch { return { error: 'Binary not found. Run preflight first.' }; }
   try { fs.accessSync(configPath); } catch { return { error: 'Config not found. Run preflight first.' }; }
 
+  // Slack: handle OAuth entirely in Node.js (no binary needed)
+  if (platform === 'slack') {
+    const https = require('https');
+    const slackClientId = '8988877007078.10822045906036';
+    const slackClientSecret = '13f07838b0a948f865285866d2880ff5';
+    const slackRedirect = 'https://merlingotme.com/auth/callback';
+    const net = require('net');
+    const srv = require('http').createServer();
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    const stateHex = require('crypto').randomBytes(16).toString('hex');
+    const fullState = `${stateHex}|${port}`;
+
+    const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${slackClientId}&scope=chat:write,files:write,channels:read&redirect_uri=${encodeURIComponent(slackRedirect)}&state=${encodeURIComponent(fullState)}`;
+    shell.openExternal(authUrl);
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => { srv.close(); resolve({ error: 'Timed out waiting for Slack authorization' }); }, 300000);
+
+      srv.on('request', (req, res) => {
+        const u = new URL(req.url, `http://localhost:${port}`);
+        if (u.pathname !== '/callback') return;
+        const code = u.searchParams.get('code');
+        const incomingState = u.searchParams.get('state');
+        if (incomingState !== stateHex && incomingState !== fullState) {
+          res.end('State mismatch'); clearTimeout(timeout); srv.close();
+          return resolve({ error: 'State mismatch — try again' });
+        }
+        if (!code) {
+          res.end('No code'); clearTimeout(timeout); srv.close();
+          return resolve({ error: u.searchParams.get('error') || 'No authorization code' });
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#09090b;color:#e4e4e7"><div style="text-align:center"><h2 style="color:#22c55e">✓ Connected to Slack</h2><p>You can close this tab.</p></div></body></html>');
+
+        // Exchange code for token
+        const postData = `client_id=${slackClientId}&client_secret=${slackClientSecret}&code=${code}&redirect_uri=${encodeURIComponent(slackRedirect)}`;
+        const tokenReq = https.request('https://slack.com/api/oauth.v2.access', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(postData) },
+        }, (tokenRes) => {
+          let body = '';
+          tokenRes.on('data', d => body += d);
+          tokenRes.on('end', async () => {
+            clearTimeout(timeout);
+            srv.close();
+            try {
+              // console.log('[slack] token response:', body);
+              const data = JSON.parse(body);
+              if (!data.ok) return resolve({ error: `Slack: ${data.error}` });
+              const botToken = data.access_token || '';
+              const cfg = readConfig();
+              cfg.slackBotToken = botToken;
+              cfg.slackWebhookUrl = (data.incoming_webhook && data.incoming_webhook.url) || '';
+
+              // Auto-detect channel: find channels the bot has been added to
+              let channel = (data.incoming_webhook && data.incoming_webhook.channel_id) || '';
+              if (!channel && botToken) {
+                try {
+                  const chResp = await new Promise((res, rej) => {
+                    https.get(`https://slack.com/api/conversations.list?types=public_channel,private_channel&exclude_archived=true&limit=100`, {
+                      headers: { 'Authorization': `Bearer ${botToken}` },
+                    }, (r) => {
+                      let d = '';
+                      r.on('data', c => d += c);
+                      r.on('end', () => res(d));
+                    }).on('error', rej);
+                  });
+                  const chData = JSON.parse(chResp);
+                  if (chData.ok && chData.channels) {
+                    // Find channels the bot is a member of
+                    const joined = chData.channels.filter(c => c.is_member);
+                    if (joined.length > 0) {
+                      channel = joined[0].id;
+                    }
+                  }
+                } catch {}
+              }
+              cfg.slackChannel = channel;
+
+              if (!cfg._tokenTimestamps) cfg._tokenTimestamps = {};
+              cfg._tokenTimestamps.slack = Date.now();
+              writeConfig(cfg);
+              if (win && !win.isDestroyed()) win.webContents.send('connections-changed');
+              resolve({ success: true, platform: 'slack' });
+            } catch (e) {
+              console.error('[slack] parse error:', e.message, body);
+              resolve({ error: 'Failed to parse Slack response' });
+            }
+          });
+        });
+        tokenReq.on('error', (e) => { clearTimeout(timeout); srv.close(); resolve({ error: e.message }); });
+        tokenReq.write(postData);
+        tokenReq.end();
+      });
+    });
+  }
+
   const action = `${platform}-login`;
   const cmdObj = { action };
   // For Shopify, pass the store name — check config first (instant), then brand.md, then productUrl
@@ -868,13 +967,27 @@ ipcMain.handle('run-oauth', async (_, platform, brandName, extra) => {
       timeout: 300000, // 5 min for user to authorize in browser
       cwd: appRoot,
     }, (err, stdout, stderr) => {
+      // Debug logs removed — uncomment to troubleshoot OAuth issues
       if (err) {
-        console.error(`[oauth] ${action} failed:`, err.message);
-        return resolve({ error: err.message, stderr });
+        console.error(`[oauth] ${action} err:`, err.message);
+        // Don't return early — check if stdout has valid JSON despite error exit code
+        // (binary may print JSON then exit non-zero from deferred cleanup)
       }
-      // Parse the output — binary returns JSON with tokens
+      // Parse the output — binary prints indented JSON after status messages
       try {
-        const result = JSON.parse(stdout.trim().split('\n').pop());
+        // Extract JSON: find lines between last { and last }
+        const lines = stdout.split('\n');
+        let jsonStart = -1, jsonEnd = -1;
+        for (let i = lines.length - 1; i >= 0; i--) {
+          if (lines[i].trim() === '}' && jsonEnd < 0) jsonEnd = i;
+          if (lines[i].trim() === '{' && jsonEnd >= 0) { jsonStart = i; break; }
+        }
+        const jsonStr = jsonStart >= 0 ? lines.slice(jsonStart, jsonEnd + 1).join('\n') : null;
+        // console.log(`[oauth] extracted JSON:`, jsonStr);
+        if (!jsonStr) throw new Error('No JSON in output');
+        const result = JSON.parse(jsonStr);
+        if (!result || Object.keys(result).length === 0) throw new Error('Empty JSON result');
+        // console.log(`[oauth] parsed result:`, JSON.stringify(result));
         // Save tokens to config + record timestamp
         if (brandName) {
           writeBrandTokens(brandName, result);
@@ -889,7 +1002,8 @@ ipcMain.handle('run-oauth', async (_, platform, brandName, extra) => {
           win.webContents.send('connections-changed');
         }
         resolve({ success: true, platform });
-      } catch {
+      } catch (parseErr) {
+        console.error(`[oauth] JSON parse failed:`, parseErr.message);
         // Binary output wasn't JSON — might have printed status messages
         // Try to find JSON in the output
         const lines = (stdout || '').split('\n');
@@ -906,6 +1020,7 @@ ipcMain.handle('run-oauth', async (_, platform, brandName, extra) => {
             }
           } catch {}
         }
+        if (err) return resolve({ error: stderr || err.message });
         resolve({ success: true, stdout }); // Binary ran OK, just no JSON output
       }
     });
@@ -1115,97 +1230,93 @@ ipcMain.handle('get-perf-updated', (_, brandName) => {
   } catch { return null; }
 });
 
+// ── Perf bar cache (keyed by brand+days, mtime-invalidated) ──
+const perfCache = {};
+
+function computePerfSummary(days, brandName) {
+  const resultsDir = brandName ? path.join(appRoot, 'results', brandName) : path.join(appRoot, 'results');
+  const files = [];
+  try {
+    for (const f of fs.readdirSync(resultsDir)) {
+      if (f.startsWith('dashboard_') && f.endsWith('.json')) {
+        files.push({ name: f, path: path.join(resultsDir, f) });
+      }
+    }
+  } catch {}
+  if (files.length === 0) return null;
+
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffStr = `dashboard_${cutoff.toISOString().slice(0, 10).replace(/-/g, '')}`;
+  const latest = JSON.parse(fs.readFileSync(files[files.length - 1].path, 'utf8'));
+
+  let periodStart = null;
+  for (let i = files.length - 1; i >= 0; i--) {
+    if (files[i].name <= cutoffStr) { periodStart = files[i]; break; }
+  }
+  if (!periodStart && files.length >= 2) periodStart = files[0];
+  if (!periodStart) for (const f of files) {
+    if (f.name >= cutoffStr) { periodStart = f; break; }
+  }
+
+  let trend = null;
+  if (periodStart && periodStart.name !== files[files.length - 1].name) {
+    try {
+      const prev = JSON.parse(fs.readFileSync(periodStart.path, 'utf8'));
+      if (prev.mer > 0 && latest.mer > 0) {
+        trend = Math.round(((latest.mer - prev.mer) / prev.mer) * 100);
+      }
+    } catch {}
+  }
+  if (trend === null && files.length >= 2) {
+    try {
+      const prev = JSON.parse(fs.readFileSync(files[files.length - 2].path, 'utf8'));
+      if (prev.mer > 0 && latest.mer > 0) {
+        trend = Math.round(((latest.mer - prev.mer) / prev.mer) * 100);
+      }
+    } catch {}
+  }
+
+  const cfg = brandName ? readBrandConfig(brandName) : readConfig();
+  const dailyBudget = cfg.dailyAdBudget || 0;
+  const platformBreakdown = (latest.platforms || []).map(p => ({
+    name: p.platform, spend: p.spend || 0, revenue: p.revenue || 0, roas: p.roas || 0,
+  })).filter(p => p.spend > 0);
+
+  return {
+    revenue: latest.revenue || 0,
+    spend: latest.total_spend || 0,
+    mer: latest.mer || 0,
+    platforms: platformBreakdown.length,
+    platformBreakdown,
+    dailyBudget,
+    trend,
+    periodDays: days,
+    generatedAt: latest.generated_at || null,
+  };
+}
+
 ipcMain.handle('get-perf-summary', (_, requestedDays, brandName) => {
   if (testActive('perf')) return TEST_DATA.perf(requestedDays); // TEST HARNESS — rip out after v1
   const days = requestedDays || 7;
-  // Brand-scoped: read from results/{brand}/ if brand specified, else results/
-  const resultsDir = brandName ? path.join(appRoot, 'results', brandName) : path.join(appRoot, 'results');
-  try {
-    // Find all dashboard snapshot files
-    const files = [];
+  const key = brandName || '_global';
+
+  // Check cache — invalidate if results directory has been modified
+  if (perfCache[key]?.[days]) {
+    const cached = perfCache[key][days];
+    const resultsDir = brandName ? path.join(appRoot, 'results', brandName) : path.join(appRoot, 'results');
     try {
-      for (const f of fs.readdirSync(resultsDir)) {
-        if (f.startsWith('dashboard_') && f.endsWith('.json')) {
-          files.push({ name: f, path: path.join(resultsDir, f) });
-        }
-      }
+      const mtime = fs.statSync(resultsDir).mtimeMs;
+      if (mtime <= cached.fetchedAt) return cached.data;
     } catch {}
+  }
 
-    if (files.length === 0) return null;
-
-    // Sort by name (timestamp in filename), newest last
-    files.sort((a, b) => a.name.localeCompare(b.name));
-
-    // For the requested period, find the file closest to N days ago
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = `dashboard_${cutoff.toISOString().slice(0, 10).replace(/-/g, '')}`;
-
-    // Latest snapshot = current state
-    const latest = JSON.parse(fs.readFileSync(files[files.length - 1].path, 'utf8'));
-
-    // Find the snapshot closest to (but not after) the cutoff date
-    let periodStart = null;
-    for (let i = files.length - 1; i >= 0; i--) {
-      if (files[i].name <= cutoffStr) { periodStart = files[i]; break; }
-    }
-    // If no file before cutoff, use the oldest available
-    if (!periodStart && files.length >= 2) periodStart = files[0];
-
-    // Legacy compatibility: also check forward search
-    if (!periodStart) for (const f of files) {
-      if (f.name >= cutoffStr) { periodStart = f; break; }
-    }
-
-    // Calculate trend: compare latest to period start
-    let trend = null;
-    if (periodStart && periodStart.name !== files[files.length - 1].name) {
-      try {
-        const prev = JSON.parse(fs.readFileSync(periodStart.path, 'utf8'));
-        if (prev.mer > 0 && latest.mer > 0) {
-          trend = Math.round(((latest.mer - prev.mer) / prev.mer) * 100);
-        }
-      } catch {}
-    }
-
-    // If only one snapshot, compare to second-most-recent if available
-    if (trend === null && files.length >= 2) {
-      try {
-        const prev = JSON.parse(fs.readFileSync(files[files.length - 2].path, 'utf8'));
-        if (prev.mer > 0 && latest.mer > 0) {
-          trend = Math.round(((latest.mer - prev.mer) / prev.mer) * 100);
-        }
-      } catch {}
-    }
-
-    // Get daily budget from brand config (falls back to global)
-    let activeBrand = '';
-    if (!activeBrand) {
-      try { activeBrand = JSON.parse(fs.readFileSync(path.join(appRoot, '.merlin-state.json'), 'utf8')).activeBrand || ''; } catch {}
-    }
-    if (!activeBrand && brandName) activeBrand = brandName;
-    const cfg = activeBrand ? readBrandConfig(activeBrand) : readConfig();
-    const dailyBudget = cfg.dailyAdBudget || 0;
-
-    // Get per-platform spend breakdown
-    const platformBreakdown = (latest.platforms || []).map(p => ({
-      name: p.platform,
-      spend: p.spend || 0,
-      revenue: p.revenue || 0,
-      roas: p.roas || 0,
-    })).filter(p => p.spend > 0);
-
-    return {
-      revenue: latest.revenue || 0,
-      spend: latest.total_spend || 0,
-      mer: latest.mer || 0,
-      platforms: platformBreakdown.length,
-      platformBreakdown,
-      dailyBudget,
-      trend,
-      periodDays: days,
-      generatedAt: latest.generated_at || null,
-    };
+  try {
+    const result = computePerfSummary(days, brandName);
+    if (!perfCache[key]) perfCache[key] = {};
+    perfCache[key][days] = { data: result, fetchedAt: Date.now() };
+    return result;
   } catch { return null; }
 });
 
@@ -1761,6 +1872,58 @@ ipcMain.handle('get-connected-platforms', (_, brandName) => {
 
     return connected;
   } catch { return []; }
+});
+
+// ── Disconnect Platform ────────────────────────────────────
+ipcMain.handle('disconnect-platform', (_, platform, brandName) => {
+  try {
+    // Map platform to config keys that should be cleared
+    const keyMap = {
+      meta: ['metaAccessToken', 'metaAdAccountId', 'metaPageId', 'metaPixelId'],
+      tiktok: ['tiktokAccessToken', 'tiktokAdvertiserId'],
+      google: ['googleAccessToken', 'googleRefreshToken', 'googleDeveloperToken', 'googleCustomerId'],
+      shopify: ['shopifyAccessToken', 'shopifyStore'],
+      klaviyo: ['klaviyoAccessToken', 'klaviyoApiKey', 'klaviyoRefreshToken'],
+      pinterest: ['pinterestAccessToken', 'pinterestRefreshToken'],
+      amazon: ['amazonAccessToken', 'amazonRefreshToken', 'amazonProfileId'],
+      slack: ['slackBotToken', 'slackWebhookUrl', 'slackChannel'],
+      fal: ['falApiKey'],
+      elevenlabs: ['elevenLabsApiKey'],
+      heygen: ['heygenApiKey'],
+    };
+    const keys = keyMap[platform];
+    if (!keys) return { success: false, error: 'unknown platform' };
+
+    // Determine which config to modify (brand-specific tokens vs global API keys)
+    // Keys that live in global config (not per-brand token files)
+    const GLOBAL_KEYS_SET = new Set(['falApiKey', 'elevenLabsApiKey', 'heygenApiKey', 'slackBotToken', 'slackWebhookUrl', 'slackChannel']);
+    const cfg = readConfig();
+    let changed = false;
+
+    for (const key of keys) {
+      // Try global config first
+      if (cfg[key]) { cfg[key] = ''; changed = true; }
+      // Also try brand token file for platform-specific tokens
+      if (!GLOBAL_KEYS_SET.has(key) && brandName) {
+        const tokensFile = path.join(appRoot, '.claude', 'tools', `.merlin-tokens-${brandName}`);
+        try {
+          let tokens = {};
+          const buf = fs.readFileSync(tokensFile);
+          if (safeStorage.isEncryptionAvailable()) {
+            try { tokens = JSON.parse(safeStorage.decryptString(buf)); } catch { tokens = JSON.parse(buf.toString('utf8')); }
+          } else { tokens = JSON.parse(buf.toString('utf8')); }
+          if (tokens[key]) { tokens[key] = ''; changed = true; }
+          if (safeStorage.isEncryptionAvailable()) {
+            fs.writeFileSync(tokensFile, safeStorage.encryptString(JSON.stringify(tokens)));
+          } else {
+            fs.writeFileSync(tokensFile, JSON.stringify(tokens));
+          }
+        } catch {}
+      }
+    }
+    if (changed) writeConfig(cfg);
+    return { success: true };
+  } catch (err) { return { success: false, error: err.message }; }
 });
 
 // ── Spellbook (Scheduled Tasks) ────────────────────────────

@@ -1155,9 +1155,14 @@ document.getElementById('brand-select').addEventListener('change', (e) => {
   // Reload connections and spells for the selected brand
   loadConnections();
   loadSpells();
-  // Reload perf bar with brand-specific budget
+  // Load perf bar for new brand — cache handles instant swap, no blank flash
   const activePeriod = document.querySelector('.perf-period-btn.active')?.dataset.days || '7';
-  loadPerfBar(parseInt(activePeriod));
+  const newBrand = e.target.value;
+  // Show cached immediately or skeleton if no cache
+  const cached = perfState.cache[newBrand]?.[parseInt(activePeriod)];
+  if (cached) renderPerfBar(cached);
+  else renderPerfBarSkeleton();
+  loadPerfBar(parseInt(activePeriod), newBrand);
 });
 
 // add-brand-btn moved into brand dropdown as "+ New Brand" option
@@ -1397,6 +1402,25 @@ function loadConnections() {
         const clone = tile.cloneNode(true);
         clone.classList.add('connected');
         if (status === 'expired') clone.classList.add('expired');
+        // Right-click to disconnect
+        clone.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          const name = clone.querySelector('.tile-name')?.textContent || platform;
+          showContextMenu(e, [
+            { label: 'Disconnect', danger: true, action: () => {
+              showModal({
+                title: `Disconnect ${name}?`,
+                body: 'You can reconnect anytime from the sidebar.',
+                confirmLabel: 'Disconnect',
+                cancelLabel: 'Keep',
+                onConfirm: async () => {
+                  await merlin.disconnectPlatform(platform, document.getElementById('brand-select')?.value || '');
+                  loadConnections();
+                },
+              });
+            }},
+          ]);
+        });
         connectedSection.appendChild(clone);
         tile.style.display = 'none';
       }
@@ -1421,16 +1445,13 @@ document.getElementById('magic-btn').addEventListener('click', () => {
     const creditBrand = document.getElementById('brand-select')?.value || '';
     merlin.getCredits(creditBrand).then((credits) => {
       if (!credits) return;
-      // Update tiles with credit info
+      // Show credits as tooltip on hover, not inline text
       document.querySelectorAll('.magic-tile').forEach(tile => {
         const platform = tile.dataset.platform;
         const existing = tile.querySelector('.tile-credits');
         if (existing) existing.remove();
         if (credits[platform]) {
-          const span = document.createElement('div');
-          span.className = 'tile-credits';
-          span.textContent = credits[platform];
-          tile.appendChild(span);
+          tile.setAttribute('data-tip', `${tile.querySelector('.tile-name')?.textContent || platform} · ${credits[platform]}`);
         }
       });
     }).catch((err) => { console.warn('[credits]', err); });
@@ -1452,7 +1473,7 @@ document.addEventListener('click', (e) => {
 });
 
 // Connect platform tiles — ALL connections handled directly in UI, zero chat involvement
-const OAUTH_PLATFORMS = new Set(['meta', 'tiktok', 'shopify', 'google', 'amazon', 'pinterest', 'klaviyo']);
+const OAUTH_PLATFORMS = new Set(['meta', 'tiktok', 'shopify', 'google', 'amazon', 'pinterest', 'klaviyo', 'slack']);
 const API_KEY_PLATFORMS = {
   fal:        { key: 'falApiKey', label: 'fal.ai', placeholder: 'fal-xxxx...', url: 'https://fal.ai/dashboard/keys' },
   elevenlabs: { key: 'elevenLabsApiKey', label: 'ElevenLabs', placeholder: 'xi_xxxx...', url: 'https://elevenlabs.io/app/settings/api-keys' },
@@ -1469,21 +1490,16 @@ document.addEventListener('click', async (e) => {
   const displayName = platform.charAt(0).toUpperCase() + platform.slice(1);
 
   if (OAUTH_PLATFORMS.has(platform)) {
-    // All OAuth platforms — direct launch (Shopify resolves store from brand URL automatically)
-    tile.style.opacity = '0.5';
-    tile.style.pointerEvents = 'none';
-    try {
-      const result = await merlin.runOAuth(platform, activeBrand);
+    // Launch OAuth — don't dim the tile, let it complete in background
+    merlin.runOAuth(platform, activeBrand).then(result => {
       if (result.error) {
         showModal({ title: 'Connection Failed', body: friendlyError(result.error, displayName), confirmLabel: 'OK', onConfirm: () => {} });
       } else {
         loadConnections();
       }
-    } catch (err) {
+    }).catch(err => {
       showModal({ title: 'Connection Failed', body: friendlyError(err.message, displayName), confirmLabel: 'OK', onConfirm: () => {} });
-    }
-    tile.style.opacity = '';
-    tile.style.pointerEvents = '';
+    });
     return;
   }
 
@@ -1959,6 +1975,26 @@ function setStatusLabel(label) {
   }, 300); // 300ms debounce — prevents rapid flicker
 }
 
+// Reusable context menu
+function showContextMenu(e, items) {
+  document.querySelectorAll('.merlin-context-menu').forEach(m => m.remove());
+  const menu = document.createElement('div');
+  menu.className = 'merlin-context-menu';
+  items.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'context-menu-item';
+    el.textContent = item.label;
+    if (item.danger) el.style.color = '#ef4444';
+    el.addEventListener('click', () => { menu.remove(); item.action(); });
+    menu.appendChild(el);
+  });
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  document.body.appendChild(menu);
+  const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
+
 function closeAgencyOverlay() {
   const o = document.getElementById('agency-overlay');
   if (o) o.remove();
@@ -2339,86 +2375,128 @@ document.addEventListener('contextmenu', (e) => {
 })();
 
 // ── Performance Status Bar (always visible) ─────────────────
-async function loadPerfBar(days) {
-  const bar = document.getElementById('perf-bar');
+// ── Perf bar state machine ─────────────────────────────────
+const perfState = {
+  currentBrand: '',
+  currentPeriod: 7,
+  cache: {},    // { [brand]: { [days]: summaryData } }
+};
+
+function renderPerfBar(perf) {
   const text = document.getElementById('perf-text');
-  const activeBrand = document.getElementById('brand-select')?.value || '';
-
-  try {
-    const perf = await merlin.getPerfSummary(days, activeBrand);
-
-    if (!perf || (!perf.revenue && !perf.spend)) {
-      text.innerHTML = 'No data yet — connect an ad platform to start tracking';
-      return;
-    }
-
-    const fmtMoney = (n) => n >= 1000000 ? '$' + (n/1000000).toFixed(2) + 'M' : n >= 1000 ? '$' + (n/1000).toFixed(1) + 'k' : '$' + Math.round(n);
-    const rev = perf.revenue > 0 ? `<strong>${fmtMoney(perf.revenue)}</strong> revenue` : '';
-    const spend = perf.spend > 0 ? `${fmtMoney(perf.spend)} spent` : '';
-    const mer = perf.mer > 0 ? `<strong>${perf.mer.toFixed(1)}x</strong> MER` : '';
-
-    const parts = [rev, spend, mer].filter(Boolean).join(' · ');
-    let trendHtml = '';
-    if (perf.trend !== null && perf.trend !== undefined) {
-      const cls = perf.trend >= 0 ? 'perf-trend-up' : 'perf-trend-down';
-      const arrow = perf.trend >= 0 ? '▲' : '▼';
-      trendHtml = ` · <span class="${cls}">${arrow} ${Math.abs(perf.trend)}%</span>`;
-    }
-
-    // Daily budget cap indicator (simple, clear)
-    let budgetHtml = '';
-    if (perf.dailyBudget > 0) {
-      budgetHtml = ` · <span id="budget-indicator" class="budget-indicator">Daily Budget: $${perf.dailyBudget}/day</span>`;
-    }
-
-    // Last updated timestamp
-    let updatedHtml = '';
-    try {
-      const updatedAt = await merlin.getPerfUpdated(activeBrand);
-      if (updatedAt) {
-        const ago = Date.now() - new Date(updatedAt).getTime();
-        const mins = Math.floor(ago / 60000);
-        let agoStr;
-        if (mins < 1) agoStr = 'just now';
-        else if (mins < 60) agoStr = `${mins}m ago`;
-        else if (mins < 1440) agoStr = `${Math.floor(mins / 60)}h ago`;
-        else agoStr = `${Math.floor(mins / 1440)}d ago`;
-        updatedHtml = ` · <span class="perf-updated">Updated ${agoStr}</span>`;
-      }
-    } catch {}
-
-    text.innerHTML = parts + trendHtml + budgetHtml + updatedHtml;
-
-    // Platform spend hover dropdown on budget indicator
-    if (perf.platformBreakdown && perf.platformBreakdown.length > 0) {
-      setTimeout(() => {
-        const indicator = document.getElementById('budget-indicator');
-        if (!indicator) return;
-        indicator.addEventListener('mouseenter', () => {
-          let existing = document.getElementById('platform-dropdown');
-          if (existing) existing.remove();
-          const dd = document.createElement('div');
-          dd.id = 'platform-dropdown';
-          dd.className = 'platform-dropdown';
-          let rows = perf.platformBreakdown.map(p =>
-            `<div class="platform-dd-row"><span class="platform-badge platform-${p.name.split(' ')[0].toLowerCase()}">${p.name}</span><span>$${Math.round(p.spend)}</span><span>${p.roas > 0 ? p.roas.toFixed(1) + 'x' : '—'}</span></div>`
-          ).join('');
-          dd.innerHTML = `<div class="platform-dd-header">Spend by Platform</div>${rows}`;
-          const rect = indicator.getBoundingClientRect();
-          dd.style.top = (rect.bottom + 4) + 'px';
-          dd.style.left = Math.max(4, rect.left - 40) + 'px';
-          document.body.appendChild(dd);
-          indicator.addEventListener('mouseleave', () => {
-            setTimeout(() => { const el = document.getElementById('platform-dropdown'); if (el && !el.matches(':hover')) el.remove(); }, 200);
-          }, { once: true });
-          dd.addEventListener('mouseleave', () => dd.remove());
-        });
-      }, 100);
-    }
-    text.title = '';
-  } catch {
+  if (!perf || (!perf.revenue && !perf.spend)) {
     text.innerHTML = 'No data yet — connect an ad platform to start tracking';
+    return;
   }
+  const rev = perf.revenue > 0 ? `<strong>${fmtMoney(perf.revenue)}</strong> revenue` : '';
+  const spend = perf.spend > 0 ? `${fmtMoney(perf.spend)} spent` : '';
+  const mer = perf.mer > 0 ? `<strong>${perf.mer.toFixed(1)}x</strong> MER` : '';
+  const parts = [rev, spend, mer].filter(Boolean).join(' · ');
+
+  let trendHtml = '';
+  if (perf.trend !== null && perf.trend !== undefined) {
+    const cls = perf.trend >= 0 ? 'perf-trend-up' : 'perf-trend-down';
+    const arrow = perf.trend >= 0 ? '▲' : '▼';
+    trendHtml = ` · <span class="${cls}">${arrow} ${Math.abs(perf.trend)}%</span>`;
+  }
+
+  let budgetHtml = '';
+  if (perf.dailyBudget > 0) {
+    budgetHtml = ` · <span id="budget-indicator" class="budget-indicator">Daily Budget: $${perf.dailyBudget}/day</span>`;
+  }
+
+  let updatedHtml = '';
+  if (perf.generatedAt) {
+    const ago = Date.now() - new Date(perf.generatedAt).getTime();
+    const mins = Math.floor(ago / 60000);
+    let agoStr;
+    if (mins < 1) agoStr = 'just now';
+    else if (mins < 60) agoStr = `${mins}m ago`;
+    else if (mins < 1440) agoStr = `${Math.floor(mins / 60)}h ago`;
+    else agoStr = `${Math.floor(mins / 1440)}d ago`;
+    updatedHtml = ` · <span class="perf-updated">Updated ${agoStr}</span>`;
+  }
+
+  text.innerHTML = parts + trendHtml + budgetHtml + updatedHtml;
+
+  // Platform spend hover dropdown
+  if (perf.platformBreakdown && perf.platformBreakdown.length > 0) {
+    setTimeout(() => {
+      const indicator = document.getElementById('budget-indicator');
+      if (!indicator) return;
+      indicator.addEventListener('mouseenter', () => {
+        let existing = document.getElementById('platform-dropdown');
+        if (existing) existing.remove();
+        const dd = document.createElement('div');
+        dd.id = 'platform-dropdown';
+        dd.className = 'platform-dropdown';
+        dd.innerHTML = `<div class="platform-dd-header">Spend by Platform</div>${perf.platformBreakdown.map(p =>
+          `<div class="platform-dd-row"><span class="platform-badge platform-${p.name.split(' ')[0].toLowerCase()}">${p.name}</span><span>$${Math.round(p.spend)}</span><span>${p.roas > 0 ? p.roas.toFixed(1) + 'x' : '—'}</span></div>`
+        ).join('')}`;
+        const rect = indicator.getBoundingClientRect();
+        dd.style.top = (rect.bottom + 4) + 'px';
+        dd.style.left = Math.max(4, rect.left - 40) + 'px';
+        document.body.appendChild(dd);
+        indicator.addEventListener('mouseleave', () => {
+          setTimeout(() => { const el = document.getElementById('platform-dropdown'); if (el && !el.matches(':hover')) el.remove(); }, 200);
+        }, { once: true });
+        dd.addEventListener('mouseleave', () => dd.remove());
+      });
+    }, 100);
+  }
+}
+
+function renderPerfBarSkeleton() {
+  document.getElementById('perf-text').innerHTML = '<span class="perf-shimmer"></span>';
+}
+
+async function fetchPerfData(days, brand) {
+  const perf = await merlin.getPerfSummary(days, brand);
+  if (perf && (perf.revenue || perf.spend)) {
+    if (!perfState.cache[brand]) perfState.cache[brand] = {};
+    perfState.cache[brand][days] = perf;
+  }
+  return perf;
+}
+
+async function loadPerfBar(days, brandOverride) {
+  const brand = brandOverride !== undefined ? brandOverride : (document.getElementById('brand-select')?.value || '');
+  perfState.currentPeriod = days;
+  perfState.currentBrand = brand;
+
+  // Instant render from cache if available
+  const cached = perfState.cache[brand]?.[days];
+  if (cached) {
+    renderPerfBar(cached);
+  }
+
+  // Fetch fresh data in background
+  try {
+    const perf = await fetchPerfData(days, brand);
+    // Race guard: only render if still on the same brand+period
+    if (perfState.currentBrand !== brand || perfState.currentPeriod !== days) return;
+    if (perf && (perf.revenue || perf.spend)) {
+      renderPerfBar(perf);
+    } else if (!cached) {
+      // No cached data AND no fresh data — show empty state or skeleton
+      renderPerfBar(null);
+    }
+    // If cached exists but fresh is null, keep showing cached (don't blank)
+  } catch {
+    if (!cached) renderPerfBar(null);
+  }
+}
+
+// Listen for push invalidation from main process
+if (merlin.onPerfDataChanged) {
+  merlin.onPerfDataChanged(({ brand }) => {
+    // Invalidate renderer cache for this brand
+    delete perfState.cache[brand || ''];
+    // Re-fetch if currently viewing this brand
+    if (perfState.currentBrand === (brand || '')) {
+      loadPerfBar(perfState.currentPeriod, perfState.currentBrand);
+    }
+  });
 }
 
 // Load on startup — preload everything so sidebar opens instantly
@@ -2460,6 +2538,8 @@ document.querySelectorAll('.perf-period-btn').forEach(btn => {
 // Agency Report
 document.getElementById('agency-report-btn').addEventListener('click', async (e) => {
   e.stopPropagation();
+  // Toggle — if already open, just close
+  if (document.getElementById('agency-overlay')) { closeAgencyOverlay(); return; }
   // Close other panels
   document.getElementById('magic-panel').classList.add('hidden');
   document.getElementById('archive-panel').classList.add('hidden');
@@ -2620,9 +2700,25 @@ document.getElementById('perf-bar').addEventListener('click', async (e) => {
   }
 
   overlay.classList.remove('hidden');
+  // Use perf state cache (same source as perf bar) — unified data
   try {
-    const cache = await merlin.getStatsCache();
-    populateStatsCard(cache);
+    const brand = document.getElementById('brand-select')?.value || '';
+    const days = perfState.currentPeriod || 7;
+    let perf = perfState.cache[brand]?.[days];
+    if (!perf) perf = await fetchPerfData(days, brand);
+    if (perf) {
+      document.getElementById('stats-revenue').textContent = perf.revenue > 0 ? fmtMoney(perf.revenue) : '--';
+      document.getElementById('stats-spend').textContent = perf.spend > 0 ? fmtMoney(perf.spend) : '--';
+      document.getElementById('stats-roas').textContent = perf.mer > 0 ? perf.mer.toFixed(1) + 'x' : '--';
+      document.getElementById('stats-ads').textContent = perf.platforms || '--';
+      document.getElementById('stats-winners').textContent = perf.trend !== null ? (perf.trend >= 0 ? '▲' : '▼') + Math.abs(perf.trend) + '%' : '--';
+      const periodLabels = { 1: 'Today', 7: 'Last 7 days', 30: 'Last 30 days', 90: 'Last 90 days', 365: 'Last 12 months' };
+      document.getElementById('stats-period').textContent = periodLabels[days] || `Last ${days} days`;
+    } else {
+      // Fallback to stats cache for legacy compat
+      const cache = await merlin.getStatsCache();
+      populateStatsCard(cache);
+    }
   } catch {}
 });
 
