@@ -563,7 +563,13 @@ async function startSession() {
     return;
   }
 
-  const { query } = await import('@anthropic-ai/claude-agent-sdk');
+  // Dynamic import for ESM SDK — resolve from unpacked asar when packaged
+  let sdkPath = '@anthropic-ai/claude-agent-sdk';
+  if (app.isPackaged) {
+    const unpackedSdk = path.join(path.dirname(app.getPath('exe')), 'resources', 'app.asar.unpacked', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'sdk.mjs');
+    if (fs.existsSync(unpackedSdk)) sdkPath = 'file://' + unpackedSdk.replace(/\\/g, '/');
+  }
+  const { query } = await import(sdkPath);
 
   // Determine the active brand — must match what the welcome message shows
   let activeBrand = '';
@@ -749,8 +755,11 @@ async function startSession() {
       }
     }
   } catch (err) {
+    const errMsg = err.message || String(err);
+    console.error('[SDK session error]', errMsg);
+    // Write to error log for production debugging (no DevTools in packaged builds)
+    try { fs.appendFileSync(path.join(appRoot, '.merlin-errors.log'), `${new Date().toISOString()} SDK: ${errMsg}\n${err.stack || ''}\n`); } catch {}
     if (win && !win.isDestroyed()) {
-      const errMsg = err.message || String(err);
       win.webContents.send('sdk-error', errMsg);
       wsServer.broadcast('sdk-error', errMsg);
     }
@@ -2670,7 +2679,8 @@ async function downloadAndApplyUpdate() {
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) { app.quit(); }
 app.on('second-instance', () => {
-  if (win) {
+  if (win && !win.isDestroyed()) {
+    win.show();
     if (win.isMinimized()) win.restore();
     win.focus();
   }
