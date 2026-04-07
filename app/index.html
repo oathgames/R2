@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' merlin: data:; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https: wss: ws:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' merlin: data:; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://api.merlingotme.com https://merlingotme.com https://slack.com https://api.github.com wss://127.0.0.1:* ws://127.0.0.1:*">
 <title>Merlin</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -58,9 +58,9 @@
     <span class="progress-step" data-step="sales">Sales platform connected</span>
     <span class="progress-step" data-step="platform">Ad platform connected</span>
     <span class="progress-step" data-step="automation">Automation active</span>
+    <button id="progress-close" class="progress-close">Close</button>
   </div>
   <div id="progress-next" class="progress-next"></div>
-  <button id="progress-close" class="progress-close">&times;</button>
 </div>
 
 <!-- Chat -->
@@ -194,6 +194,7 @@
         <button class="archive-filter" data-filter="live">Live</button>
         <button class="archive-filter" data-filter="image">Images</button>
         <button class="archive-filter" data-filter="video">Videos</button>
+        <button class="archive-filter" data-filter="swipes">Swipes</button>
       </div>
       <input id="archive-search" type="text" class="archive-search" placeholder="Search brand, product, model...">
     </div>

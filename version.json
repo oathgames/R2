@@ -1,5 +1,5 @@
 {
-  "version": "0.7.8",
+  "version": "0.8.0",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -18,10 +18,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v0.7.8: Documents workspace separation, SDK import fix for packaged builds, macOS code signing, workspace auto-sync on update.",
+  "notes": "v0.8.0: Security hardening (Electron 39, Go 1.25.9, 10 CVE fixes), Swipes tab, creative pairing, cross-platform ad duplicate, predictive scoring, IVT framework, Slack digest, token efficiency (37% reduction), hallucination guardrails, agency-tier spell prompts.",
   "whatsNew": [
-    "Workspace now lives in Documents/Merlin — your brands are always accessible",
-    "Packaged app SDK connection fix — no more 'tried 3 times' errors",
-    "Auto-sync: app updates bring new commands without touching your data"
+    "Security hardening — Electron 39, 10 CVE patches, token-in-header",
+    "Swipes tab — save competitor ads, pair with yours, generate in your style",
+    "Agency-tier spells — IVT testing, fatigue detection, predictive scoring"
   ]
 }

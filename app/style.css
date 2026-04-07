@@ -74,11 +74,11 @@ a:hover{text-decoration:underline}
 .progress-step.active::before{content:'○ '}
 .progress-next{font-size:10px;color:var(--text-dim);margin-top:0}
 .progress-close{
-  position:absolute;top:10px;right:10px;
-  background:none;border:none;color:var(--text-dim);
-  font-size:14px;cursor:pointer;padding:0 4px;line-height:1;
+  background:none;border:none;color:#ef4444;
+  font-size:10px;font-weight:600;cursor:pointer;padding:0;line-height:1;
+  margin-left:auto;flex-shrink:0;
 }
-.progress-close:hover{color:var(--text)}
+.progress-close:hover{color:#f87171}
 
 /* ── Chat Container ──────────────────────────────────────── */
 #chat{
@@ -1826,6 +1826,29 @@ a:hover{text-decoration:underline}
 .context-menu-item:hover {
   background:var(--surface);
   color:var(--text);
+}
+/* Preview stats panel (shown alongside image in archive preview) */
+/* Multi-select + merge for creative pairing */
+.archive-selected{border-color:var(--accent) !important;box-shadow:0 0 0 2px rgba(139,92,246,.4)}
+.swipe-card{border-style:dashed}
+.merge-btn{
+  margin:8px 0;width:100%;padding:10px;font-size:13px;
+}
+
+.preview-layout{display:flex;align-items:center;gap:24px;max-height:90vh}
+.preview-layout img,.preview-layout video{max-height:85vh;max-width:65vw;border-radius:10px}
+.preview-stats{
+  background:var(--bg);border:1px solid var(--border);border-radius:12px;
+  padding:16px 20px;min-width:180px;
+}
+.preview-stat{display:flex;justify-content:space-between;gap:16px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;color:var(--text-muted)}
+.preview-stat:last-child{border-bottom:none}
+.preview-stat-label{color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+
+.context-submenu{
+  position:fixed;
+  background:var(--bg);border:1px solid var(--border);border-radius:8px;
+  min-width:140px;box-shadow:0 8px 24px rgba(0,0,0,.4);z-index:1001;
 }
 
 .platform-meta { background:rgba(24,119,242,.15); color:#1877F2; }

@@ -1708,16 +1708,19 @@ async function loadSpells() {
       'IVT Protocol: Identify what to test today (rotate: Mon=hooks, Tue=angles, Wed=formats, Thu=scenes, Fri=audiences). ' +
       'Generate 3 variations changing ONLY the test variable. Hold everything else constant. ' +
       'Label each ad: "[Hook Test] Pain Point", "[Hook Test] Social Proof", etc. ' +
-      'Use the best-performing hook style from Wisdom data. Publish to Testing campaign at $5-10/day each. ' +
-      'Show each image inline. Report: what variable tested, what variations created, expected test duration (48h).' },
+      'Use the best-performing hook style from Wisdom data. ' +
+      'PREDICTIVE SCORING: Before publishing, check .merlin-wisdom.json for the avg ROAS of this creative\'s hook style and format. ' +
+      'Report: "✦ Score: [hook style] averages [X]x ROAS across the network ([N] ads). [format] averages [Y]x." ' +
+      'If the hook+format combo averages < 1.5x in Wisdom data, flag it and suggest using a higher-performing hook instead. ' +
+      'Publish to Testing campaign at $5-10/day each. ' +
+      'Show each image inline. Report: what variable tested, variations created, predicted score, test duration (48h).' },
     { spell: 'performance-check', cron: '0 14 * * 1-5', name: 'Performance Check', desc: 'Deterministic kill/scale rules', prompt:
       'Pull performance from all platforms using dashboard. Apply these DETERMINISTIC rules (no judgment calls):\n' +
-      'FATIGUE DETECTION:\n' +
-      '- CTR dropped 20%+ from 7-day peak → WARNING (flag but keep running)\n' +
-      '- CTR dropped 40%+ from peak → KILL immediately\n' +
-      '- Frequency > 2.5 → WARNING (audience saturating)\n' +
-      '- Frequency > 4.0 → KILL (oversaturated)\n' +
-      '- CPC increased 50%+ from first-week avg → KILL\n' +
+      'FATIGUE DETECTION (use ONLY numbers from meta-insights output — never calculate trends yourself):\n' +
+      '- If insights show CTR is below 60% of the highest CTR in the output → KILL\n' +
+      '- If insights show frequency > 2.5 → WARNING\n' +
+      '- If insights show frequency > 4.0 → KILL\n' +
+      '- If insights show CPC is 1.5x+ the lowest CPC in the output → KILL\n' +
       'SCALING:\n' +
       '- ROAS > 3x for 3+ days → duplicate to Scaling, increase budget 20%\n' +
       '- ROAS > 2x for 5+ days → increase budget 20% (no duplicate)\n' +
@@ -1730,7 +1733,15 @@ async function loadSpells() {
       'Pull overnight results via dashboard. Read .merlin-wisdom.json for benchmarks. ' +
       'Save to .merlin-briefing.json: date, ads (winners/losers/fatigue signals), content (published), ' +
       'revenue (yesterday + week + MER trend), recommendation (one actionable sentence). ' +
-      'Compare your CTR/ROAS to Wisdom collective averages — flag if above or below. Keep each field 2-4 lines.' },
+      'Compare your CTR/ROAS to Wisdom collective averages — flag if above or below. Keep each field 2-4 lines. ' +
+      'If slackBotToken exists in config, post a clean digest to the Slack channel using the Slack API (chat.postMessage with the bot token) in this exact format:\n' +
+      '"✦ Morning Briefing — [Brand]\n' +
+      '━━━━━━━━━━━━━━━\n' +
+      '💰 Revenue: $X yesterday · $Xk this week · MER Xx\n' +
+      '📈 Winners: [top ad name] at Xx ROAS\n' +
+      '⚠️ Action: [one-line recommendation]\n' +
+      '━━━━━━━━━━━━━━━"\n' +
+      'Keep it to 4 lines max. No fluff. Just numbers and one action item.' },
     { spell: 'weekly-digest', cron: '0 9 * * 1', name: 'Weekly Digest', desc: 'Monday strategy + benchmarks', prompt:
       'Pull 7-day performance. Compare to previous week AND Wisdom collective benchmarks. ' +
       'List: revenue, spend, MER trend, top 3 ads by ROAS, worst 3 killed, IVT test results (which variable won this week). ' +
@@ -1740,7 +1751,10 @@ async function loadSpells() {
       'Run seo-keywords for trending topic. Write 600-word SEO post. Generate featured image. Publish to Shopify via blog-post. Report: title, keyword, URL.' },
     { spell: 'competitor-scan', cron: '0 9 * * 5', name: 'Competitor Watch', desc: 'Friday intel report', prompt:
       'Use competitor-scan for Meta Ad Library. Report: new ads this week, common hooks, themes, and one tactical counter-strategy. ' +
-      'Compare their hook styles to Wisdom data — are they using what works or lagging?' },
+      'Compare their hook styles to Wisdom data — are they using what works or lagging? ' +
+      'For each competitor ad found, save a screenshot or description to assets/brands/<brand>/competitor-swipes/ with metadata. ' +
+      'Create/update swipes.json: [{"file":"competitor1.jpg","brand":"CompetitorName","hook":"ugc","platform":"meta","date":"2026-04-07","daysRunning":14}]. ' +
+      'These appear in the Archive Swipes tab for the user to pair with their own creatives.' },
     { spell: 'email-flows', cron: '0 9 * * 3', name: 'Email Flows', desc: 'Build + optimize automations', prompt:
       'Run email-audit. Missing critical flows (welcome, abandoned cart, post-purchase, win-back)? Create them. ' +
       'Check open/click rates. Suggest subject line improvements based on top-performing hooks from Wisdom data. Report: flows active, created, top/bottom.' },
@@ -2969,6 +2983,51 @@ async function loadArchive() {
   const typeFilter = document.querySelector('.archive-filter.active')?.dataset.filter || 'all';
   const search = document.getElementById('archive-search').value.trim();
 
+  // Clear multi-select on tab switch
+  window._archiveSelected = [];
+  const existingMerge = document.getElementById('merge-btn');
+  if (existingMerge) existingMerge.style.display = 'none';
+
+  if (typeFilter === 'swipes') {
+    // Show competitor swipe files
+    const brand = document.getElementById('brand-select')?.value || '';
+    loading.style.display = 'none';
+
+    let swipes = [];
+    try {
+      swipes = await merlin.getSwipes(brand);
+    } catch {}
+
+    if (!swipes || swipes.length === 0) {
+      empty.querySelector('p').textContent = 'No swipes yet';
+      empty.querySelector('.archive-empty-sub').textContent = 'Run a competitor scan to collect ad swipes';
+      empty.style.display = 'block';
+      return;
+    }
+
+    swipes.forEach(swipe => {
+      const card = document.createElement('div');
+      card.className = 'archive-card swipe-card';
+      card.dataset.path = swipe.path || '';
+      card.dataset.id = swipe.id || '';
+      const thumb = swipe.thumbnail ? `<img src="merlin://${swipe.thumbnail}" alt="" loading="lazy">` : '<div class="archive-card-placeholder">✦</div>';
+      card.innerHTML = `
+        ${thumb}
+        <div class="archive-card-info">
+          <div class="archive-card-title">${escapeHtml(swipe.brand || 'Competitor')}</div>
+          <div class="archive-card-meta">${escapeHtml(swipe.hook || '')} ${swipe.platform ? '· ' + escapeHtml(swipe.platform) : ''}</div>
+        </div>
+      `;
+      // Click to select for pairing
+      card.addEventListener('click', () => toggleArchiveSelect(card, swipe));
+      grid.appendChild(card);
+    });
+
+    // Show merge button if selections exist
+    updateMergeButton();
+    return;
+  }
+
   if (typeFilter === 'live') {
     // Show live ads instead of archive items
     const brand = document.getElementById('brand-select')?.value;
@@ -3027,6 +3086,13 @@ async function loadArchive() {
 
         const menu = document.createElement('div');
         menu.className = 'merlin-context-menu';
+        // Clamp to viewport
+        requestAnimationFrame(() => {
+          const mw = menu.offsetWidth || 180;
+          const mh = menu.offsetHeight || 200;
+          menu.style.left = Math.min(e.clientX, window.innerWidth - mw - 8) + 'px';
+          menu.style.top = Math.min(e.clientY, window.innerHeight - mh - 8) + 'px';
+        });
         menu.style.left = e.clientX + 'px';
         menu.style.top = e.clientY + 'px';
 
@@ -3066,6 +3132,59 @@ async function loadArchive() {
           menu.appendChild(resumeItem);
         }
 
+        // Cross-platform duplicate submenu
+        if (ad.status === 'live') {
+          const platforms = ['Meta', 'TikTok', 'Google', 'Amazon'].filter(p => p.toLowerCase() !== ad.platform?.toLowerCase());
+          const copyItem = document.createElement('div');
+          copyItem.className = 'context-menu-item';
+          copyItem.textContent = '🚀 Copy to...';
+          copyItem.style.position = 'relative';
+          copyItem.addEventListener('mouseenter', () => {
+            let sub = copyItem.querySelector('.context-submenu');
+            if (sub) return;
+            sub = document.createElement('div');
+            sub.className = 'context-submenu';
+            // Position after appending so we can measure
+            const positionSub = () => {
+              const r = copyItem.getBoundingClientRect();
+              const sw = sub.offsetWidth || 140;
+              const sh = sub.offsetHeight || 200;
+              let left = r.right + 4;
+              if (left + sw > window.innerWidth) left = r.left - sw - 4;
+              let top = r.top;
+              if (top + sh > window.innerHeight) top = window.innerHeight - sh - 4;
+              sub.style.left = Math.max(4, left) + 'px';
+              sub.style.top = Math.max(4, top) + 'px';
+            };
+            // "All" option at top
+            const allOpt = document.createElement('div');
+            allOpt.className = 'context-menu-item';
+            allOpt.textContent = 'All platforms';
+            allOpt.addEventListener('click', () => {
+              menu.remove();
+              addUserBubble(`Copy "${ad.product}" ad to all platforms`);
+              showTypingIndicator(); turnStartTime = Date.now(); sessionActive = true; startTickingTimer();
+              merlin.sendMessage(`Duplicate the winning ad "${ad.product}" (Ad ID: ${ad.adId}, platform: ${ad.platform}) to ALL other connected platforms. Use the same creative and budget. Report what was created.`);
+            });
+            sub.appendChild(allOpt);
+            platforms.forEach(p => {
+              const opt = document.createElement('div');
+              opt.className = 'context-menu-item';
+              opt.textContent = p;
+              opt.addEventListener('click', () => {
+                menu.remove();
+                addUserBubble(`Copy "${ad.product}" ad to ${p}`);
+                showTypingIndicator(); turnStartTime = Date.now(); sessionActive = true; startTickingTimer();
+                merlin.sendMessage(`Duplicate the winning ad "${ad.product}" (Ad ID: ${ad.adId}, platform: ${ad.platform}) to ${p}. Use the same creative and budget.`);
+              });
+              sub.appendChild(opt);
+            });
+            document.body.appendChild(sub);
+            requestAnimationFrame(positionSub);
+          });
+          menu.appendChild(copyItem);
+        }
+
         const detailsItem = document.createElement('div');
         detailsItem.className = 'context-menu-item';
         detailsItem.textContent = '📋 View details';
@@ -3076,13 +3195,29 @@ async function loadArchive() {
         menu.appendChild(detailsItem);
 
         document.body.appendChild(menu);
-        // Close on click outside
+        // Close on click outside (or Escape)
         setTimeout(() => {
-          document.addEventListener('click', function dismiss() {
-            menu.remove();
-            document.removeEventListener('click', dismiss);
-          }, { once: true });
-        }, 0);
+          const dismiss = (ev) => {
+            if (!menu.contains(ev.target) && !ev.target.closest('.context-submenu')) {
+              menu.remove();
+              document.querySelectorAll('.context-submenu').forEach(s => s.remove());
+              document.removeEventListener('click', dismiss);
+              document.removeEventListener('contextmenu', dismiss);
+              document.removeEventListener('keydown', escDismiss);
+            }
+          };
+          const escDismiss = (ev) => {
+            if (ev.key === 'Escape') {
+              menu.remove();
+              document.removeEventListener('click', dismiss);
+              document.removeEventListener('contextmenu', dismiss);
+              document.removeEventListener('keydown', escDismiss);
+            }
+          };
+          document.addEventListener('click', dismiss);
+          document.addEventListener('contextmenu', dismiss);
+          document.addEventListener('keydown', escDismiss);
+        }, 10);
       });
 
       grid.appendChild(card);
@@ -3169,6 +3304,99 @@ function createArchiveCard(item) {
   return card;
 }
 
+// ── Multi-select + Merge for creative pairing ──────────────
+function toggleArchiveSelect(card, item) {
+  const sel = window._archiveSelected;
+  const idx = sel.findIndex(s => s.card === card);
+  if (idx >= 0) {
+    sel.splice(idx, 1);
+    card.classList.remove('archive-selected');
+  } else {
+    if (sel.length >= 2) {
+      // Deselect the oldest
+      sel[0].card.classList.remove('archive-selected');
+      sel.shift();
+    }
+    sel.push({ card, item });
+    card.classList.add('archive-selected');
+  }
+  updateMergeButton();
+}
+
+function updateMergeButton() {
+  let btn = document.getElementById('merge-btn');
+  const sel = window._archiveSelected || [];
+  if (sel.length === 2) {
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = 'merge-btn';
+      btn.className = 'btn-primary merge-btn';
+      btn.addEventListener('click', mergeCreatives);
+      const grid = document.getElementById('archive-grid');
+      grid.parentNode.insertBefore(btn, grid);
+    }
+    btn.textContent = '✦ Generate in my style';
+    btn.style.display = '';
+  } else if (btn) {
+    btn.style.display = 'none';
+  }
+}
+
+function mergeCreatives() {
+  const sel = window._archiveSelected || [];
+  if (sel.length !== 2) return;
+
+  const [a, b] = sel.map(s => s.item);
+  // Determine which is competitor vs own (swipe-card = competitor)
+  const competitor = a.brand ? a : b;
+  const own = a.brand ? b : a;
+
+  // Clear selection
+  sel.forEach(s => s.card.classList.remove('archive-selected'));
+  window._archiveSelected = [];
+  updateMergeButton();
+
+  // Close archive and send to chat
+  document.getElementById('archive-panel').classList.add('hidden');
+
+  const competitorDesc = competitor.hook ? `${competitor.brand} (${competitor.hook} hook, ${competitor.platform})` : (competitor.brand || 'competitor ad');
+  const ownDesc = own.product || own.title || 'my creative';
+  const competitorPath = competitor.thumbnail || competitor.path || '';
+  const ownPath = own.thumbnail || own.folder || '';
+
+  addUserBubble(`Merge: ${competitorDesc} + ${ownDesc}`);
+  showTypingIndicator();
+  turnStartTime = Date.now();
+  turnTokens = 0;
+  sessionActive = true;
+  startTickingTimer();
+
+  merlin.sendMessage(
+    `I want to create a new ad inspired by a competitor's creative but in MY brand's style.\n\n` +
+    `COMPETITOR REFERENCE: ${competitorPath ? competitorPath : competitorDesc}\n` +
+    `- What to capture: their composition, hook style, layout, and what makes it work\n\n` +
+    `MY BRAND REFERENCE: ${ownPath ? ownPath : ownDesc}\n` +
+    `- Use MY brand colors, MY product, MY brand voice from brand.md\n\n` +
+    `Generate a new ad creative that captures the competitor's winning pattern but looks 100% like our brand. ` +
+    `Show the result inline. Score it against Wisdom data before suggesting we publish.`
+  );
+}
+
+// Also enable multi-select on regular archive cards (All/Images/Videos tabs)
+function enableArchiveMultiSelect() {
+  document.querySelectorAll('.archive-card:not(.swipe-card)').forEach(card => {
+    card.addEventListener('click', (e) => {
+      // Only multi-select if Swipes tab has a selection (pairing mode)
+      if ((window._archiveSelected || []).some(s => s.item.brand)) {
+        e.stopPropagation();
+        e.preventDefault();
+        const item = card._archiveItem || {};
+        toggleArchiveSelect(card, item);
+      }
+    });
+  });
+}
+
 function openArchivePreview(item) {
   // Don't close the sidebar — just overlay on top
 
@@ -3186,10 +3414,25 @@ function openArchivePreview(item) {
     mediaPath = `merlin://${item.thumbnail}`;
   }
 
+  // Build performance stats panel from metadata tags
+  const tags = item.tags || {};
+  let statsHtml = '';
+  if (tags.verdict || tags.roas || tags.hook) {
+    const verdictColor = tags.verdict === 'winner' ? '#22c55e' : tags.verdict === 'kill' ? '#ef4444' : 'var(--text-dim)';
+    statsHtml = `<div class="preview-stats">
+      ${tags.verdict ? `<div class="preview-stat"><span class="preview-stat-label">Verdict</span><span style="color:${verdictColor};font-weight:700;text-transform:uppercase">${escapeHtml(tags.verdict)}</span></div>` : ''}
+      ${tags.roas ? `<div class="preview-stat"><span class="preview-stat-label">ROAS</span><span style="color:#22c55e;font-weight:700">${tags.roas}x</span></div>` : ''}
+      ${tags.hook ? `<div class="preview-stat"><span class="preview-stat-label">Hook</span><span>${escapeHtml(tags.hook)}</span></div>` : ''}
+      ${tags.scene ? `<div class="preview-stat"><span class="preview-stat-label">Style</span><span>${escapeHtml(tags.scene)}</span></div>` : ''}
+      ${tags.platform ? `<div class="preview-stat"><span class="preview-stat-label">Platform</span><span>${escapeHtml(tags.platform)}</span></div>` : ''}
+      ${tags.daysRunning ? `<div class="preview-stat"><span class="preview-stat-label">Running</span><span>${tags.daysRunning} days</span></div>` : ''}
+    </div>`;
+  }
+
   if (isVideo && mediaPath) {
-    overlay.innerHTML = `<video src="${mediaPath}" controls autoplay playsinline></video>`;
+    overlay.innerHTML = `<div class="preview-layout"><video src="${mediaPath}" controls autoplay playsinline></video>${statsHtml}</div>`;
   } else if (mediaPath) {
-    overlay.innerHTML = `<img src="${mediaPath}" alt="" data-folder="${escapeHtml(item.folder)}" data-file="${escapeHtml(mediaPath.replace('merlin://', ''))}">`;
+    overlay.innerHTML = `<div class="preview-layout"><img src="${mediaPath}" alt="" data-folder="${escapeHtml(item.folder)}" data-file="${escapeHtml(mediaPath.replace('merlin://', ''))}">${statsHtml}</div>`;
   } else {
     overlay.innerHTML = `<div style="color:var(--text-muted);font-size:14px">No preview available</div>`;
   }

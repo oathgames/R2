@@ -65,6 +65,9 @@ contextBridge.exposeInMainWorld('merlin', {
   // Disconnect platform
   disconnectPlatform: (platform, brand) => ipcRenderer.invoke('disconnect-platform', platform, brand),
 
+  // Competitor swipes
+  getSwipes: (brand) => ipcRenderer.invoke('get-swipes', brand),
+
   // Morning briefing
   getBriefing: (brand) => ipcRenderer.invoke('get-briefing', brand),
   dismissBriefing: (brand) => ipcRenderer.invoke('dismiss-briefing', brand),
