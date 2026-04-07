@@ -27,29 +27,29 @@
     "extraResources": [
       {
         "from": ".claude",
-        "to": "../.claude",
+        "to": ".claude",
         "filter": [
           "**/*"
         ]
       },
       {
         "from": "assets",
-        "to": "../assets",
+        "to": "assets",
         "filter": [
           "**/*"
         ]
       },
       {
         "from": "CLAUDE.md",
-        "to": "../CLAUDE.md"
+        "to": "CLAUDE.md"
       },
       {
         "from": "memory.md",
-        "to": "../memory.md"
+        "to": "memory.md"
       },
       {
         "from": "version.json",
-        "to": "../version.json"
+        "to": "version.json"
       }
     ],
     "win": {

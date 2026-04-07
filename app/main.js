@@ -58,11 +58,12 @@ process.on('uncaughtException', (err) => {
 });
 process.on('unhandledRejection', (reason) => { console.error('[UNHANDLED]', reason); });
 
-// App install location (where Electron binary + asar live)
+// App install location (where Electron binary + asar + extraResources live)
+// extraResources go to: Mac = Contents/Resources/, Windows = resources/
 const appInstall = app.isPackaged
   ? (process.platform === 'darwin'
     ? path.join(path.dirname(app.getPath('exe')), '..', 'Resources')
-    : path.dirname(app.getPath('exe')))
+    : path.join(path.dirname(app.getPath('exe')), 'resources'))
   : path.join(__dirname, '..');
 
 // Workspace location (where brands, config, results live — user-accessible in Documents)
@@ -1515,6 +1516,33 @@ ipcMain.handle('get-activity-feed', (_, brandName, limit = 30) => {
 });
 
 // ── Archive: scan results for content grid ──────────────────
+// ── Competitor Swipes ──────────────────────────────────────
+ipcMain.handle('get-swipes', (_, brandName) => {
+  if (!brandName || !/^[a-z0-9_-]+$/i.test(brandName)) return [];
+  const swipesDir = path.join(appRoot, 'assets', 'brands', brandName, 'competitor-swipes');
+  try {
+    if (!fs.existsSync(swipesDir)) return [];
+    const files = fs.readdirSync(swipesDir).filter(f => /\.(jpg|jpeg|png|webp|mp4)$/i.test(f));
+    // Try to read metadata
+    let meta = {};
+    try { meta = JSON.parse(fs.readFileSync(path.join(swipesDir, 'swipes.json'), 'utf8')); } catch {}
+
+    return files.map((f, i) => {
+      const info = (meta.swipes || []).find(s => s.file === f) || {};
+      return {
+        id: `swipe-${i}`,
+        thumbnail: `assets/brands/${brandName}/competitor-swipes/${f}`,
+        path: `assets/brands/${brandName}/competitor-swipes/${f}`,
+        brand: info.brand || info.advertiser || 'Competitor',
+        hook: info.hook || '',
+        platform: info.platform || '',
+        dateFound: info.date || '',
+        daysRunning: info.daysRunning || null,
+      };
+    });
+  } catch { return []; }
+});
+
 ipcMain.handle('get-archive-items', async (_, filters = {}) => {
   if (testActive('archive')) return TEST_DATA.archive(); // TEST HARNESS — rip out after v1
   const resultsDir = path.join(appRoot, 'results');
@@ -1602,6 +1630,7 @@ ipcMain.handle('get-archive-items', async (_, filters = {}) => {
         if (meta.model) item.model = meta.model;
         if (meta.qaPassed !== undefined) item.qaPassed = meta.qaPassed;
         if (meta.type) item.type = meta.type;
+        if (meta.tags) item.tags = meta.tags;
         if (meta.createdAt) {
           const createdTime = new Date(meta.createdAt).getTime();
           if (!isNaN(createdTime)) item.timestamp = createdTime;
