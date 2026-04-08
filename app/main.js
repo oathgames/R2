@@ -1020,7 +1020,15 @@ ipcMain.handle('run-oauth', async (_, platform, brandName, extra) => {
   const binaryName = process.platform === 'win32' ? 'Merlin.exe' : 'Merlin';
   const binaryPath = path.join(appRoot, '.claude', 'tools', binaryName);
   const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
-  try { fs.accessSync(binaryPath); } catch { return { error: 'Binary not found. Run preflight first.' }; }
+  // Auto-download the engine if missing (fresh install + integration click)
+  try { fs.accessSync(binaryPath); } catch {
+    try {
+      if (win && !win.isDestroyed()) win.webContents.send('engine-status', 'Downloading engine...');
+      await ensureBinary();
+    } catch (e) {
+      return { error: `Could not download engine: ${e.message}` };
+    }
+  }
   try { fs.accessSync(configPath); } catch { return { error: 'Config not found. Run preflight first.' }; }
 
   // Slack requires HTTPS redirect URI — binary handles token exchange (secrets stay in binary)
@@ -2676,6 +2684,80 @@ function isNewerVersion(a, b) {
   return false;
 }
 
+// Download the Merlin engine binary from the latest GitHub release.
+// Called on first run (when binary is missing) and by the updater.
+// Returns true if the binary is present (whether downloaded or already there).
+async function ensureBinary(opts = {}) {
+  const { force = false, onProgress = null } = opts;
+  const binaryPath = path.join(appRoot, '.claude', 'tools', process.platform === 'win32' ? 'Merlin.exe' : 'Merlin');
+
+  // Fast path: binary exists and caller didn't force a re-download
+  if (!force) {
+    try { fs.accessSync(binaryPath, fs.constants.F_OK); return true; } catch {}
+  }
+
+  // Make sure the tools directory exists
+  try { fs.mkdirSync(path.dirname(binaryPath), { recursive: true }); } catch {}
+
+  if (onProgress) onProgress('Fetching engine...');
+  const raw = await httpsGet('https://api.github.com/repos/oathgames/Merlin/releases/latest');
+  const data = JSON.parse(raw.toString());
+  if (!data || !data.assets) throw new Error('No release data available');
+
+  const assetName = process.platform === 'win32' ? 'Merlin-windows-amd64.exe'
+    : (process.platform === 'darwin' && process.arch === 'arm64') ? 'Merlin-darwin-arm64'
+    : process.platform === 'darwin' ? 'Merlin-darwin-amd64'
+    : 'Merlin-linux-amd64';
+
+  const asset = (data.assets || []).find(a => a.name === assetName);
+  if (!asset) throw new Error(`Engine binary ${assetName} not found in latest release`);
+
+  if (onProgress) onProgress('Downloading engine...');
+  const binary = await httpsGet(asset.browser_download_url);
+
+  if (binary.length < 1024 * 1024) {
+    throw new Error('Downloaded engine too small — possible corrupted download');
+  }
+
+  // Verify checksum if published
+  const checksumAsset = (data.assets || []).find(a => a.name === 'checksums.txt');
+  if (checksumAsset) {
+    try {
+      const checksumFile = (await httpsGet(checksumAsset.browser_download_url)).toString();
+      const expectedHash = checksumFile.split('\n')
+        .map(l => l.trim().split(/\s+/))
+        .find(parts => parts[1] === assetName)?.[0];
+      if (expectedHash) {
+        const crypto = require('crypto');
+        const actualHash = crypto.createHash('sha256').update(binary).digest('hex');
+        if (actualHash !== expectedHash) {
+          throw new Error(`Engine checksum mismatch: expected ${expectedHash.slice(0,12)}..., got ${actualHash.slice(0,12)}...`);
+        }
+      }
+    } catch (e) {
+      if (e.message.includes('checksum mismatch')) throw e;
+      // Checksum file couldn't be fetched — continue without verification
+    }
+  }
+
+  // Atomic write: write to tmp then rename
+  const tmpPath = binaryPath + '.download';
+  fs.writeFileSync(tmpPath, binary);
+  try { fs.unlinkSync(binaryPath); } catch {}
+  fs.renameSync(tmpPath, binaryPath);
+
+  if (process.platform !== 'win32') {
+    fs.chmodSync(binaryPath, 0o755);
+    const { execSync } = require('child_process');
+    try { execSync(`xattr -d com.apple.quarantine "${binaryPath}" 2>/dev/null`); } catch {}
+    try { execSync(`codesign --force --sign - "${binaryPath}" 2>/dev/null`); } catch {}
+  }
+
+  console.log(`[ensureBinary] Downloaded ${assetName} (${(binary.length / 1024 / 1024).toFixed(1)} MB) to ${binaryPath}`);
+  if (onProgress) onProgress('Engine ready');
+  return true;
+}
+
 async function checkForUpdates() {
   try {
     const currentVersion = getCurrentVersion();
@@ -2812,6 +2894,25 @@ app.whenReady().then(async () => {
 
   // Bootstrap workspace AFTER window is visible (prevents "Not Responding" on first launch)
   setTimeout(bootstrapWorkspace, 500);
+
+  // Ensure the Merlin engine binary is present. It's not bundled with the
+  // Electron app (intentionally — kept out of the 99MB installer), so first
+  // run must download it from GitHub releases. Runs in background so the
+  // window stays responsive.
+  setTimeout(async () => {
+    try {
+      await ensureBinary({
+        onProgress: (msg) => {
+          if (win && !win.isDestroyed()) win.webContents.send('engine-status', msg);
+        },
+      });
+    } catch (err) {
+      console.error('[ensureBinary]', err.message);
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('engine-status', `Engine download failed: ${err.message}`);
+      }
+    }
+  }, 1500);
 
   // macOS: Cmd+Q should actually quit (set forceQuit so close handler allows it)
   app.on('before-quit', () => {

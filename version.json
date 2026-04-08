@@ -1,5 +1,5 @@
 {
-  "version": "0.8.5",
+  "version": "0.8.6",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -18,10 +18,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v0.8.5: Mac notarization (no more 'unverified' warning), reliable Claude Code detection on Mac (nvm/volta/bun/fnm), polished Windows installer with detached launch.",
+  "notes": "v0.8.6: Auto-download engine on first run (no more 'engine not found' errors), plus v0.8.5 Mac notarization and reliable Claude Code detection.",
   "whatsNew": [
-    "Mac installs now open cleanly — no 'unverified developer' warning",
-    "Claude Code detection fixed for nvm, volta, bun, and fnm installs",
-    "Polished Windows installer — faster, cleaner finish, no freeze"
+    "Engine auto-downloads on first run — integrations work immediately",
+    "Mac installs open cleanly, no 'unverified developer' warning",
+    "Reliable Claude Code detection across nvm, volta, bun, fnm"
   ]
 }
