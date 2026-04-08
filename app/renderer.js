@@ -1060,13 +1060,22 @@ merlin.onUpdateProgress((msg) => {
   document.getElementById('update-text').textContent = msg;
 });
 
-merlin.onUpdateReady(({ latest }) => {
-  document.getElementById('update-text').textContent = `Merlin ${latest} installed`;
-  document.getElementById('update-btn').textContent = 'Restart';
-  document.getElementById('update-btn').disabled = false;
-  document.getElementById('update-btn').onclick = () => {
-    merlin.restartApp();
-  };
+merlin.onUpdateReady(({ latest, needsReinstall }) => {
+  if (needsReinstall) {
+    document.getElementById('update-text').textContent = `Merlin ${latest} ready — download new version`;
+    document.getElementById('update-btn').textContent = 'Download';
+    document.getElementById('update-btn').disabled = false;
+    document.getElementById('update-btn').onclick = () => {
+      window.open('https://merlingotme.com/download/windows', '_blank');
+    };
+  } else {
+    document.getElementById('update-text').textContent = `Merlin ${latest} installed`;
+    document.getElementById('update-btn').textContent = 'Restart';
+    document.getElementById('update-btn').disabled = false;
+    document.getElementById('update-btn').onclick = () => {
+      merlin.restartApp();
+    };
+  }
 });
 
 merlin.onUpdateError((err) => {
@@ -1764,7 +1773,11 @@ async function loadSpells() {
       '📈 Winners: [top ad name] at Xx ROAS\n' +
       '⚠️ Action: [one-line recommendation]\n' +
       '━━━━━━━━━━━━━━━"\n' +
-      'Keep it to 4 lines max. No fluff. Just numbers and one action item.' },
+      'Keep it to 4 lines max. No fluff. Just numbers and one action item. ' +
+      'GEO CHECK (weekly, run on Mondays only): Use WebSearch to search for the brand\'s product category ' +
+      '(e.g., "best streetwear brands", "best [vertical] [product]"). Check if the brand appears in AI-generated snippets ' +
+      'or top results. Score: appeared in X/5 searches. Save to memory.md: `## GEO Score\n0407|3/5|"best streetwear" yes|"affordable hoodies" no`. ' +
+      'If score drops vs last week, flag in briefing.' },
     { spell: 'weekly-digest', cron: '0 9 * * 1', name: 'Weekly Digest', desc: 'Monday strategy + benchmarks', prompt:
       'Pull 7-day performance. Compare to previous week AND Wisdom collective benchmarks. ' +
       'List: revenue, spend, MER trend, top 3 ads by ROAS, worst 3 killed, IVT test results (which variable won this week). ' +

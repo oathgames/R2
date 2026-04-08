@@ -839,6 +839,16 @@ async function startSession() {
 
 // ── IPC Handlers ────────────────────────────────────────────
 
+ipcMain.handle('get-version', () => {
+  const version = getCurrentVersion();
+  let whatsNew = [];
+  try {
+    const vj = JSON.parse(fs.readFileSync(path.join(appRoot, 'version.json'), 'utf8'));
+    whatsNew = vj.whatsNew || [];
+  } catch {}
+  return { version, whatsNew };
+});
+
 ipcMain.handle('check-setup', async () => {
   const { exec } = require('child_process');
 
@@ -2754,7 +2764,16 @@ async function downloadAndApplyUpdate() {
     } catch {} // may fail in asar — that's OK, version.json is the source of truth
 
     console.log(`[update] Version updated to ${latestVersion}`);
-    if (win && !win.isDestroyed()) win.webContents.send('update-ready', { latest: latestVersion });
+    // Check if the Electron shell itself needs updating (asar can't be hot-swapped)
+    let shellVersion = '0.0.0';
+    try {
+      const asarPkg = require(path.join(path.dirname(app.getPath('exe')), 'resources', 'app.asar', 'package.json'));
+      shellVersion = asarPkg.version || '0.0.0';
+    } catch {
+      try { shellVersion = require(path.join(__dirname, '..', 'package.json')).version || '0.0.0'; } catch {}
+    }
+    const needsReinstall = app.isPackaged && isNewerVersion(latestVersion, shellVersion);
+    if (win && !win.isDestroyed()) win.webContents.send('update-ready', { latest: latestVersion, needsReinstall });
   } catch (err) {
     if (win && !win.isDestroyed()) win.webContents.send('update-error', err.message || String(err));
   }
