@@ -1,6 +1,6 @@
 {
   "name": "Merlin",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Merlin — Your AI CMO",
   "main": "app/main.js",
   "scripts": {
@@ -76,6 +76,7 @@
     "nsis": {
       "oneClick": true,
       "perMachine": false,
+      "include": "build/installer.nsh",
       "artifactName": "Merlin.Setup.${version}.${ext}",
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,

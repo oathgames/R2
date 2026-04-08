@@ -54,7 +54,7 @@ process.on('uncaughtException', (err) => {
     });
     req.write(payload);
     req.end();
-  } catch {}
+  } catch (e) { console.error('[ping]', e.message); }
 });
 process.on('unhandledRejection', (reason) => { console.error('[UNHANDLED]', reason); });
 
@@ -711,7 +711,7 @@ async function startSession() {
         }
       }
     }
-  } catch {}
+  } catch (e) { console.error('[account-info]', e.message); }
 
   try {
     for await (const msg of activeQuery) {
@@ -780,7 +780,7 @@ async function startSession() {
               }) + '\n';
               fs.appendFileSync(logPath, entry);
             }
-          } catch {}
+          } catch (e) { console.error('[spell-log]', e.message); }
 
           win.webContents.send('spell-completed', { taskId, status, summary, timestamp });
           // Report spell completion to wisdom API for aggregate insights
@@ -797,7 +797,7 @@ async function startSession() {
             }));
             req.end();
             req.on('error', () => {});
-          } catch {}
+          } catch (e) { console.error('[spell-ping]', e.message); }
         }
       }
     }
@@ -1972,7 +1972,7 @@ function cacheDashboardData(msg) {
       const tmpPath = statsFile + '.tmp';
       fs.writeFileSync(tmpPath, JSON.stringify(stats, null, 2));
       fs.renameSync(tmpPath, statsFile);
-    } catch {}
+    } catch (e) { console.error('[stats-cache]', e.message); }
   }
 }
 
@@ -2043,7 +2043,7 @@ ipcMain.handle('disconnect-platform', (_, platform, brandName) => {
     const keyMap = {
       meta: ['metaAccessToken', 'metaAdAccountId', 'metaPageId', 'metaPixelId'],
       tiktok: ['tiktokAccessToken', 'tiktokAdvertiserId'],
-      google: ['googleAccessToken', 'googleRefreshToken', 'googleDeveloperToken', 'googleCustomerId'],
+      google: ['googleAccessToken', 'googleRefreshToken', 'googleAdsDeveloperToken', 'googleAdsCustomerId'],
       shopify: ['shopifyAccessToken', 'shopifyStore'],
       klaviyo: ['klaviyoAccessToken', 'klaviyoApiKey', 'klaviyoRefreshToken'],
       pinterest: ['pinterestAccessToken', 'pinterestRefreshToken'],
@@ -2081,7 +2081,7 @@ ipcMain.handle('disconnect-platform', (_, platform, brandName) => {
           } else {
             fs.writeFileSync(tokensFile, JSON.stringify(tokens));
           }
-        } catch {}
+        } catch (e) { console.error('[disconnect-token]', key, e.message); }
       }
     }
     if (changed) writeConfig(cfg);
@@ -2164,7 +2164,7 @@ ipcMain.handle('list-spells', (_, brandName) => {
     }
 
     return results;
-  } catch { return []; }
+  } catch (e) { console.error('[list-spells]', e.message); return []; }
 });
 
 // Helper: extract brand from spell task ID (merlin-{brand}-{spell} → brand)
@@ -2351,18 +2351,24 @@ ipcMain.handle('get-credits', async (_, brandName) => {
 
   return credits;
 });
-let _wisdomCache = null;
-let _wisdomCacheTime = 0;
+let _wisdomCache = {};  // keyed by vertical
+let _wisdomCacheTime = {};
 const WISDOM_CACHE_MS = 4 * 60 * 60 * 1000; // 4 hours
 
-ipcMain.handle('get-wisdom', async () => {
-  if (_wisdomCache && (Date.now() - _wisdomCacheTime) < WISDOM_CACHE_MS) return _wisdomCache;
+ipcMain.handle('get-wisdom', async (_, brandName) => {
+  if (!brandName) try { brandName = readState().activeBrand || ''; } catch {}
+  const cfg = brandName ? readBrandConfig(brandName) : readConfig();
+  const vertical = cfg.vertical || 'general';
+
+  if (_wisdomCache[vertical] && (Date.now() - (_wisdomCacheTime[vertical] || 0)) < WISDOM_CACHE_MS) {
+    return _wisdomCache[vertical];
+  }
   try {
-    const raw = await httpsGet('https://api.merlingotme.com/api/wisdom?vertical=ecommerce');
-    _wisdomCache = JSON.parse(raw.toString());
-    _wisdomCacheTime = Date.now();
-    return _wisdomCache;
-  } catch { return _wisdomCache || null; }
+    const raw = await httpsGet(`https://api.merlingotme.com/api/wisdom?vertical=${encodeURIComponent(vertical)}`);
+    _wisdomCache[vertical] = JSON.parse(raw.toString());
+    _wisdomCacheTime[vertical] = Date.now();
+    return _wisdomCache[vertical];
+  } catch { return _wisdomCache[vertical] || null; }
 });
 
 ipcMain.handle('win-minimize', () => { if (win) win.minimize(); });
@@ -2619,15 +2625,13 @@ function httpsGet(url, _depth = 0) {
 }
 
 function getCurrentVersion() {
-  // Read version from version.json first (always writable, survives asar packaging)
-  // Then package.json as fallback. NEVER use require() — it caches stale versions.
-  try {
-    const vj = JSON.parse(fs.readFileSync(path.join(appRoot, 'version.json'), 'utf8'));
-    if (vj.version) return vj.version;
-  } catch {}
-  try {
-    return JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version;
-  } catch {}
+  // Packaged: asar package.json is the source of truth for THIS build
+  if (app.isPackaged) {
+    try { return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version; } catch {}
+  }
+  // Dev: workspace version.json
+  try { return JSON.parse(fs.readFileSync(path.join(appRoot, 'version.json'), 'utf8')).version; } catch {}
+  try { return JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version; } catch {}
   return '0.0.0';
 }
 

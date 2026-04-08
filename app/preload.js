@@ -60,7 +60,7 @@ contextBridge.exposeInMainWorld('merlin', {
   deleteFile: (folderPath) => ipcRenderer.invoke('delete-file', folderPath),
 
   // Wisdom
-  getWisdom: () => ipcRenderer.invoke('get-wisdom'),
+  getWisdom: (brandName) => ipcRenderer.invoke('get-wisdom', brandName),
 
   // Disconnect platform
   disconnectPlatform: (platform, brand) => ipcRenderer.invoke('disconnect-platform', platform, brand),

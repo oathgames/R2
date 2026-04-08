@@ -1,6 +1,5 @@
 // ── Connection ──────────────────────────────────────────────
-const params = new URLSearchParams(window.location.search);
-const token = params.get('token');
+const token = window.location.hash ? window.location.hash.slice(1) : null;
 // Connect WS to the same host:port that served this page
 const wsHost = window.location.hostname;
 const wsPort = window.location.port;

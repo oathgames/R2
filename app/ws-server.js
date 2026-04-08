@@ -77,7 +77,7 @@ function startServer() {
 
     wss = new WebSocketServer({ server: httpServer, maxPayload: 256 * 1024 }); // 256KB limit
 
-    httpServer.listen(0, '127.0.0.1', () => {
+    httpServer.listen(0, '127.0.0.1', () => { // TODO: change to '0.0.0.0' when PWA goes live (requires firewall prompt)
       wsPort = httpServer.address().port;
       const protocol = useTLS ? 'WSS+HTTPS' : 'WS+HTTP';
       console.log(`[${protocol}] Server listening on port ${wsPort}`);
@@ -89,6 +89,7 @@ function startServer() {
 function setupConnectionHandler() {
   wss.on('connection', (ws) => {
     let authed = false;
+    let authAttempts = 0;
 
     ws.on('message', (raw) => {
       let msg;
@@ -102,8 +103,9 @@ function setupConnectionHandler() {
           ws.send(JSON.stringify({ type: 'auth-ok' }));
           console.log('[WS] Client authenticated');
         } else {
+          authAttempts++;
           ws.send(JSON.stringify({ type: 'auth-fail' }));
-          ws.close();
+          if (authAttempts >= 5) { ws.close(1008, 'Too many auth failures'); return; }
         }
         return;
       }
