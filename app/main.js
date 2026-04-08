@@ -633,14 +633,13 @@ async function startSession() {
     return;
   }
 
-  // Import SDK — try multiple resolution paths for packaged vs dev
+  // Import SDK — packaged apps MUST use the unpacked path (asar import is unreliable)
   let query;
-  try {
-    ({ query } = await import('@anthropic-ai/claude-agent-sdk'));
-  } catch {
-    // Fallback: resolve from unpacked asar explicitly
-    const unpackedSdk = path.join(appInstall, 'resources', 'app.asar.unpacked', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'sdk.mjs');
+  if (app.isPackaged) {
+    const unpackedSdk = path.join(path.dirname(app.getPath('exe')), 'resources', 'app.asar.unpacked', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'sdk.mjs');
     ({ query } = await import('file://' + unpackedSdk.replace(/\\/g, '/')));
+  } else {
+    ({ query } = await import('@anthropic-ai/claude-agent-sdk'));
   }
 
   // Determine the active brand — must match what the welcome message shows
