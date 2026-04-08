@@ -163,8 +163,35 @@ async function init() {
       const bullets = (typeof info === 'object' && info.whatsNew && info.whatsNew.length)
         ? info.whatsNew.map(b => '• ' + b).join('\n')
         : '• Up to date';
-      vLabel.dataset.tip = '✦ What\'s New\n' + bullets;
+      vLabel.dataset.tip = '✦ What\'s New\n' + bullets + '\n\nClick to check for updates';
     } catch {}
+
+    // Click to manually check for updates (auto-check fires every 30 min,
+    // but users want a way to force it after seeing a new release land).
+    vLabel.style.cursor = 'pointer';
+    vLabel.addEventListener('click', async () => {
+      if (!merlin.checkForUpdates) return;
+      const original = vLabel.textContent;
+      vLabel.textContent = 'checking…';
+      try {
+        const result = await merlin.checkForUpdates();
+        if (!result?.ok) {
+          vLabel.textContent = 'check failed';
+          setTimeout(() => { vLabel.textContent = original; }, 2000);
+          return;
+        }
+        if (result.hasUpdate) {
+          // The IPC handler already fired update-available; the toast will appear.
+          vLabel.textContent = `v${result.latest} ready`;
+        } else {
+          vLabel.textContent = 'up to date';
+          setTimeout(() => { vLabel.textContent = original; }, 2000);
+        }
+      } catch {
+        vLabel.textContent = 'check failed';
+        setTimeout(() => { vLabel.textContent = original; }, 2000);
+      }
+    });
   }
 
   // Show chat immediately with a welcome message — no blank screen
@@ -1061,12 +1088,37 @@ merlin.onUpdateProgress((msg) => {
 });
 
 merlin.onUpdateReady(({ latest, needsReinstall }) => {
+  // Always restore the dismiss button — onUpdateAvailable hides it during the
+  // "Updating..." phase, but the user must always be able to close the toast.
+  const dismiss = document.getElementById('update-dismiss');
+  dismiss.classList.remove('hidden');
+  dismiss.onclick = () => document.getElementById('update-toast').classList.add('hidden');
+
   if (needsReinstall) {
-    document.getElementById('update-text').textContent = `Merlin ${latest} ready — download new version`;
-    document.getElementById('update-btn').textContent = 'Download';
+    // Shell asar can't be hot-swapped — we need to run the new installer.
+    // The Install button kicks off a download + silent install + relaunch.
+    document.getElementById('update-text').textContent = `Merlin ${latest} ready — install now?`;
+    document.getElementById('update-btn').textContent = 'Install Now';
     document.getElementById('update-btn').disabled = false;
-    document.getElementById('update-btn').onclick = () => {
-      window.open('https://merlingotme.com/download/windows', '_blank');
+    document.getElementById('update-btn').onclick = async () => {
+      document.getElementById('update-btn').disabled = true;
+      document.getElementById('update-btn').textContent = 'Installing...';
+      dismiss.classList.add('hidden');
+      try {
+        const r = await merlin.installUpdate();
+        if (!r?.ok) {
+          document.getElementById('update-text').textContent = `Install failed: ${r?.error || 'unknown error'}`;
+          document.getElementById('update-btn').textContent = 'Retry';
+          document.getElementById('update-btn').disabled = false;
+          dismiss.classList.remove('hidden');
+        }
+        // On success, the app will quit shortly — no further UI needed
+      } catch (e) {
+        document.getElementById('update-text').textContent = `Install failed: ${e.message}`;
+        document.getElementById('update-btn').textContent = 'Retry';
+        document.getElementById('update-btn').disabled = false;
+        dismiss.classList.remove('hidden');
+      }
     };
   } else {
     document.getElementById('update-text').textContent = `Merlin ${latest} installed`;

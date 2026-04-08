@@ -1,5 +1,5 @@
 {
-  "version": "0.8.6",
+  "version": "0.8.7",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -18,10 +18,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v0.8.6: Auto-download engine on first run (no more 'engine not found' errors), plus v0.8.5 Mac notarization and reliable Claude Code detection.",
+  "notes": "v0.8.7: Real one-click in-app updates — installer downloads and runs automatically. Dismissable update toast. Manual update check via clickable version label. Faster auto-update polling (30 min).",
   "whatsNew": [
-    "Engine auto-downloads on first run — integrations work immediately",
-    "Mac installs open cleanly, no 'unverified developer' warning",
-    "Reliable Claude Code detection across nvm, volta, bun, fnm"
+    "One-click in-app updates — no more browser hop",
+    "Click the version label to manually check for updates",
+    "Update toast is always dismissable, faster auto-check (30 min)"
   ]
 }

@@ -2640,6 +2640,93 @@ ipcMain.handle('apply-referral-code', async (_, code) => {
 ipcMain.handle('apply-update', () => { downloadAndApplyUpdate(); });
 ipcMain.handle('restart-app', () => { app.relaunch(); app.exit(0); });
 
+// Full auto-install: download the new installer from GitHub releases, spawn
+// it detached, then quit. The installer's customInit kills any leftover
+// Merlin processes, installs over the old build, and customInstall launches
+// the new version. Net effect: a one-click in-app update for shell changes.
+ipcMain.handle('install-update', async () => {
+  try {
+    const raw = await httpsGet('https://api.github.com/repos/oathgames/Merlin/releases/latest');
+    const data = JSON.parse(raw.toString());
+    if (!data || !data.assets) throw new Error('No release data');
+
+    let assetName, runner;
+    if (process.platform === 'win32') {
+      // Find the Setup .exe (matches Merlin.Setup.X.Y.Z.exe pattern)
+      const a = data.assets.find(x => /^Merlin\.Setup\..*\.exe$/i.test(x.name));
+      if (!a) throw new Error('No Windows installer in release');
+      assetName = a.name;
+      runner = (filePath) => {
+        const { spawn } = require('child_process');
+        // Run installer detached so it survives this app quitting.
+        // Don't use /S — let user see install progress (it's quick) and the
+        // installer's customInstall will launch the new version automatically.
+        const child = spawn(filePath, [], { detached: true, stdio: 'ignore' });
+        child.unref();
+      };
+    } else if (process.platform === 'darwin') {
+      // Mac: prefer the dmg, fall back to zip. Open the dmg in Finder so the
+      // user can drag the new app to /Applications. (Full silent reinstall on
+      // Mac requires moving over an in-use bundle, which Gatekeeper blocks.)
+      const a = data.assets.find(x => /\.dmg$/i.test(x.name)) || data.assets.find(x => /-mac.*\.zip$/i.test(x.name));
+      if (!a) throw new Error('No Mac installer in release');
+      assetName = a.name;
+      runner = (filePath) => {
+        const { spawn } = require('child_process');
+        spawn('open', [filePath], { detached: true, stdio: 'ignore' }).unref();
+      };
+    } else {
+      throw new Error('Auto-install not supported on this platform');
+    }
+
+    const asset = data.assets.find(x => x.name === assetName);
+    if (win && !win.isDestroyed()) win.webContents.send('update-progress', 'Downloading installer...');
+    const installer = await httpsGet(asset.browser_download_url);
+    if (installer.length < 1024 * 1024) throw new Error('Installer download too small');
+
+    const tmpFile = path.join(os.tmpdir(), assetName);
+    fs.writeFileSync(tmpFile, installer);
+    if (process.platform !== 'win32') fs.chmodSync(tmpFile, 0o755);
+
+    if (win && !win.isDestroyed()) win.webContents.send('update-progress', 'Launching installer...');
+
+    // Tiny delay so the renderer can paint the "Launching..." message before we quit
+    setTimeout(() => {
+      try { runner(tmpFile); } catch (e) { console.error('[install-update] runner failed', e); }
+      // Give the installer a moment to start before we exit, otherwise on
+      // some Windows boxes the spawned process gets killed with the parent.
+      setTimeout(() => { forceQuit = true; app.quit(); }, 800);
+    }, 200);
+
+    return { ok: true };
+  } catch (err) {
+    console.error('[install-update]', err);
+    if (win && !win.isDestroyed()) win.webContents.send('update-error', err.message || 'Install failed');
+    return { ok: false, error: err.message };
+  }
+});
+// Manual "check for updates" trigger from the UI. Returns the result so the
+// caller can show a toast like "You're on the latest version" when no update
+// exists, instead of the auto-check's silent no-op behavior.
+ipcMain.handle('check-for-updates', async () => {
+  try {
+    const currentVersion = getCurrentVersion();
+    const raw = await httpsGet('https://api.github.com/repos/oathgames/Merlin/releases/latest');
+    const data = JSON.parse(raw.toString());
+    if (!data || !data.tag_name) return { ok: false, error: 'Could not reach GitHub' };
+    const latestVersion = data.tag_name.replace(/^v/, '');
+    const hasNewer = isNewerVersion(latestVersion, currentVersion);
+    const hasInstaller = releaseHasInstallerForPlatform(data.assets);
+    const hasUpdate = hasNewer && hasInstaller;
+    if (hasUpdate && win && !win.isDestroyed()) {
+      win.webContents.send('update-available', { current: currentVersion, latest: latestVersion });
+    }
+    return { ok: true, current: currentVersion, latest: latestVersion, hasUpdate };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Update check failed' };
+  }
+});
+
 // ── Auto-Update ─────────────────────────────────────────────
 
 function httpsGet(url, _depth = 0) {
@@ -2758,6 +2845,16 @@ async function ensureBinary(opts = {}) {
   return true;
 }
 
+// Returns true if the release contains an installer asset for THIS platform.
+// Used to skip update toasts for releases that didn't ship a Mac DMG (e.g.
+// when CI minutes were exhausted and the build was done locally on Windows).
+function releaseHasInstallerForPlatform(assets) {
+  if (!Array.isArray(assets)) return false;
+  if (process.platform === 'win32') return assets.some(a => /^Merlin\.Setup\..*\.exe$/i.test(a.name));
+  if (process.platform === 'darwin') return assets.some(a => /\.dmg$/i.test(a.name) || /-mac.*\.zip$/i.test(a.name));
+  return true;
+}
+
 async function checkForUpdates() {
   try {
     const currentVersion = getCurrentVersion();
@@ -2767,6 +2864,11 @@ async function checkForUpdates() {
     const latestVersion = data.tag_name.replace(/^v/, '');
     console.log(`[update] current=${currentVersion} latest=${latestVersion} newer=${isNewerVersion(latestVersion, currentVersion)}`);
     if (!latestVersion || !isNewerVersion(latestVersion, currentVersion)) return;
+    // Skip the toast if the release doesn't ship an installer for this OS
+    if (!releaseHasInstallerForPlatform(data.assets)) {
+      console.log('[update] release has no installer for this platform, skipping toast');
+      return;
+    }
     if (win && !win.isDestroyed()) {
       win.webContents.send('update-available', { current: currentVersion, latest: latestVersion });
     }
@@ -2936,7 +3038,9 @@ app.whenReady().then(async () => {
   }
 
   setTimeout(checkForUpdates, 10000);
-  setInterval(checkForUpdates, 4 * 60 * 60 * 1000);
+  // Check every 30 minutes — short enough that users on the demo path see
+  // new releases within half an hour without needing to restart.
+  setInterval(checkForUpdates, 30 * 60 * 1000);
 
   // Lightweight telemetry — one ping on launch, no PII
   setTimeout(() => {

@@ -98,6 +98,8 @@ contextBridge.exposeInMainWorld('merlin', {
   // Auto-update
   applyUpdate: () => ipcRenderer.invoke('apply-update'),
   restartApp: () => ipcRenderer.invoke('restart-app'),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
 
   // Events
   onPlatform: (cb) => ipcRenderer.on('platform', (_, p) => cb(p)),
