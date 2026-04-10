@@ -1025,6 +1025,40 @@ merlin.onSdkError((err) => {
   _restartAttempts++;
 
   const errLower = (err || '').toLowerCase();
+  console.error('[SDK Error]', err);
+
+  // ── "Not logged in" — Claude's credentials file is missing ──
+  // The SDK reads auth from ~/.claude/.credentials.json. On Mac, this file
+  // may not exist if the user only has Claude Desktop but never ran the CLI.
+  // Opening Claude Desktop and signing in should create it. Don't retry
+  // endlessly — show clear guidance immediately.
+  if (errLower.includes('not logged in') || errLower.includes('please run /login') || errLower.includes('login required')) {
+    const bubble = addClaudeBubble();
+    textBuffer = 'Merlin needs you to sign in to Claude.\n\nOpen Claude Desktop, make sure you\'re signed in, then click Retry. If you don\'t have Claude Desktop, install it from claude.ai/download.';
+    finalizeBubble();
+    bubble.style.borderColor = 'rgba(251,191,36,.3)';
+
+    const retryBtn = document.createElement('button');
+    retryBtn.textContent = 'Retry Connection';
+    retryBtn.className = 'btn-action btn-approve-style';
+    retryBtn.style.cssText = 'margin-top:12px;margin-right:8px;width:auto;padding:8px 20px;font-size:13px';
+    retryBtn.onclick = () => {
+      retryBtn.parentElement?.remove();
+      _restartAttempts = 0;
+      sessionActive = true;
+      merlin.startSession();
+    };
+    bubble.appendChild(retryBtn);
+
+    const openBtn = document.createElement('button');
+    openBtn.textContent = 'Open Claude Desktop';
+    openBtn.className = 'btn-action btn-deny-style';
+    openBtn.style.cssText = 'margin-top:12px;width:auto;padding:8px 20px;font-size:13px';
+    openBtn.onclick = () => { merlin.installClaude(); };
+    bubble.appendChild(openBtn);
+    return;
+  }
+
   let userMsg = 'Something went wrong. ';
   let isAuthError = false;
   let isClaudeNotFound = false;
@@ -1034,17 +1068,13 @@ merlin.onSdkError((err) => {
     userMsg = 'Session expired. ';
     isAuthError = true;
   } else if (errLower.includes('enoent') && (errLower.includes('spawn') || errLower.includes('node'))) {
-    // Only match actual spawn ENOENT — not every error containing "not found"
     userMsg = 'Claude CLI not found. ';
     isClaudeNotFound = true;
   }
-  // ALWAYS log the real error so we can debug
-  console.error('[SDK Error]', err);
 
   const bubble = addClaudeBubble();
 
   if (_restartAttempts > MAX_RESTART_ATTEMPTS) {
-    // Stop retrying — show manual recovery with specific guidance
     let reason;
     if (isClaudeNotFound) {
       reason = 'Claude CLI is not installed. Install it from claude.ai/download, then click Retry.';
@@ -1058,7 +1088,6 @@ merlin.onSdkError((err) => {
     finalizeBubble();
     bubble.style.borderColor = 'rgba(239,68,68,.3)';
 
-    // Add a retry button inline
     const retryBtn = document.createElement('button');
     retryBtn.textContent = 'Retry Connection';
     retryBtn.className = 'btn-action btn-approve-style';
@@ -1073,9 +1102,7 @@ merlin.onSdkError((err) => {
     return;
   }
 
-  // Exponential backoff: 2s, 4s, 8s
   const delay = Math.min(2000 * Math.pow(2, _restartAttempts - 1), 8000);
-  // Show the actual error on first attempt so Mac users can report it
   const debugHint = _restartAttempts === 1 ? `\n(${(err || '').slice(0, 120)})` : '';
   textBuffer = `${userMsg}Retrying in ${delay / 1000}s... (attempt ${_restartAttempts}/${MAX_RESTART_ATTEMPTS})${debugHint}`;
   finalizeBubble();
