@@ -3897,16 +3897,59 @@ async function downloadAndApplyUpdate() {
     } catch {} // may fail in asar — that's OK, version.json is the source of truth
 
     console.log(`[update] Version updated to ${latestVersion}`);
-    // Check if the Electron shell itself needs updating (asar can't be hot-swapped)
-    let shellVersion = '0.0.0';
-    try {
-      const asarPkg = require(getPackagedResourcePath('app.asar', 'package.json'));
-      shellVersion = asarPkg.version || '0.0.0';
-    } catch {
-      try { shellVersion = require(path.join(__dirname, '..', 'package.json')).version || '0.0.0'; } catch {}
+
+    // Hot-swap the asar: download the new app.asar from the release and
+    // overwrite the one in the install directory. This avoids downloading
+    // and running a full .exe installer (which triggers Defender's AV scan).
+    // The install directory (AppData/Local/Programs/Merlin) is writable by
+    // the user, and asar files are not executables — Defender ignores them.
+    let asarUpdated = false;
+    if (app.isPackaged) {
+      const asarAsset = (data.assets || []).find(a => a.name === 'app.asar');
+      if (asarAsset) {
+        const asarPath = path.join(appInstall, 'app.asar');
+        // Check writability first — Mac /Applications may need admin
+        let writable = false;
+        try { fs.accessSync(asarPath, fs.constants.W_OK); writable = true; } catch {}
+        if (writable) {
+          try {
+            if (win && !win.isDestroyed()) win.webContents.send('update-progress', 'Updating app...');
+            const asarData = await httpsGet(asarAsset.browser_download_url);
+            if (asarData.length > 500000) { // sanity: asar should be > 500KB
+              const asarBackup = asarPath + '.backup';
+              try { fs.copyFileSync(asarPath, asarBackup); } catch {}
+              fs.writeFileSync(asarPath, asarData);
+              try { fs.unlinkSync(asarBackup); } catch {}
+              asarUpdated = true;
+              console.log(`[update] asar updated (${(asarData.length / 1024 / 1024).toFixed(1)} MB)`);
+            }
+          } catch (e) {
+            console.error('[update] asar update failed:', e.message);
+          }
+        } else {
+          console.warn('[update] asar not writable — install dir may be system-owned. User should reinstall from merlingotme.com.');
+        }
+      }
+      // Also update the binary in the INSTALL location (installer-trusted path)
+      // so getBinaryPath() finds the new version without Defender quarantining it.
+      if (binaryAsset) {
+        try {
+          const installBinaryPath = path.join(appInstall, '.claude', 'tools', process.platform === 'win32' ? 'Merlin.exe' : 'Merlin');
+          if (fs.existsSync(path.dirname(installBinaryPath))) {
+            const binaryData = fs.readFileSync(path.join(appRoot, '.claude', 'tools', process.platform === 'win32' ? 'Merlin.exe' : 'Merlin'));
+            fs.writeFileSync(installBinaryPath, binaryData);
+            console.log('[update] install-dir binary synced');
+          }
+        } catch (e) {
+          console.error('[update] install-dir binary sync failed:', e.message);
+        }
+      }
     }
-    const needsReinstall = app.isPackaged && isNewerVersion(latestVersion, shellVersion);
-    if (win && !win.isDestroyed()) win.webContents.send('update-ready', { latest: latestVersion, needsReinstall });
+
+    // Never trigger the installer-download path (which downloads an .exe to
+    // temp and triggers Defender). The asar hot-swap + binary replace handles
+    // everything. Just restart to apply.
+    if (win && !win.isDestroyed()) win.webContents.send('update-ready', { latest: latestVersion, needsReinstall: false });
   } catch (err) {
     if (win && !win.isDestroyed()) win.webContents.send('update-error', err.message || String(err));
   }
