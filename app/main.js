@@ -118,6 +118,41 @@ const appRoot = app.isPackaged
 // with ENOENT if it doesn't exist yet (race with bootstrapWorkspace on first launch).
 try { fs.mkdirSync(appRoot, { recursive: true }); } catch {}
 
+// The Claude Agent SDK spawns `node cli.js` as a subprocess. On Mac, non-developer
+// users don't have Node.js installed, so `node` isn't on PATH and the SDK fails
+// with ENOENT. Fix: create a wrapper script at a known PATH location that uses
+// Electron's own embedded Node via ELECTRON_RUN_AS_NODE=1.
+if (app.isPackaged && process.platform !== 'win32') {
+  try {
+    const nodeWrapperDir = path.join(os.homedir(), '.claude', 'bin');
+    const nodeWrapper = path.join(nodeWrapperDir, 'node');
+    fs.mkdirSync(nodeWrapperDir, { recursive: true });
+    // Write a shell script that re-execs the Electron binary in Node-only mode.
+    // ELECTRON_RUN_AS_NODE=1 strips all Electron/Chromium behavior and makes it
+    // act as a pure Node.js runtime — exactly what the SDK's cli.js needs.
+    const electronBin = process.execPath;
+    const script = `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${electronBin}" "$@"\n`;
+    // Only write if missing or stale (different Electron binary path)
+    let needsWrite = true;
+    try {
+      const existing = fs.readFileSync(nodeWrapper, 'utf8');
+      if (existing.includes(electronBin)) needsWrite = false;
+    } catch {}
+    if (needsWrite) {
+      fs.writeFileSync(nodeWrapper, script, { mode: 0o755 });
+    }
+    // Ensure ~/.claude/bin is on PATH (fixPath already adds it, but confirm)
+    if (!process.env.PATH.includes(nodeWrapperDir)) {
+      process.env.PATH = nodeWrapperDir + ':' + process.env.PATH;
+    }
+  } catch (e) {
+    console.error('[node-wrapper] Failed to create node wrapper:', e.message);
+  }
+}
+// Windows: Electron ships with an embedded Node but `node` is typically available
+// via the user's system install. If not, electron-builder's NSIS installer adds
+// the app to PATH. The wrapper approach isn't needed on Windows.
+
 // Resolve the Merlin engine binary. We prefer the INSTALL location because
 // files placed there by the trusted installer don't get quarantined by
 // Windows Defender — the installer's user-approved trust extends to its
@@ -3446,22 +3481,30 @@ ipcMain.handle('install-update', async () => {
 
     let assetName, runner;
     if (process.platform === 'win32') {
-      // Find the Setup .exe (matches Merlin.Setup.X.Y.Z.exe pattern)
       const a = data.assets.find(x => /^Merlin\.Setup\..*\.exe$/i.test(x.name));
       if (!a) throw new Error('No Windows installer in release');
       assetName = a.name;
       runner = (filePath) => {
         const { spawn } = require('child_process');
-        // Run installer detached so it survives this app quitting.
-        // Don't use /S — let user see install progress (it's quick) and the
-        // installer's customInstall will launch the new version automatically.
-        const child = spawn(filePath, [], { detached: true, stdio: 'ignore' });
+        // Use cmd /c start to launch the installer fully detached from this
+        // process tree. Previous approach (spawn detached) was getting killed
+        // when the parent Electron process exited on some Windows configs.
+        // cmd /c start /wait runs the installer, then start "" launches the
+        // app after the installer finishes. The /wait is critical — without
+        // it, the app launches before install completes and runs the old version.
+        const installDir = path.dirname(app.getPath('exe'));
+        const appExe = path.join(installDir, 'Merlin.exe');
+        const script = `@echo off\r\n"${filePath}" /S\r\ntimeout /t 2 /nobreak >nul\r\nstart "" "${appExe}"\r\n`;
+        const batPath = path.join(os.tmpdir(), 'merlin-update.bat');
+        fs.writeFileSync(batPath, script);
+        const child = spawn('cmd.exe', ['/c', 'start', '/min', '', batPath], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+        });
         child.unref();
       };
     } else if (process.platform === 'darwin') {
-      // Mac: prefer the dmg, fall back to zip. Open the dmg in Finder so the
-      // user can drag the new app to /Applications. (Full silent reinstall on
-      // Mac requires moving over an in-use bundle, which Gatekeeper blocks.)
       const a = data.assets.find(x => /\.dmg$/i.test(x.name)) || data.assets.find(x => /-mac.*\.zip$/i.test(x.name));
       if (!a) throw new Error('No Mac installer in release');
       assetName = a.name;
@@ -3482,15 +3525,13 @@ ipcMain.handle('install-update', async () => {
     fs.writeFileSync(tmpFile, installer);
     if (process.platform !== 'win32') fs.chmodSync(tmpFile, 0o755);
 
-    if (win && !win.isDestroyed()) win.webContents.send('update-progress', 'Launching installer...');
+    if (win && !win.isDestroyed()) win.webContents.send('update-progress', 'Installing update...');
 
-    // Tiny delay so the renderer can paint the "Launching..." message before we quit
     setTimeout(() => {
       try { runner(tmpFile); } catch (e) { console.error('[install-update] runner failed', e); }
-      // Give the installer a moment to start before we exit, otherwise on
-      // some Windows boxes the spawned process gets killed with the parent.
-      setTimeout(() => { forceQuit = true; app.quit(); }, 800);
-    }, 200);
+      // Give the batch script a moment to start before we exit
+      setTimeout(() => { forceQuit = true; app.quit(); }, 1500);
+    }, 500);
 
     return { ok: true };
   } catch (err) {
