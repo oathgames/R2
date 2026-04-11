@@ -3068,6 +3068,7 @@ function getConnections(brandName) {
     if (globalCfg.falApiKey || vaultGet('_global', 'falApiKey')) connected.push({ platform: 'fal', status: 'connected' });
     if (globalCfg.elevenLabsApiKey || vaultGet('_global', 'elevenLabsApiKey')) connected.push({ platform: 'elevenlabs', status: 'connected' });
     if (globalCfg.heygenApiKey || vaultGet('_global', 'heygenApiKey')) connected.push({ platform: 'heygen', status: 'connected' });
+    if (globalCfg.arcadsApiKey || vaultGet('_global', 'arcadsApiKey')) connected.push({ platform: 'arcads', status: 'connected' });
     if (globalCfg.slackBotToken || globalCfg.slackWebhookUrl || vaultGet('_global', 'slackBotToken')) connected.push({ platform: 'slack', status: 'connected' });
     if (globalCfg.discordGuildId && globalCfg.discordChannelId) connected.push({ platform: 'discord', status: 'connected' });
     return connected;
@@ -3101,6 +3102,7 @@ ipcMain.handle('disconnect-platform', (_, platform, brandName) => {
       fal: ['falApiKey'],
       elevenlabs: ['elevenLabsApiKey'],
       heygen: ['heygenApiKey'],
+      arcads: ['arcadsApiKey'],
     };
     const keys = keyMap[platform];
     if (!keys) return { success: false, error: 'unknown platform' };

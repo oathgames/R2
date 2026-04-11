@@ -7,7 +7,7 @@ Open in Claude Code. Type `/merlin`. Everything else is automatic.
 The `/merlin` command handles all setup on first run:
 - Downloads the Merlin engine if missing
 - Creates the config file if missing
-- Asks for a fal.ai API key (the only requirement)
+- Offers to connect a fal.ai API key (optional — needed for image/video generation)
 - Walks through brand + product setup
 - Sets up daily automation if wanted
 
@@ -38,7 +38,7 @@ everyone. This is what makes hook suggestions, format picks, and timing
 recommendations smarter with every release.
 
 ## Key Rules
-- Only `falApiKey` required to start. Everything else optional.
+- No API keys required to start. `falApiKey` needed for image/video generation, everything else optional.
 - Show cost estimate before running. Get confirmation.
 - Show output inline before posting anywhere. `skipSlack: true` by default.
 - Scheduled/automated runs skip confirmation.

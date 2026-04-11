@@ -1802,6 +1802,7 @@ const API_KEY_PLATFORMS = {
   fal:        { key: 'falApiKey', label: 'fal.ai', placeholder: 'fal-xxxx...', url: 'https://fal.ai/dashboard/keys' },
   elevenlabs: { key: 'elevenLabsApiKey', label: 'ElevenLabs', placeholder: 'xi_xxxx...', url: 'https://elevenlabs.io/app/settings/api-keys' },
   heygen:     { key: 'heygenApiKey', label: 'HeyGen', placeholder: 'your-api-key', url: 'https://app.heygen.com/settings?nav=API' },
+  arcads:     { key: 'arcadsApiKey', label: 'Arcads', placeholder: 'your-api-key', url: 'https://app.arcads.ai/settings' },
 };
 
 document.addEventListener('click', async (e) => {
