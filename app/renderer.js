@@ -858,24 +858,25 @@ merlin.onSdkMessage((msg) => {
       isStreaming = false;
       setInputDisabled(false);
       stopTickingTimer();
+      // Clean up empty response bubbles (session died before producing output)
+      if (currentBubble && currentBubble.textContent.trim() === '' && currentBubble.innerHTML.trim() === '') {
+        const wrapper = currentBubble.closest('.msg');
+        if (wrapper) wrapper.remove();
+      }
       // Show stats bar like Claude Desktop
       if (turnStartTime) {
         const duration = ((Date.now() - turnStartTime) / 1000).toFixed(0);
-        const statsDiv = document.createElement('div');
-        statsDiv.className = 'turn-stats';
-        // Try multiple paths for token count
-        const tokens = msg.usage?.output_tokens
-          || msg.result?.usage?.output_tokens
-          || msg.num_output_tokens
-          || null;
-        let statsText = `${duration}s`;
-        // Use turn token count from message_delta events
-        const numTurns = msg.num_turns || '';
-        if (turnTokens > 0) statsText += ` \u00b7 ${turnTokens} tokens`;
-        statsText += ' \u00b7 Merlin can make mistakes';
-        statsDiv.textContent = statsText;
-        messages.appendChild(statsDiv);
-        scrollToBottom();
+        // Don't show stats for empty/failed responses (0 tokens = session died)
+        if (turnTokens > 0 || parseInt(duration) > 2) {
+          const statsDiv = document.createElement('div');
+          statsDiv.className = 'turn-stats';
+          let statsText = `${duration}s`;
+          if (turnTokens > 0) statsText += ` \u00b7 ${turnTokens} tokens`;
+          statsText += ' \u00b7 Merlin can make mistakes';
+          statsDiv.textContent = statsText;
+          messages.appendChild(statsDiv);
+          scrollToBottom();
+        }
         turnStartTime = null;
       }
       input.focus();
@@ -2323,7 +2324,7 @@ let tickerEl = null;
 function startTickingTimer() {
   stopTickingTimer();
   tickerEl = document.createElement('div');
-  tickerEl.className = 'stats-bar ticker-live';
+  tickerEl.className = 'turn-stats ticker-live';
   tickerEl.textContent = '0s';
   messages.appendChild(tickerEl);
   scrollToBottom();
