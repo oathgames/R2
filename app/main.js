@@ -1272,7 +1272,12 @@ async function startSession() {
           const oauth = creds.claudeAiOauth || creds;
           if (oauth.accessToken) {
             sessionEnv.CLAUDE_CODE_OAUTH_TOKEN = oauth.accessToken;
-            console.log('[auth] Injected OAuth token from', credJson.includes('Keychain') ? 'Keychain' : 'credentials');
+            // Also set on process.env so headless spell sessions (spawned by
+            // the scheduler as child processes) inherit the token. Without this,
+            // Mac spell sessions fail with "Not logged in" because they don't
+            // go through startSession() and can't read the Keychain directly.
+            process.env.CLAUDE_CODE_OAUTH_TOKEN = oauth.accessToken;
+            console.log('[auth] Injected OAuth token (session + process.env)');
           }
         } catch (e) {
           console.error('[auth] Failed to parse credentials:', e.message);

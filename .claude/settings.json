@@ -9,6 +9,8 @@
       "WebSearch",
       "TodoWrite",
       "mcp__merlin__*",
+      "Bash(*Merlin*--config*)",
+      "Bash(*Merlin*--cmd*)",
       "Bash(curl -sI *)",
       "Bash(curl *github.com*)",
       "Bash(curl *merlingotme.com*)",
@@ -21,8 +23,6 @@
       "mcp__scheduled-tasks__update_scheduled_task"
     ],
     "deny": [
-      "Bash(*Merlin*--cmd*)",
-      "Bash(*Merlin*--config*)",
       "Bash(*graph.facebook.com*)",
       "Bash(*business.facebook.com*)",
       "Bash(*business-api.tiktok.com*)",
