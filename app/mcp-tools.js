@@ -121,7 +121,7 @@ function buildTools(tool, z, ctx) {
     'meta_ads',
     'Manage Meta/Facebook ad campaigns — create ads, check performance, pause/scale ads, discover accounts.',
     {
-      action: z.enum(['push', 'insights', 'kill', 'duplicate', 'setup', 'discover', 'warmup', 'retarget', 'lookalike', 'setup-retargeting', 'adlib']).describe('The operation to perform'),
+      action: z.enum(['push', 'insights', 'kill', 'activate', 'duplicate', 'setup', 'discover', 'warmup', 'retarget', 'lookalike', 'setup-retargeting', 'adlib', 'catalog']).describe('The operation to perform'),
       brand: z.string().optional().describe('Brand name'),
       adId: z.string().optional().describe('Ad ID (for kill/duplicate)'),
       campaignId: z.string().optional().describe('Target campaign ID'),
@@ -409,6 +409,35 @@ function buildTools(tool, z, ctx) {
     }
   ));
 
+  // ── threads ─────────────────────────────────────────────
+  tools.push(tool(
+    'threads',
+    'Threads (Meta) — view profile, read posts, check engagement insights.',
+    {
+      action: z.enum(['profile', 'posts', 'insights']).describe('Operation'),
+      brand: z.string().optional(),
+    },
+    async (args) => {
+      const result = await runBinary(ctx, 'threads-' + args.action, args);
+      return { content: [{ type: 'text', text: result.text }], isError: result.error };
+    }
+  ));
+
+  // ── etsy ─────────────────────────────────────────────────
+  tools.push(tool(
+    'etsy',
+    'Etsy shop management — view shop details, browse listings, check orders.',
+    {
+      action: z.enum(['shop', 'products', 'orders']).describe('Operation'),
+      brand: z.string().optional(),
+      batchCount: z.number().optional().describe('Number of results to return (max 100)'),
+    },
+    async (args) => {
+      const result = await runBinary(ctx, 'etsy-' + args.action, args);
+      return { content: [{ type: 'text', text: result.text }], isError: result.error };
+    }
+  ));
+
   // ── config ───────────────────────────────────────────────
   tools.push(tool(
     'config',
@@ -430,7 +459,7 @@ function buildTools(tool, z, ctx) {
     'platform_login',
     'Connect a platform via OAuth — opens browser for authorization. Returns success/failure only, never tokens.',
     {
-      platform: z.enum(['meta', 'tiktok', 'google', 'shopify', 'amazon', 'klaviyo', 'pinterest', 'snapchat', 'twitter', 'slack', 'discord']).describe('Platform to connect'),
+      platform: z.enum(['meta', 'tiktok', 'google', 'shopify', 'amazon', 'klaviyo', 'pinterest', 'snapchat', 'twitter', 'slack', 'discord', 'etsy']).describe('Platform to connect'),
       brand: z.string().optional(),
       store: z.string().optional().describe('Shopify store URL or name (for shopify)'),
     },
