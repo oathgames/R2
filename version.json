@@ -1,5 +1,5 @@
 {
-  "version": "0.9.93",
+  "version": "0.9.94",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -23,10 +23,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v0.9.93: Security hardening — adversarial audit, credential protection, hook integrity, redaction improvements.",
+  "notes": "v0.9.94: Active brand enforcement — dropdown selection always respected across MCP calls.",
   "whatsNew": [
+    "Active brand tag — dropdown selection enforced on every MCP call",
     "Security hardening — 13 fixes from adversarial audit",
-    "Revenue tracker now works with MCP tools (not just Bash)",
-    "Engine download progress visible during first launch"
+    "Revenue tracker now works with MCP tools (not just Bash)"
   ]
 }

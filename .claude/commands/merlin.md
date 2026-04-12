@@ -32,6 +32,9 @@ Use `mcp__merlin__*` tools for ALL platform interactions. They handle credential
 - `mcp__merlin__seo({action, brand, ...})` — SEO tools
 - `mcp__merlin__config({action, ...})` — API key setup, verification
 
+**ACTIVE BRAND (MANDATORY):**
+Every user message includes an `[ACTIVE_BRAND: <name>]` tag injected by the app. This is the brand the user selected in the dropdown. **Always use this brand** for all MCP tool calls, file paths, and context — even if a different brand was mentioned earlier in the conversation. If the user explicitly names a different brand in their message text, use that override instead. Never fall back to a brand from the session startup or prior messages when the tag says otherwise.
+
 **RULES:**
 - **Add-only.** Create new content only. Never edit/delete existing ads, Shopify products/pages, email flows, or SEO content. Pause underperformers = OK. Edit existing = never.
 - **Budget caps.** Check `maxDailyAdBudget` and `maxMonthlyAdSpend` in config before ad spend. Stop if exceeded.
