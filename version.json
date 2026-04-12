@@ -1,5 +1,5 @@
 {
-  "version": "0.9.94",
+  "version": "0.9.95",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -23,10 +23,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v0.9.94: Active brand enforcement — dropdown selection always respected across MCP calls.",
+  "notes": "v0.9.95: Mac auth rewrite, Windows Claude detection, Etsy + Threads, 20 new blog posts.",
   "whatsNew": [
-    "Active brand tag — dropdown selection enforced on every MCP call",
-    "Security hardening — 13 fixes from adversarial audit",
-    "Revenue tracker now works with MCP tools (not just Bash)"
+    "Mac login — faster auth with file-first credential chain + expiry check",
+    "Etsy + Threads integrations live (shop, products, orders, profile, posts)",
+    "20 new SEO blog posts + dynamic OG images"
   ]
 }

@@ -9,8 +9,6 @@
       "WebSearch",
       "TodoWrite",
       "mcp__merlin__*",
-      "Bash(*Merlin*--config*)",
-      "Bash(*Merlin*--cmd*)",
       "Bash(curl -sI *)",
       "Bash(curl *github.com*)",
       "Bash(curl *merlingotme.com*)",

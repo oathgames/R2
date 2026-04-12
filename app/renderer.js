@@ -273,39 +273,72 @@ async function init() {
   }
 
   // Auto-detect Claude — poll every 3 seconds until found
-  async function detectClaude() {
+  async function detectClaude(force) {
     // Guard against double-start from poller + retry button racing
     if (sessionActive) return true;
-    const result = await merlin.checkSetup();
+    const result = await merlin.checkSetup(force);
 
     // Mac: probe detected missing credentials — trigger browser login
     // immediately instead of showing a confusing setup screen for 30+ seconds.
     if (result.needsLogin && !window._loginTriggered) {
       window._loginTriggered = true;
       document.getElementById('setup-status').textContent = 'Signing in to Claude — a browser window will open...';
+      // Show cancel + API key options so user isn't trapped
+      const setupMain = document.getElementById('setup-main');
+      if (setupMain) {
+        setupMain.innerHTML = `
+          <p class="setup-explain">Completing a one-time sign-in to your Claude account...</p>
+          <button id="setup-login-cancel" class="btn-secondary" style="width:100%;margin-bottom:6px">Cancel</button>
+          <button id="setup-login-apikey" class="btn-secondary" style="width:100%;">Use API key instead</button>
+        `;
+        document.getElementById('setup-login-cancel')?.addEventListener('click', () => {
+          window._loginTriggered = false;
+          document.getElementById('setup-status').textContent = 'Sign-in cancelled. Click Retry when ready.';
+          setupMain.innerHTML = `
+            <button id="setup-auto-btn" class="btn-primary" style="width:100%;margin-bottom:6px">Retry Sign In</button>
+            <button id="setup-apikey-btn" class="btn-secondary" style="width:100%;">Use API key instead</button>
+          `;
+          document.getElementById('setup-auto-btn')?.addEventListener('click', () => detectClaude());
+          document.getElementById('setup-apikey-btn')?.addEventListener('click', () => {
+            document.getElementById('setup-main').style.display = 'none';
+            document.getElementById('setup-apikey-form').style.display = '';
+          });
+        });
+        document.getElementById('setup-login-apikey')?.addEventListener('click', () => {
+          window._loginTriggered = false;
+          setupMain.style.display = 'none';
+          document.getElementById('setup-apikey-form').style.display = '';
+        });
+      }
       if (window._claudePoller) { clearInterval(window._claudePoller); window._claudePoller = null; }
       try {
         if (merlin.triggerClaudeLogin) {
           const loginResult = await merlin.triggerClaudeLogin();
           if (loginResult.success) {
-            // Login succeeded — retry probe immediately
             document.getElementById('setup-status').textContent = 'Signed in! Connecting...';
             window._loginTriggered = false;
-            // Resume polling — next probe should find the new credentials
+            // Force-invalidate probe cache so next check sees new credentials
+            let _forceFirst = true;
             window._claudePoller = setInterval(async () => {
-              const detected = await detectClaude();
+              const detected = await detectClaude(_forceFirst);
+              _forceFirst = false;
               if (detected) {
                 setup.style.animation = 'fadeOut .3s ease forwards';
                 setTimeout(() => { setup.classList.add('hidden'); setup.style.animation = ''; }, 300);
               }
             }, 3000);
-            return false; // not ready yet, but login completed — next poll will succeed
+            return false;
+          }
+          // Login timed out or failed — show retry
+          if (loginResult.timedOut) {
+            document.getElementById('setup-status').textContent = 'Sign-in timed out. Click Retry to try again.';
           }
         }
       } catch (e) { console.error('[auto-login]', e); }
-      // Login failed — fall through to show setup screen with retry
       window._loginTriggered = false;
-      document.getElementById('setup-status').textContent = 'Sign in to Claude to continue. Click Retry after signing in.';
+      if (!document.getElementById('setup-login-cancel')) {
+        document.getElementById('setup-status').textContent = 'Sign in to Claude to continue. Click Retry after signing in.';
+      }
       return false;
     }
 
@@ -341,14 +374,21 @@ async function init() {
     document.getElementById('setup-status').textContent = 'Checking Claude...';
     welcomeBubble.parentElement.remove();
 
-    // Poll every 3 seconds — auto-continue when Claude is detected
+    // Poll for Claude — wait for each probe to finish before scheduling the next
     if (window._claudePoller) clearInterval(window._claudePoller);
+    let _polling = false;
     window._claudePoller = setInterval(async () => {
-      const detected = await detectClaude();
-      if (detected) {
-        setup.style.animation = 'fadeOut .3s ease forwards';
-        setTimeout(() => { setup.classList.add('hidden'); setup.style.animation = ''; }, 300);
-      }
+      if (_polling) return; // Previous probe still running — skip this tick
+      _polling = true;
+      try {
+        const detected = await detectClaude();
+        if (detected) {
+          clearInterval(window._claudePoller);
+          window._claudePoller = null;
+          setup.style.animation = 'fadeOut .3s ease forwards';
+          setTimeout(() => { setup.classList.add('hidden'); setup.style.animation = ''; }, 300);
+        }
+      } finally { _polling = false; }
     }, 3000);
   }
 
@@ -436,6 +476,7 @@ document.getElementById('setup-install-btn')?.addEventListener('click', () => {
 function addUserBubble(text) {
   const div = document.createElement('div');
   div.className = 'msg msg-user';
+  div.style.whiteSpace = 'pre-wrap';
   div.textContent = text;
   messages.appendChild(div);
   scrollToBottom(true); // User sent a message — always scroll to show it
@@ -516,11 +557,24 @@ function finalizeBubble() {
     if (_userMessageCount >= 3) {
       hasShownSparkleHint = true;
       setTimeout(() => {
+        // Don't show tip while a response is streaming — it would corrupt currentBubble/isStreaming state
+        if (isStreaming || currentBubble) return;
         const sparkle = document.getElementById('magic-btn');
         sparkle.classList.add('sparkle-hint');
-        const hint = addClaudeBubble();
-        textBuffer = '✦ **Tip:** Your connections, spells, and brand settings live behind the ✦ button up top.';
-        finalizeBubble();
+        // Build tip bubble directly — do NOT use addClaudeBubble()/finalizeBubble()
+        // which are stateful and would corrupt any concurrent streaming response
+        const wrapper = document.createElement('div');
+        wrapper.className = 'msg msg-claude';
+        const avatar = document.createElement('div');
+        avatar.className = 'msg-avatar';
+        avatar.textContent = '✦';
+        const bubble = document.createElement('div');
+        bubble.className = 'msg-bubble';
+        bubble.innerHTML = renderMarkdown('✦ **Tip:** Your connections, spells, and brand settings live behind the ✦ button up top.');
+        wrapper.appendChild(avatar);
+        wrapper.appendChild(bubble);
+        messages.appendChild(wrapper);
+        scrollToBottom();
         setTimeout(() => sparkle.classList.remove('sparkle-hint'), 8000);
       }, 1500);
     }
@@ -858,7 +912,6 @@ function handleStreamEvent(msg) {
       if (!currentBubble) {
         addClaudeBubble();
         isStreaming = true;
-        setInputDisabled(true);
       }
     }
     // Show tool activity status (like Claude Code) — single persistent row, no stacking
@@ -1753,7 +1806,7 @@ document.addEventListener('click', (e) => {
 });
 
 // Connect platform tiles — ALL connections handled directly in UI, zero chat involvement
-const OAUTH_PLATFORMS = new Set(['tiktok', 'shopify', 'google', 'amazon', 'pinterest', 'klaviyo', 'slack', 'discord']);
+const OAUTH_PLATFORMS = new Set(['tiktok', 'shopify', 'google', 'amazon', 'pinterest', 'klaviyo', 'slack', 'discord', 'etsy']);
 const API_KEY_PLATFORMS = {
   // Meta: manual token entry while app is in review. Users get their token
   // from developers.facebook.com → Graph API Explorer. Once App Review
@@ -2325,10 +2378,12 @@ function stopTickingTimer() {
 let _statusDebounce = null;
 let _currentStatusLabel = '';
 
+let _stuckTimer = null;
 function setStatusLabel(label) {
   if (label === _currentStatusLabel) return; // no-op if same
   _currentStatusLabel = label;
   if (_statusDebounce) clearTimeout(_statusDebounce);
+  if (_stuckTimer) clearTimeout(_stuckTimer);
   _statusDebounce = setTimeout(() => {
     const status = document.getElementById('chat-status');
     const existing = status.querySelector('.chat-status-label');
@@ -2339,6 +2394,15 @@ function setStatusLabel(label) {
     }
     _statusDebounce = null;
   }, 300); // 300ms debounce — prevents rapid flicker
+
+  // Stuck detection — if status doesn't change for 45s, show a hint
+  _stuckTimer = setTimeout(() => {
+    const statusEl = document.getElementById('chat-status');
+    const labelEl = statusEl?.querySelector('.chat-status-label');
+    if (labelEl && labelEl.textContent === label) {
+      labelEl.textContent = label + ' — taking a while...';
+    }
+  }, 45000);
 }
 
 // Reusable context menu
@@ -2393,7 +2457,7 @@ function removeTypingIndicator() {
 
 function sendMessage() {
   const text = input.value.trim();
-  if (!text || isStreaming) return;
+  if (!text) return;
 
   // Trial expiry gate — soft block, allow key activation
   if (_trialExpired) {

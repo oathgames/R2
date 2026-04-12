@@ -237,6 +237,75 @@ function execCommand(cmd, timeout = 5000) {
   });
 }
 
+// ── Mac credential reader ──────────────────────────────────
+// Reads the Claude OAuth token on macOS using a reliable fallback chain:
+//   1. File (~/.claude/.credentials.json) — instant, no permissions issues
+//   2. Keychain ("Claude Code-credentials") — GUI process can read it
+//      If Keychain succeeds, persist to file so future launches are instant.
+// Returns the access token string, or null if neither source has one.
+// Fully async — never blocks the main process.
+async function readMacCredentials() {
+  if (process.platform !== 'darwin') return null;
+
+  const credFile = path.join(os.homedir(), '.claude', '.credentials.json');
+
+  // Helper: parse credential JSON and extract token, with expiry check
+  function extractToken(raw) {
+    if (!raw) return null;
+    try {
+      const creds = JSON.parse(raw);
+      const oauth = creds.claudeAiOauth || creds;
+      if (!oauth.accessToken) return null;
+      // Check expiry — if expiresAt exists and is in the past, token is stale
+      if (oauth.expiresAt && Date.now() >= new Date(oauth.expiresAt).getTime()) {
+        console.log('[auth] Credential token expired, skipping');
+        return null;
+      }
+      return { token: oauth.accessToken, raw };
+    } catch {
+      return null;
+    }
+  }
+
+  // 1. Try the file first (fastest, most reliable)
+  try {
+    const raw = fs.readFileSync(credFile, 'utf8').trim();
+    const result = extractToken(raw);
+    if (result) return result.token;
+  } catch {}
+
+  // 2. Try Keychain — async via execFile (never blocks main process).
+  //    The Electron main process is a GUI app so Keychain is unlocked and
+  //    ACL permits access (unlike ELECTRON_RUN_AS_NODE subprocesses).
+  try {
+    const { execFile } = require('child_process');
+    const credJson = await new Promise((resolve) => {
+      execFile(
+        'security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+        { timeout: 10000, encoding: 'utf8' },
+        (err, stdout) => resolve(err ? '' : (stdout || '').trim())
+      );
+    });
+    const result = extractToken(credJson);
+    if (result) {
+      // Persist to file so future launches skip Keychain entirely
+      try {
+        const claudeDir = path.join(os.homedir(), '.claude');
+        fs.mkdirSync(claudeDir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(credFile, result.raw, { mode: 0o600 });
+        console.log('[auth] Persisted Keychain credentials to file for future launches');
+      } catch (e) {
+        console.error('[auth] Failed to persist credentials file:', e.message);
+      }
+      return result.token;
+    }
+  } catch (e) {
+    console.error('[auth] Keychain read failed:', e.message);
+  }
+
+  return null;
+}
+
 async function getClaudeDesktopStatus() {
   const status = { installed: false, running: false, path: null };
 
@@ -279,8 +348,27 @@ async function getClaudeDesktopStatus() {
   }
 
   if (process.platform === 'win32') {
+    // Check if running
     const { stdout } = await execCommand('tasklist /FI "IMAGENAME eq Claude.exe" /NH', 3000);
     status.running = stdout.toLowerCase().includes('claude.exe');
+    // Check common install locations
+    const localAppData = process.env.LOCALAPPDATA || '';
+    const winCandidates = [
+      path.join(localAppData, 'Programs', 'claude-desktop', 'Claude.exe'),
+      path.join(localAppData, 'Programs', 'Claude', 'Claude.exe'),
+      path.join(localAppData, 'claude-desktop', 'Claude.exe'),
+      path.join(process.env.PROGRAMFILES || '', 'Claude', 'Claude.exe'),
+    ];
+    for (const candidate of winCandidates) {
+      try {
+        fs.accessSync(candidate, fs.constants.F_OK);
+        status.installed = true;
+        status.path = candidate;
+        break;
+      } catch {}
+    }
+    // If it's running, it's obviously installed
+    if (status.running) status.installed = true;
     return status;
   }
 
@@ -312,31 +400,14 @@ async function probeClaudeSetup(force = false) {
 
     try {
       const { query } = await importClaudeAgentSdk();
-      // On Mac, inject the OAuth token from Keychain so the probe CLI
-      // doesn't fail with "Not logged in" (same fix as startSession)
       const probeEnv = { ...process.env };
       if (process.platform === 'darwin' && !probeEnv.CLAUDE_CODE_OAUTH_TOKEN && !probeEnv.ANTHROPIC_API_KEY) {
-        try {
-          const { execSync } = require('child_process');
-          let credJson = '';
-          try {
-            credJson = execSync('security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null', { timeout: 5000, encoding: 'utf8' }).trim();
-          } catch {
-            try { credJson = fs.readFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), 'utf8').trim(); } catch {}
-          }
-          if (credJson) {
-            try {
-              const creds = JSON.parse(credJson);
-              const oauth = creds.claudeAiOauth || creds;
-              if (oauth.accessToken) probeEnv.CLAUDE_CODE_OAUTH_TOKEN = oauth.accessToken;
-            } catch {}
-          } else {
-            // No credentials anywhere — tell the UI so it can start the
-            // login flow immediately instead of waiting for the session to
-            // fail with "Not logged in". This saves ~10 seconds of delay.
-            console.log('[setup-probe] No Mac credentials found — needs login');
-          }
-        } catch {}
+        const token = await readMacCredentials();
+        if (token) {
+          probeEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
+        } else {
+          console.log('[setup-probe] No Mac credentials found — needs login');
+        }
       }
       querySession = query({
         prompt: 'Merlin readiness check.',
@@ -348,10 +419,12 @@ async function probeClaudeSetup(force = false) {
         },
       });
 
+      let probeTimer;
       const timeout = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Claude setup timed out')), CLAUDE_SETUP_TIMEOUT_MS);
+        probeTimer = setTimeout(() => reject(new Error('Claude setup timed out')), CLAUDE_SETUP_TIMEOUT_MS);
       });
       const account = await Promise.race([querySession.accountInfo(), timeout]);
+      clearTimeout(probeTimer);
       console.log('[setup-probe] accountInfo:', JSON.stringify(account || null));
       const hasAccount = !!(account && (
         account.email ||
@@ -623,6 +696,7 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      spellcheck: true,
     },
   });
 
@@ -658,6 +732,43 @@ async function createWindow() {
   win.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     if (permission === 'media') { callback(true); return; }
     callback(false);
+  });
+
+  // Right-click context menu (Copy, Paste, Select All, etc.)
+  win.webContents.on('context-menu', (_, params) => {
+    const items = [];
+    // Spellcheck suggestions
+    if (params.misspelledWord) {
+      const suggestions = params.dictionarySuggestions || [];
+      if (suggestions.length > 0) {
+        for (const s of suggestions.slice(0, 5)) {
+          items.push({ label: s, click: () => win.webContents.replaceMisspelling(s) });
+        }
+      } else {
+        items.push({ label: 'No suggestions', enabled: false });
+      }
+      items.push({ type: 'separator' });
+    }
+    if (params.selectionText) {
+      items.push({ label: 'Copy', role: 'copy' });
+    }
+    if (params.isEditable) {
+      items.push({ label: 'Paste', role: 'paste' });
+      items.push({ label: 'Cut', role: 'cut' });
+      items.push({ type: 'separator' });
+      items.push({ label: 'Select All', role: 'selectAll' });
+    }
+    if (!params.isEditable && !params.selectionText) {
+      items.push({ label: 'Select All', role: 'selectAll' });
+    }
+    if (params.linkURL) {
+      items.push({ type: 'separator' });
+      items.push({ label: 'Copy Link', click: () => { require('electron').clipboard.writeText(params.linkURL); } });
+      items.push({ label: 'Open Link', click: () => { shell.openExternal(params.linkURL); } });
+    }
+    if (items.length > 0) {
+      Menu.buildFromTemplate(items).popup({ window: win });
+    }
   });
 
   // Enable DevTools in dev mode (Ctrl+Shift+I on Windows, Cmd+Option+I on Mac)
@@ -972,6 +1083,10 @@ function translateTool(toolName, input) {
       'discord-setup': { label: 'Change Discord notification channel', cost: 'Free' },
       'discord-post':  { label: 'Send a message to Discord', cost: 'Free' },
       'amazon-login':  { label: 'Connect to your Amazon account', cost: 'Free' },
+      'etsy-login':    { label: 'Connect to your Etsy shop', cost: 'Free' },
+      'etsy-shop':     { label: 'Check your Etsy shop details', cost: 'Free' },
+      'etsy-products': { label: 'View your Etsy listings', cost: 'Free' },
+      'etsy-orders':   { label: 'Check your Etsy orders', cost: 'Free' },
       'amazon-ads-push': { label: 'Create a Sponsored Products ad on Amazon', cost: '$10/day budget' },
       'amazon-ads-kill': { label: 'Pause this Amazon campaign', cost: 'Free' },
       'api-key-setup': { label: 'Set up an image generation account', cost: 'Free' },
@@ -1001,11 +1116,9 @@ async function handleToolApproval(toolName, input) {
   if (deny.blocked) {
     try { appendAudit('bypass_attempt', { tool: toolName, reason: deny.reason }); } catch {}
     try { reportBypassTelemetry(toolName, deny.reason); } catch {}
-    try {
-      if (win && !win.isDestroyed()) {
-        win.webContents.send('bypass-attempt', { reason: deny.reason });
-      }
-    } catch {}
+    // Don't show toast — these blocks are expected behavior (Claude probing
+    // config files before learning to use MCP tools). The security still
+    // works, but the toast scares users into thinking something is wrong.
     return { behavior: 'deny', message: deny.reason };
   }
 
@@ -1236,54 +1349,15 @@ async function startSession() {
     }
   } catch {}
 
-  // macOS: Claude Code CLI reads auth from the macOS Keychain under the
-  // service name "Claude Code-credentials". But our ELECTRON_RUN_AS_NODE
-  // wrapper runs under Merlin's code signature, which may not be in the
-  // Keychain ACL → "Not logged in" error.
-  //
-  // Fix: read the OAuth token from the Keychain ourselves (the Electron main
-  // process IS in a GUI session so the Keychain is unlocked) and pass it
-  // via CLAUDE_CODE_OAUTH_TOKEN env var, which the CLI checks before Keychain.
-  //
-  // Fallback chain:
-  //   1. CLAUDE_CODE_OAUTH_TOKEN already set → use it
-  //   2. macOS Keychain "Claude Code-credentials" → read + inject
-  //   3. ~/.claude/.credentials.json file → read + inject
-  //   4. Neither → let the CLI try (may prompt "Not logged in")
+  // macOS: inject OAuth token so the SDK subprocess doesn't hit Keychain ACL issues.
+  // readMacCredentials() reads from file first (instant), falls back to Keychain,
+  // and persists to file for future launches. SECURITY: Do NOT set process.env —
+  // Claude can read it via `echo $CLAUDE_CODE_OAUTH_TOKEN` in Bash.
   if (process.platform === 'darwin' && !sessionEnv.CLAUDE_CODE_OAUTH_TOKEN && !sessionEnv.ANTHROPIC_API_KEY) {
-    try {
-      const { execSync } = require('child_process');
-      // Try Keychain first — this works when Keychain is unlocked (GUI session)
-      let credJson = '';
-      try {
-        credJson = execSync(
-          'security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null',
-          { timeout: 5000, encoding: 'utf8' }
-        ).trim();
-      } catch {
-        // Keychain entry doesn't exist or is locked — try the file fallback
-        try {
-          const credFile = path.join(os.homedir(), '.claude', '.credentials.json');
-          credJson = fs.readFileSync(credFile, 'utf8').trim();
-        } catch {}
-      }
-      if (credJson) {
-        try {
-          const creds = JSON.parse(credJson);
-          const oauth = creds.claudeAiOauth || creds;
-          if (oauth.accessToken) {
-            sessionEnv.CLAUDE_CODE_OAUTH_TOKEN = oauth.accessToken;
-            // SECURITY: Do NOT set process.env.CLAUDE_CODE_OAUTH_TOKEN —
-            // Claude can read it via `echo $CLAUDE_CODE_OAUTH_TOKEN` in Bash.
-            // Spell sessions inherit the token via the SDK's env option instead.
-            console.log('[auth] Injected OAuth token into session env');
-          }
-        } catch (e) {
-          console.error('[auth] Failed to parse credentials:', e.message);
-        }
-      }
-    } catch (e) {
-      console.error('[auth] macOS credential read failed:', e.message);
+    const token = await readMacCredentials();
+    if (token) {
+      sessionEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
+      console.log('[auth] Injected OAuth token into session env');
     }
   }
 
@@ -1500,8 +1574,8 @@ ipcMain.handle('get-version', () => {
   return { version, whatsNew };
 });
 
-ipcMain.handle('check-setup', async () => {
-  return probeClaudeSetup();
+ipcMain.handle('check-setup', async (_, force) => {
+  return probeClaudeSetup(!!force);
 });
 
 ipcMain.handle('install-claude', async () => {
@@ -1537,58 +1611,78 @@ ipcMain.handle('start-session', () => { startSession(); return { success: true }
 // ~/.claude/.credentials.json as fallback). Required when the user has
 // Claude Desktop signed in but has never run `claude login` from terminal.
 ipcMain.handle('trigger-claude-login', async () => {
-  if (process.platform !== 'darwin') return { success: true };
   try {
     const { spawn } = require('child_process');
-    const nodeWrapper = path.join(os.homedir(), '.claude', 'bin', 'node');
+    const isWin = process.platform === 'win32';
+    const nodeWrapper = path.join(os.homedir(), '.claude', 'bin', isWin ? 'node.cmd' : 'node');
     const sdkDir = app.isPackaged
-      ? path.join(path.dirname(app.getPath('exe')), '..', 'Resources', 'app.asar.unpacked', 'node_modules', '@anthropic-ai', 'claude-agent-sdk')
+      ? (process.platform === 'darwin'
+        ? path.join(path.dirname(app.getPath('exe')), '..', 'Resources', 'app.asar.unpacked', 'node_modules', '@anthropic-ai', 'claude-agent-sdk')
+        : path.join(path.dirname(app.getPath('exe')), 'resources', 'app.asar.unpacked', 'node_modules', '@anthropic-ai', 'claude-agent-sdk'))
       : path.join(__dirname, '..', 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
     const cliJs = path.join(sdkDir, 'cli.js');
 
-    // Spawn async (don't block main process) and capture stdout to
-    // extract the auth URL. The CLI prints the URL before opening the
-    // browser — we open it ourselves via shell.openExternal which
-    // properly foregrounds the browser window on macOS.
+    // Spawn the bundled CLI's login flow. Captures stdout to extract the
+    // auth URL, then opens it via shell.openExternal (foregrounds browser).
+    // Works on both macOS and Windows.
     return new Promise((resolve) => {
+      let resolved = false;
+      const finish = (result) => { if (!resolved) { resolved = true; resolve(result); } };
+
       const child = spawn(nodeWrapper, [cliJs, 'auth', 'login'], {
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', BROWSER: 'none' }, // BROWSER=none stops CLI from opening browser itself
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', BROWSER: 'none' },
         stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 120000,
+        shell: isWin, // Windows needs shell for .cmd files
       });
+
+      // 30s UX timeout — user shouldn't wait longer than this
+      const uxTimeout = setTimeout(() => {
+        console.error('[claude-login] Timed out after 30s');
+        try { child.kill(); } catch {}
+        finish({ success: false, timedOut: true, error: 'Login timed out. Try again or use an API key.' });
+      }, 30000);
 
       let stdout = '';
       child.stdout.on('data', (d) => {
         stdout += d.toString();
-        // The CLI prints the auth URL — find it and open ourselves
         const urlMatch = stdout.match(/(https:\/\/claude\.ai\/[^\s]+|https:\/\/[^\s]*oauth[^\s]*|https:\/\/[^\s]*auth[^\s]*login[^\s]*)/i);
         if (urlMatch) {
-          shell.openExternal(urlMatch[0]); // foregrounds browser on macOS
+          shell.openExternal(urlMatch[0]);
         }
       });
 
-      child.on('close', (code) => {
+      child.on('close', async (code) => {
+        clearTimeout(uxTimeout);
+        if (resolved) return; // Timeout already fired — don't block with more I/O
         if (code === 0) {
           console.log('[claude-login] Login completed successfully');
-          resolve({ success: true });
+          // Mac: persist Keychain credentials to file for instant future launches
+          if (process.platform === 'darwin') await readMacCredentials();
+          finish({ success: true });
         } else {
           console.error('[claude-login] Exit code:', code);
           // Even if CLI exits non-zero, check if credentials were created
+          const credFile = path.join(os.homedir(), '.claude', '.credentials.json');
           try {
-            const { execSync } = require('child_process');
-            const creds = execSync('security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null', { encoding: 'utf8', timeout: 3000 }).trim();
-            if (creds) {
-              resolve({ success: true });
+            const raw = fs.readFileSync(credFile, 'utf8').trim();
+            if (raw && JSON.parse(raw)) {
+              finish({ success: true });
               return;
             }
           } catch {}
-          resolve({ success: false, error: `Login process exited with code ${code}` });
+          // Mac: also check Keychain
+          if (process.platform === 'darwin') {
+            const token = await readMacCredentials();
+            if (token) { finish({ success: true }); return; }
+          }
+          finish({ success: false, error: `Login process exited with code ${code}` });
         }
       });
 
       child.on('error', (e) => {
+        clearTimeout(uxTimeout);
         console.error('[claude-login] Spawn error:', e.message);
-        resolve({ success: false, error: e.message });
+        finish({ success: false, error: e.message });
       });
     });
   } catch (e) {
@@ -1945,6 +2039,11 @@ ipcMain.handle('send-message', (_, text, options = {}) => {
     resolveNextMessage(msg);
   } else {
     pendingMessageQueue.push(msg);
+    // If no session is running, start one so the queued message gets processed.
+    // This handles the case where the session was stopped (Escape) or crashed
+    // without auto-restarting — without this, messages sit in the queue forever
+    // and the typing indicator hangs indefinitely.
+    if (!activeQuery) startSession();
   }
   if (!options.silent) wsServer.broadcast('user-message', { text });
   return { success: true };
@@ -2729,6 +2828,8 @@ const VAULT_SENSITIVE_KEYS = [
   'amazonRefreshToken',
   'pinterestAccessToken',
   'pinterestRefreshToken',
+  'etsyAccessToken',
+  'etsyRefreshToken',
   // API keys that were previously left in plaintext — adversarial review
   // found these are just as sensitive as OAuth tokens.
   'falApiKey',
@@ -2749,6 +2850,7 @@ const BRAND_KEYS = [
   'googleAccessToken', 'googleRefreshToken', 'googleAdsCustomerId', 'googleAdsDeveloperToken',
   'amazonAccessToken', 'amazonRefreshToken', 'amazonProfileId', 'amazonSellerId',
   'amazonAdClientId', 'amazonAdClientSecret', 'amazonSpClientId', 'amazonSpClientSecret',
+  'etsyAccessToken', 'etsyRefreshToken', 'etsyShopId', 'etsyKeystring',
   'klaviyoAccessToken', 'klaviyoApiKey',
   'pinterestAccessToken',
   'slackBotToken', 'slackWebhookUrl',
@@ -3091,6 +3193,7 @@ function getConnections(brandName) {
     checkBrand('googleAccessToken', 'google');
     checkBrand('pinterestAccessToken', 'pinterest');
     checkBrand('amazonAccessToken', 'amazon');
+    checkBrand('etsyAccessToken', 'etsy');
     // Shopify needs both token + store
     const shopToken = brandCfg.shopifyAccessToken || (!brandName ? globalCfg.shopifyAccessToken : null);
     const shopStore = brandCfg.shopifyStore || (!brandName ? globalCfg.shopifyStore : null);
@@ -3135,6 +3238,7 @@ ipcMain.handle('disconnect-platform', (_, platform, brandName) => {
       klaviyo: ['klaviyoAccessToken', 'klaviyoApiKey', 'klaviyoRefreshToken'],
       pinterest: ['pinterestAccessToken', 'pinterestRefreshToken'],
       amazon: ['amazonAccessToken', 'amazonRefreshToken', 'amazonProfileId'],
+      etsy: ['etsyAccessToken', 'etsyRefreshToken', 'etsyShopId', 'etsyKeystring'],
       slack: ['slackBotToken', 'slackWebhookUrl', 'slackChannel'],
       discord: ['discordGuildId', 'discordChannelId'],
       fal: ['falApiKey'],
@@ -3857,12 +3961,14 @@ function httpsGet(url, _depth = 0) {
 }
 
 function getCurrentVersion() {
-  // Packaged: asar package.json is the source of truth for THIS build
+  // Workspace version.json is the source of truth — the update process writes
+  // here reliably. The asar's bundled package.json may be stale if the hot-swap
+  // failed (locked file, non-writable install dir, AV interference).
+  try { return JSON.parse(fs.readFileSync(path.join(appRoot, 'version.json'), 'utf8')).version; } catch {}
+  // Fallback: asar package.json (first install before any update)
   if (app.isPackaged) {
     try { return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version; } catch {}
   }
-  // Dev: workspace version.json
-  try { return JSON.parse(fs.readFileSync(path.join(appRoot, 'version.json'), 'utf8')).version; } catch {}
   try { return JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version; } catch {}
   return '0.0.0';
 }

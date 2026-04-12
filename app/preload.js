@@ -19,7 +19,7 @@ contextBridge.exposeInMainWorld('merlin', {
   activateKey: (key) => ipcRenderer.invoke('activate-key', key),
 
   // Setup + Install
-  checkSetup: () => ipcRenderer.invoke('check-setup'),
+  checkSetup: (force) => ipcRenderer.invoke('check-setup', force),
   installClaude: () => ipcRenderer.invoke('install-claude'),
   setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
   hasApiKey: () => ipcRenderer.invoke('has-api-key'),

@@ -14,7 +14,7 @@ Merlin handles all credentials internally. You must NEVER:
 - Delete or modify `.merlin-vault`, `.merlin-ratelimit*`, or `.merlin-audit*`
 Use `mcp__merlin__*` tools for ALL platform interactions. They handle credentials, rate limits, and config internally. You never need to touch config files.
 
-**MCP TOOLS (use these for ALL platform actions):**
+**MCP TOOLS (MANDATORY — use these for ALL platform actions, NEVER call the binary via Bash):**
 - `mcp__merlin__connection_status({brand})` — check which platforms are connected
 - `mcp__merlin__meta_ads({action, brand, ...})` — Meta/Facebook ad operations
 - `mcp__merlin__tiktok_ads({action, brand, ...})` — TikTok ad operations
@@ -28,9 +28,20 @@ Use `mcp__merlin__*` tools for ALL platform interactions. They handle credential
 - `mcp__merlin__klaviyo({action, brand, ...})` — Klaviyo email marketing
 - `mcp__merlin__email({action, brand, ...})` — email program audit, revenue attribution
 - `mcp__merlin__discord({action, ...})` — Discord notifications
+- `mcp__merlin__threads({action, brand})` — Threads profile, posts, insights
+- `mcp__merlin__etsy({action, brand, ...})` — Etsy shop, listings, orders
 - `mcp__merlin__platform_login({platform, brand})` — connect a platform via OAuth
 - `mcp__merlin__seo({action, brand, ...})` — SEO tools
 - `mcp__merlin__config({action, ...})` — API key setup, verification
+
+**ROUTING (use MCP tools, never raw binary calls):**
+- "Show my catalog" / "Facebook products" → `mcp__merlin__meta_ads({action: "catalog", brand})`
+- "Threads profile" / "my Threads" → `mcp__merlin__threads({action: "profile", brand})`
+- "Threads posts" → `mcp__merlin__threads({action: "posts", brand})`
+- "Etsy shop" / "my Etsy" → `mcp__merlin__etsy({action: "shop", brand})`
+- "Etsy listings" → `mcp__merlin__etsy({action: "products", brand})`
+- "Etsy orders" → `mcp__merlin__etsy({action: "orders", brand})`
+- "Turn on" / "activate" / "unpause" / "reactivate" / "enable" an ad/campaign → `mcp__merlin__meta_ads({action: "activate", adId or campaignId})` — NOT video generation. This is a status flip, not content creation.
 
 **ACTIVE BRAND (MANDATORY):**
 Every user message includes an `[ACTIVE_BRAND: <name>]` tag injected by the app. This is the brand the user selected in the dropdown. **Always use this brand** for all MCP tool calls, file paths, and context — even if a different brand was mentioned earlier in the conversation. If the user explicitly names a different brand in their message text, use that override instead. Never fall back to a brand from the session startup or prior messages when the tag says otherwise.
@@ -253,9 +264,23 @@ Before every run:
 
 ## Step 2: Smart Routing
 
+**Video/image generation is NEVER the default.** Only route to content creation when the user explicitly asks to create, generate, or make something. Ambiguous requests ("do something with my ads", "help with my campaign") are data/management actions — check performance, review status, or ask for clarification. When in doubt, ask.
+
+| User says... | Route | NOT |
+|---|---|---|
+| "Make me a video" / "create an ad" / "generate content" | Content creation (below) | — |
+| "Turn on my ads" / "activate" / "unpause" | `meta_ads({action: "activate"})` | NOT content creation |
+| "How are my ads doing" / "check performance" | `dashboard` or platform insights | NOT content creation |
+| "Push this to Meta" | `meta_ads({action: "push"})` | NOT content creation |
+| "Pause this ad" / "kill" | `meta_ads({action: "kill"})` | NOT content creation |
+| "Scale this winner" | `meta_ads({action: "duplicate"})` | NOT content creation |
+| "Set up my account" | Platform setup action | NOT content creation |
+
+**Content creation modes (only when explicitly requested):**
+
 | User wants... | Mode | Pipeline |
 |---|---|---|
-| Product footage, lifestyle, B-roll, cinematic | `product-showcase` | Seedance 2 via fal.ai (default) |
+| Product footage, lifestyle, B-roll, cinematic | `product-showcase` | Seedance 2 via fal.ai |
 | Product photos, ad images | `image` | fal.ai (model auto-selected) |
 | Someone talking to camera | `talking-head` | HeyGen |
 
@@ -384,6 +409,7 @@ For images:
 | Push to Meta | `{"action": "meta-push", "adImagePath": "path/to/image.jpg", "adHeadline": "...", "adBody": "...", "dailyBudget": 5}` |
 | Meta performance | `{"action": "meta-insights"}` |
 | Kill ad | `{"action": "meta-kill", "adId": "AD_ID"}` |
+| Activate / unpause ad | `mcp__merlin__meta_ads({action: "activate", adId: "AD_ID"})` — or use `campaignId` for campaigns |
 | Scale winner | `{"action": "meta-duplicate", "adId": "AD_ID", "campaignId": "SCALING_CAMPAIGN_ID"}` |
 | Setup Meta campaigns | `{"action": "meta-setup"}` |
 | Create lookalike | `{"action": "meta-lookalike", "adId": "WINNER_AD_ID"}` |

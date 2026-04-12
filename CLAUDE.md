@@ -19,7 +19,7 @@ The `/merlin` command handles all setup on first run:
 
 **Actions per tool:** Each tool has an `action` enum. Example: `mcp__merlin__meta_ads({action: "push", adImagePath: "...", adHeadline: "..."})`. See the tool schema for all available actions and parameters.
 
-**Routing:** "How are my ads" / "What's my ROAS" / "How much spent" → `dashboard` (cross-platform). Only use platform-specific insights if user names a platform. "Make me an ad" → `image`, then ask which platform. "Pause all ads" → run kill for each connected platform. "What should I do next" → `dashboard` + check memory.md. "Why aren't my ads converting" / "audit my page" / "check my landing page" → `landing-audit`.
+**Routing:** "What's in my catalog" / "Show my Facebook products" → `meta_ads({action: "catalog"})`. "How are my ads" / "What's my ROAS" / "How much spent" → `dashboard` (cross-platform). Only use platform-specific insights if user names a platform. "Make me an ad" → `image`, then ask which platform. "Pause all ads" → run kill for each connected platform. "What should I do next" → `dashboard` + check memory.md. "Why aren't my ads converting" / "audit my page" / "check my landing page" → `landing-audit`.
 
 **Connections:** Use `mcp__merlin__connection_status({brand})` to check what's connected. Use `mcp__merlin__platform_login({platform, brand})` to connect. Never read config files directly.
 

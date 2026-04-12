@@ -98,6 +98,9 @@ a:hover{text-decoration:underline}
   min-height:32px;
   overflow:hidden;overflow-anchor:none;
   padding:0 16px;
+  max-width:752px;
+  margin:0 auto;
+  width:100%;
 }
 .chat-status-row{
   display:flex;align-items:center;gap:6px;
@@ -121,6 +124,9 @@ a:hover{text-decoration:underline}
   gap:14px;
   min-height:100%;
   justify-content:flex-end;
+  max-width:720px;
+  margin:0 auto;
+  width:100%;
 }
 
 /* ── Message Bubbles ─────────────────────────────────────── */
@@ -403,8 +409,9 @@ a:hover{text-decoration:underline}
   align-items:flex-end;
   gap:8px;
   padding:12px 16px;
-  border-top:1px solid var(--border);
-  background:var(--bg-deep);
+  max-width:752px;
+  margin:0 auto;
+  width:100%;
 }
 #input{
   flex:1;
