@@ -109,14 +109,14 @@ a:hover{text-decoration:underline}
   padding:6px 0;
 }
 .status-spinner{
-  font-size:12px;animation:statusSpin 2s linear infinite;display:inline-block;
-  opacity:.5;position:relative;top:-1px;
+  font-size:12px;animation:statusSpin 1.5s linear infinite;display:inline-block;
+  opacity:.7;position:relative;top:-1px;
 }
 @keyframes statusSpin{
   from{transform:rotate(0deg)}
   to{transform:rotate(360deg)}
 }
-.chat-status-label{opacity:.7}
+.chat-status-label{opacity:.85}
 
 #messages{
   display:flex;
@@ -494,10 +494,37 @@ a:hover{text-decoration:underline}
 #approval-cost{
   font-size:12px;
   color:var(--text-dim);
-  margin-bottom:12px;
+  margin-bottom:4px;
 }
 #approval-cost:empty{display:none}
+.approval-budget{
+  font-size:11px;
+  color:var(--text-dim);
+  margin-bottom:12px;
+  padding:6px 8px;
+  background:rgba(167,139,250,.06);
+  border-radius:6px;
+  border:1px solid rgba(167,139,250,.1);
+  line-height:1.4;
+}
+.approval-budget:empty{display:none}
+.approval-budget .over-budget{color:var(--danger);font-weight:600}
 #approval-actions{display:flex;gap:8px}
+/* ── Offline Banner ──────────────────────────────────────── */
+#offline-banner{
+  position:fixed;
+  top:40px;left:0;right:0;
+  background:rgba(239,68,68,.92);
+  backdrop-filter:blur(8px);
+  color:#fff;
+  font-size:12px;
+  font-weight:600;
+  text-align:center;
+  padding:6px 12px;
+  z-index:200;
+  transition:transform .3s ease;
+}
+#offline-banner.hidden{transform:translateY(-100%)}
 .btn-action{
   flex:1;
   padding:10px;

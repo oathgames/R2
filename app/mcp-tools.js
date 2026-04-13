@@ -126,9 +126,9 @@ function buildTools(tool, z, ctx) {
     'meta_ads',
     'Manage Meta/Facebook ad campaigns — create ads, check performance, pause/scale ads, discover accounts.',
     {
-      action: z.enum(['push', 'insights', 'kill', 'activate', 'duplicate', 'setup', 'discover', 'warmup', 'retarget', 'lookalike', 'setup-retargeting', 'adlib', 'catalog', 'budget']).describe('The operation to perform'),
+      action: z.enum(['push', 'insights', 'kill', 'activate', 'duplicate', 'setup', 'discover', 'warmup', 'retarget', 'lookalike', 'setup-retargeting', 'adlib', 'catalog', 'budget', 'bulk-push', 'lockdown', 'import']).describe('The operation to perform'),
       brand: z.string().optional().describe('Brand name'),
-      adId: z.string().optional().describe('Ad ID (for kill/duplicate)'),
+      adId: z.string().optional().describe('Ad ID (for kill/duplicate/lockdown)'),
       campaignId: z.string().optional().describe('Target campaign ID'),
       campaignName: z.string().optional().describe('Campaign name'),
       adImagePath: z.string().optional().describe('Path to ad image'),
@@ -141,6 +141,13 @@ function buildTools(tool, z, ctx) {
       sortBy: z.string().optional().describe('Sort results by: spend, roas, ctr, clicks, impressions, cpc, purchases'),
       sortOrder: z.string().optional().describe('Sort order: desc (default) or asc'),
       limit: z.number().optional().describe('Max results to return (e.g. 5 for top 5)'),
+      // Bulk & advanced features
+      ads: z.array(z.object({ imagePath: z.string().optional(), videoPath: z.string().optional(), headline: z.string().optional(), body: z.string().optional(), link: z.string().optional(), dailyBudget: z.number().optional(), hookStyle: z.string().optional(), postId: z.string().optional() })).optional().describe('Array of ads for bulk-push (up to 50)'),
+      adFormat: z.enum(['single', 'carousel', 'collection']).optional().describe('Ad format (default: single)'),
+      carouselCards: z.array(z.object({ imagePath: z.string().optional(), videoPath: z.string().optional(), headline: z.string().optional(), description: z.string().optional(), link: z.string().optional() })).optional().describe('Carousel card data (2-10 cards)'),
+      postId: z.string().optional().describe('Existing post ID to reuse as ad creative (preserves social proof)'),
+      languages: z.array(z.string()).optional().describe('ISO 639-1 codes for multi-language variants (e.g. ["es","fr","de"])'),
+      status: z.string().optional().describe('Filter by status: active, paused, all (for import)'),
     },
     async (args) => {
       const action = 'meta-' + (args.action === 'setup-retargeting' ? 'setup-retargeting' : args.action);

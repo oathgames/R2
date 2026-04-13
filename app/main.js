@@ -627,31 +627,43 @@ async function probeClaudeSetup(force = false) {
 }
 
 // ── Workspace bootstrap + sync ──────────────────────────────
-// 100% non-blocking. Every file operation runs in a child process.
-// The main thread NEVER touches the filesystem during bootstrap.
+// Non-blocking. Uses execFile with explicit arg arrays — no shell interpolation.
+// robocopy is called directly (not through cmd.exe) to avoid injection risk.
 function bootstrapWorkspace() {
   if (!app.isPackaged) return;
-  const { exec } = require('child_process');
-  const src = appInstall.replace(/\\/g, '\\\\');
-  const dest = appRoot.replace(/\\/g, '\\\\');
+  const { execFile } = require('child_process');
+  const fs = require('fs');
+
+  // Ensure workspace root exists (sync — single mkdir is fast)
+  try { fs.mkdirSync(appRoot, { recursive: true }); } catch (_) {}
 
   if (process.platform === 'win32') {
-    // Single robocopy command handles everything — dirs + individual files
-    // /E=recurse /XC/XN/XO=skip existing files /NFL/NDL/NJH/NJS/NP=quiet
-    // robocopy exits 0-7 on success, 8+ on failure — we ignore exit codes
-    exec([
-      `mkdir "${appRoot}" 2>nul`,
-      `robocopy "${path.join(appInstall, '.claude')}" "${path.join(appRoot, '.claude')}" /E /XC /XN /XO /NFL /NDL /NJH /NJS /NP`,
-      `robocopy "${path.join(appInstall, 'assets')}" "${path.join(appRoot, 'assets')}" /E /XC /XN /XO /NFL /NDL /NJH /NJS /NP`,
-      `for %f in (CLAUDE.md version.json memory.md README.txt) do if not exist "${appRoot}\\%f" if exist "${appInstall}\\%f" copy /Y "${appInstall}\\%f" "${appRoot}\\%f"`,
-    ].join(' & '), { shell: 'cmd.exe' }, () => console.log('[workspace] Bootstrap complete'));
+    // robocopy called directly — no shell, no interpolation
+    // /E=recurse /XC/XN/XO=skip existing /NFL/NDL/NJH/NJS/NP=quiet
+    const roboArgs = ['/E', '/XC', '/XN', '/XO', '/NFL', '/NDL', '/NJH', '/NJS', '/NP'];
+    execFile('robocopy', [path.join(appInstall, '.claude'), path.join(appRoot, '.claude'), ...roboArgs], () => {
+      execFile('robocopy', [path.join(appInstall, 'assets'), path.join(appRoot, 'assets'), ...roboArgs], () => {
+        // Copy individual root files if they don't exist yet
+        for (const f of ['CLAUDE.md', 'version.json', 'memory.md', 'README.txt']) {
+          const src = path.join(appInstall, f);
+          const dest = path.join(appRoot, f);
+          try { if (fs.existsSync(src) && !fs.existsSync(dest)) fs.copyFileSync(src, dest); } catch (_) {}
+        }
+        console.log('[workspace] Bootstrap complete');
+      });
+    });
   } else {
-    exec([
-      `mkdir -p "${appRoot}"`,
-      `cp -Rn "${path.join(appInstall, '.claude')}" "${appRoot}/" 2>/dev/null`,
-      `cp -Rn "${path.join(appInstall, 'assets')}" "${appRoot}/" 2>/dev/null`,
-      `for f in CLAUDE.md version.json memory.md README.txt; do [ -f "${appInstall}/$f" ] && [ ! -f "${appRoot}/$f" ] && cp "${appInstall}/$f" "${appRoot}/$f"; done`,
-    ].join('; '), () => console.log('[workspace] Bootstrap complete'));
+    // macOS/Linux: use cp with explicit args — no shell
+    execFile('cp', ['-Rn', path.join(appInstall, '.claude'), path.join(appRoot, '/')], () => {
+      execFile('cp', ['-Rn', path.join(appInstall, 'assets'), path.join(appRoot, '/')], () => {
+        for (const f of ['CLAUDE.md', 'version.json', 'memory.md', 'README.txt']) {
+          const src = path.join(appInstall, f);
+          const dest = path.join(appRoot, f);
+          try { if (fs.existsSync(src) && !fs.existsSync(dest)) fs.copyFileSync(src, dest); } catch (_) {}
+        }
+        console.log('[workspace] Bootstrap complete');
+      });
+    });
   }
 }
 
@@ -663,6 +675,7 @@ const activeChildProcesses = new Set(); // track spawned Merlin.exe for cleanup
 let pendingMessageQueue = []; // Queue messages sent before SDK is ready
 let pendingApprovals = new Map();
 let activeQuery = null;
+let _awaitingAuth = false; // True while waiting for login flow after auth-required
 let _suppressNextResponse = false; // Suppress SDK responses for internal actions (spell toggle/create)
 
 // ── TEST HARNESS (rip out after v1) ────────────────────────
@@ -1224,6 +1237,34 @@ function translateTool(toolName, input) {
   return { label: 'Merlin needs your permission to continue', cost: null };
 }
 
+// Calculate current budget usage for approval card context
+function getBudgetContext() {
+  try {
+    let activeBrand = '';
+    try { activeBrand = readState().activeBrand || ''; } catch {}
+    const cfg = activeBrand ? readBrandConfig(activeBrand) : readConfig();
+    const dailyCap = cfg.maxDailyAdBudget || cfg.dailyAdBudget || 0;
+    const monthlyCap = cfg.maxMonthlyAdSpend || cfg.monthlyAdSpend || 0;
+    if (dailyCap === 0 && monthlyCap === 0) return null;
+
+    let dailySpent = 0;
+    try {
+      const brandsDir = path.join(appRoot, 'assets', 'brands');
+      const dirs = fs.readdirSync(brandsDir, { withFileTypes: true }).filter(d => d.isDirectory() && d.name !== 'example');
+      for (const d of dirs) {
+        const adsPath = path.join(brandsDir, d.name, 'ads-live.json');
+        try {
+          const ads = JSON.parse(fs.readFileSync(adsPath, 'utf8'));
+          dailySpent += ads.filter(a => a.status === 'live').reduce((sum, a) => sum + (a.budget || 0), 0);
+        } catch {}
+      }
+    } catch {}
+
+    const remaining = dailyCap > 0 ? Math.max(0, dailyCap - dailySpent) : 0;
+    return { dailyCap, dailySpent, remaining, monthlyCap };
+  } catch { return null; }
+}
+
 async function handleToolApproval(toolName, input) {
   // SECURITY: hard-deny bypass attempts BEFORE any auto-approve logic.
   // This duplicates the PreToolUse hook as defense in depth.
@@ -1271,24 +1312,29 @@ async function handleToolApproval(toolName, input) {
     // Spend actions: show approval card with budget enforcement
     const SPEND = new Set(['push', 'duplicate', 'setup', 'setup-retargeting']);
     if (SPEND.has(action)) {
-      // Budget enforcement (reuse existing logic)
-      let activeBrand = '';
-      try { activeBrand = readState().activeBrand || ''; } catch {}
-      const cfg = activeBrand ? readBrandConfig(activeBrand) : readConfig();
-      const dailyBudget = cfg.dailyAdBudget || 0;
+      const budgetCtx = getBudgetContext();
+      const adBudget = input.dailyBudget || 5;
       const translations = {
-        'push': { label: 'Publish this ad', cost: `$${input.dailyBudget || 5}/day budget` },
+        'push': { label: 'Publish this ad', cost: `$${adBudget}/day budget` },
         'duplicate': { label: 'Scale this winning ad', cost: 'Increases budget' },
         'setup': { label: 'Set up ad campaigns', cost: 'Free' },
         'setup-retargeting': { label: 'Set up retargeting audiences', cost: 'Free' },
       };
       const translated = translations[action] || { label: `Run ${action}`, cost: null };
-      if (dailyBudget > 0 && (action === 'push')) {
-        const adBudget = input.dailyBudget || 5;
-        translated.cost = `$${adBudget}/day · Budget cap: $${dailyBudget}/day`;
+      let budgetDetail = null;
+      if (budgetCtx && budgetCtx.dailyCap > 0 && (action === 'push' || action === 'duplicate')) {
+        const overBudget = budgetCtx.remaining < adBudget;
+        if (action === 'push') {
+          translated.cost = overBudget
+            ? `⚠ Over budget! This ad: $${adBudget}/day`
+            : `$${adBudget}/day budget`;
+        }
+        budgetDetail = `$${budgetCtx.dailySpent} spent today · $${budgetCtx.dailyCap}/day cap · $${budgetCtx.remaining} remaining`;
+        if (overBudget) budgetDetail = `⚠ $${budgetCtx.dailySpent} spent today · $${budgetCtx.dailyCap}/day cap · $${budgetCtx.remaining} remaining`;
+        if (budgetCtx.monthlyCap > 0) budgetDetail += ` · $${budgetCtx.monthlyCap}/mo cap`;
       }
       const toolUseID = Date.now().toString();
-      const payload = { toolUseID, label: translated.label, cost: translated.cost };
+      const payload = { toolUseID, label: translated.label, cost: translated.cost, budget: budgetDetail };
       if (win && !win.isDestroyed()) win.webContents.send('approval-request', payload);
       wsServer.broadcast('approval-request', payload);
       return new Promise((resolve) => {
@@ -1314,40 +1360,35 @@ async function handleToolApproval(toolName, input) {
     return { behavior: 'deny', message: 'Merlin is not allowed to delete campaigns. Ads can be paused but campaigns are never deleted.' };
   }
 
-  // BUDGET ENFORCEMENT: Show remaining budget on spend actions
+  // BUDGET ENFORCEMENT: Bash Merlin push actions — show approval card with full budget context
   if (toolName === 'Bash' && input.command && input.command.includes('Merlin')) {
     const cmdMatch = input.command.match(/"action"\s*:\s*"([^"]+)"/);
-    const action = cmdMatch ? cmdMatch[1] : '';
-    if (action === 'meta-push' || action === 'tiktok-push' || action === 'google-ads-push' || action === 'amazon-ads-push') {
-      let activeBrand = '';
-      try { activeBrand = readState().activeBrand || ''; } catch {}
-      const cfg = activeBrand ? readBrandConfig(activeBrand) : readConfig();
-      const dailyBudget = cfg.dailyAdBudget || 0;
-      if (dailyBudget > 0) {
-        // Read today's spend from ads-live.json to check remaining budget
-        try {
-          const brandsDir = path.join(appRoot, 'assets', 'brands');
-          let todaySpend = 0;
-          const dirs = fs.readdirSync(brandsDir, { withFileTypes: true }).filter(d => d.isDirectory() && d.name !== 'example');
-          for (const d of dirs) {
-            const adsPath = path.join(brandsDir, d.name, 'ads-live.json');
-            try {
-              const ads = JSON.parse(fs.readFileSync(adsPath, 'utf8'));
-              todaySpend += ads.filter(a => a.status === 'live').reduce((sum, a) => sum + (a.budget || 0), 0);
-            } catch {}
-          }
-          const remaining = dailyBudget - todaySpend;
-          // Enrich the approval card with budget context
-          const budgetMatch = input.command.match(/"dailyBudget"\s*:\s*(\d+)/);
-          const adBudget = budgetMatch ? parseInt(budgetMatch[1]) : 5;
-          if (remaining < adBudget) {
-            // Over budget — still show approval but warn
-            const translated = translateTool(toolName, input);
-            translated.cost = `⚠ Over budget! $${todaySpend}/$${dailyBudget} daily cap · This ad: $${adBudget}/day`;
-            // Don't auto-deny — let user decide
-          }
-        } catch {}
+    const bashAction = cmdMatch ? cmdMatch[1] : '';
+    const BASH_SPEND = new Set(['meta-push', 'tiktok-push', 'google-ads-push', 'amazon-ads-push', 'reddit-create-campaign', 'reddit-create-ad']);
+    if (BASH_SPEND.has(bashAction)) {
+      const budgetCtx = getBudgetContext();
+      const translated = translateTool(toolName, input);
+      const budgetMatch = input.command.match(/"dailyBudget"\s*:\s*(\d+)/);
+      const adBudget = budgetMatch ? parseInt(budgetMatch[1]) : 5;
+      let budgetDetail = null;
+      if (budgetCtx && budgetCtx.dailyCap > 0) {
+        const overBudget = budgetCtx.remaining < adBudget;
+        translated.cost = overBudget
+          ? `⚠ Over budget! This ad: $${adBudget}/day`
+          : `$${adBudget}/day · Budget cap: $${budgetCtx.dailyCap}/day`;
+        budgetDetail = `$${budgetCtx.dailySpent} spent today · $${budgetCtx.dailyCap}/day cap · $${budgetCtx.remaining} remaining`;
+        if (overBudget) budgetDetail = `⚠ $${budgetCtx.dailySpent} spent today · $${budgetCtx.dailyCap}/day cap · $${budgetCtx.remaining} remaining`;
+        if (budgetCtx.monthlyCap > 0) budgetDetail += ` · $${budgetCtx.monthlyCap}/mo cap`;
       }
+      const toolUseID = Date.now().toString();
+      const payload = { toolUseID, label: translated.label, cost: translated.cost, budget: budgetDetail };
+      if (win && !win.isDestroyed()) win.webContents.send('approval-request', payload);
+      wsServer.broadcast('approval-request', payload);
+      return new Promise((resolve) => {
+        setPendingApproval(toolUseID, (approved) => {
+          resolve(approved ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'User declined' });
+        });
+      });
     }
   }
 
@@ -1475,11 +1516,17 @@ async function startSession() {
       sessionEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
       console.log('[auth] Injected OAuth token into session env');
     } else {
-      console.warn('[auth] No credentials found — SDK will trigger interactive auth');
-      // Notify the renderer so it can show a helpful message instead of blank screen
-      if (win && !win.isDestroyed()) {
+      // CRITICAL: Do NOT proceed to query() without credentials.
+      // The SDK subprocess will attempt interactive auth, open a browser,
+      // and land on a paste-code page with no dialog — stranding the user.
+      // Instead, return early and let the renderer trigger the explicit
+      // login flow (which HAS paste-code dialog support).
+      console.warn('[auth] No credentials found — blocking session, triggering login');
+      if (!_awaitingAuth && win && !win.isDestroyed()) {
+        _awaitingAuth = true;
         win.webContents.send('auth-required');
       }
+      return;
     }
   }
 
@@ -1770,11 +1817,12 @@ ipcMain.handle('trigger-claude-login', async () => {
     const cliJs = path.join(sdkDir, 'cli.js');
 
     // Spawn the bundled CLI's login flow. Captures stdout to extract the
-    // auth URL, then opens it via shell.openExternal (foregrounds browser).
-    // Works on both macOS and Windows.
+    // auth URL, then opens it in an in-app BrowserWindow. The window
+    // intercepts the OAuth redirect (localhost or platform.claude.com)
+    // and auto-captures the auth code — no paste page, no manual steps.
     return new Promise((resolve) => {
       let resolved = false;
-      const finish = (result) => { if (!resolved) { resolved = true; resolve(result); } };
+      const finish = (result) => { if (!resolved) { resolved = true; _awaitingAuth = false; resolve(result); } };
 
       const child = spawn(nodeWrapper, [cliJs, 'auth', 'login'], {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', BROWSER: 'none' },
@@ -1813,6 +1861,7 @@ ipcMain.handle('trigger-claude-login', async () => {
         console.error('[claude-login] Timed out after 60s');
         try { credWatcher?.close(); } catch {}
         try { child.kill(); } catch {}
+        try { if (authWin && !authWin.isDestroyed()) authWin.close(); } catch {}
         finish({ success: false, timedOut: true, error: 'Login timed out. Try again or use an API key.' });
       }, 60000);
 
@@ -1820,47 +1869,85 @@ ipcMain.handle('trigger-claude-login', async () => {
       let stderr = '';
       let urlOpened = false;
       let pastePromptShown = false;
+      let authWin = null;
+      let codeInjected = false;
+
+      // Open the auth URL in an in-app BrowserWindow instead of the system browser.
+      // This lets us intercept the OAuth redirect (to localhost or the paste-code
+      // fallback at platform.claude.com) and auto-capture the auth code from the URL.
+      // No paste page, no manual steps — the window closes itself on success.
+      function openAuthWindow(authUrl) {
+        if (authWin) return;
+        authWin = new BrowserWindow({
+          width: 460, height: 720,
+          title: 'Sign in to Claude',
+          show: true, center: true,
+          autoHideMenuBar: true,
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            // Isolated session — the webRequest filter only applies here,
+            // not the main window (which uses ws://127.0.0.1 for WebSocket).
+            // 'persist:' prefix keeps cookies across auth retries so the user
+            // doesn't have to sign in to claude.ai again if retry is needed.
+            partition: 'persist:claude-auth',
+          },
+        });
+
+        // Intercept requests to localhost callback OR platform.claude.com paste-code fallback.
+        // Both URLs contain ?code=XXX — extract it and feed to CLI stdin.
+        authWin.webContents.session.webRequest.onBeforeRequest(
+          { urls: ['http://localhost:*/*', 'http://127.0.0.1:*/*', 'https://platform.claude.com/*'] },
+          (details, callback) => {
+            try {
+              const parsed = new URL(details.url);
+              const code = parsed.searchParams.get('code');
+              if (code && !codeInjected) {
+                codeInjected = true;
+                console.log('[claude-login] Auto-captured auth code from OAuth redirect');
+                if (child.stdin && !child.stdin.destroyed) child.stdin.write(code + '\n');
+                setTimeout(() => { try { if (authWin && !authWin.isDestroyed()) authWin.close(); } catch {} }, 300);
+                callback({ cancel: true });
+                return;
+              }
+            } catch {}
+            callback({ cancel: false });
+          }
+        );
+
+        authWin.on('closed', () => { authWin = null; });
+        authWin.loadURL(authUrl);
+      }
+
+      function handleOutput(combined) {
+        // Open auth URL in BrowserWindow (once)
+        if (!urlOpened) {
+          const urlMatch = combined.match(/(https:\/\/claude\.ai\/[^\s]+|https:\/\/[^\s]*oauth[^\s]*|https:\/\/[^\s]*auth[^\s]*login[^\s]*)/i);
+          if (urlMatch) {
+            openAuthWindow(urlMatch[0]);
+            urlOpened = true;
+          }
+        }
+        // Fallback: if CLI still outputs a paste prompt (e.g. BrowserWindow failed),
+        // show the in-app paste dialog so the user isn't completely stuck
+        if (!pastePromptShown && !codeInjected && /paste this|paste.*into|enter.*auth.*code|authentication code/i.test(combined)) {
+          pastePromptShown = true;
+          if (win && !win.isDestroyed()) win.webContents.send('auth-code-prompt');
+        }
+      }
+
       child.stdout.on('data', (d) => {
         const chunk = d.toString();
         stdout += chunk;
         console.log('[claude-login] stdout:', chunk.trim());
-
-        // Open the auth URL in the browser (once)
-        if (!urlOpened) {
-          const urlMatch = stdout.match(/(https:\/\/claude\.ai\/[^\s]+|https:\/\/[^\s]*oauth[^\s]*|https:\/\/[^\s]*auth[^\s]*login[^\s]*)/i);
-          if (urlMatch) {
-            shell.openExternal(urlMatch[0]);
-            urlOpened = true;
-          }
-        }
-
-        // If CLI outputs a paste prompt (callback server failed), show a dialog
-        // so the user can paste the auth code back into the subprocess
-        if (!pastePromptShown && /paste this|paste.*into|enter.*auth.*code|authentication code/i.test(stdout + stderr)) {
-          pastePromptShown = true;
-          if (win && !win.isDestroyed()) {
-            win.webContents.send('auth-code-prompt');
-          }
-        }
+        handleOutput(stdout + stderr);
       });
 
-      // Also monitor stderr — some SDK versions print the auth URL or paste
-      // prompt to stderr instead of stdout
       child.stderr.on('data', (d) => {
         const chunk = d.toString();
         stderr += chunk;
         console.log('[claude-login] stderr:', chunk.trim());
-        if (!urlOpened) {
-          const urlMatch = (stdout + stderr).match(/(https:\/\/claude\.ai\/[^\s]+|https:\/\/[^\s]*oauth[^\s]*|https:\/\/[^\s]*auth[^\s]*login[^\s]*)/i);
-          if (urlMatch) {
-            shell.openExternal(urlMatch[0]);
-            urlOpened = true;
-          }
-        }
-        if (!pastePromptShown && /paste this|paste.*into|enter.*auth.*code|authentication code/i.test(stdout + stderr)) {
-          pastePromptShown = true;
-          if (win && !win.isDestroyed()) win.webContents.send('auth-code-prompt');
-        }
+        handleOutput(stdout + stderr);
       });
 
       // Listen for the user's pasted auth code from the renderer
@@ -1875,6 +1962,7 @@ ipcMain.handle('trigger-claude-login', async () => {
       child.on('close', async (code) => {
         clearTimeout(uxTimeout);
         try { credWatcher?.close(); } catch {}
+        try { if (authWin && !authWin.isDestroyed()) authWin.close(); } catch {}
         ipcMain.removeListener('auth-code-submit', pasteHandler);
         if (resolved) return; // Timeout already fired — don't block with more I/O
         if (code === 0) {
@@ -1904,6 +1992,7 @@ ipcMain.handle('trigger-claude-login', async () => {
 
       child.on('error', (e) => {
         clearTimeout(uxTimeout);
+        try { if (authWin && !authWin.isDestroyed()) authWin.close(); } catch {}
         console.error('[claude-login] Spawn error:', e.message);
         finish({ success: false, error: e.message });
       });
@@ -2436,6 +2525,10 @@ ipcMain.handle('refresh-perf', async (_, brandName) => {
         fs.mkdirSync(resultsDir, { recursive: true });
         fs.writeFileSync(path.join(resultsDir, '.perf-updated'), new Date().toISOString());
       } catch {}
+      // Notify renderer that perf data changed — triggers perf bar refresh
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('perf-data-changed', { brand: brandName || '' });
+      }
       resolve({ success: true });
     });
   });
@@ -2467,7 +2560,12 @@ function computePerfSummary(days, brandName) {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
   const cutoffStr = `dashboard_${cutoff.toISOString().slice(0, 10).replace(/-/g, '')}`;
-  const latest = JSON.parse(fs.readFileSync(files[files.length - 1].path, 'utf8'));
+  // Try latest file first; if corrupted, fall back to previous files
+  let latest = null;
+  for (let i = files.length - 1; i >= 0 && !latest; i--) {
+    try { latest = JSON.parse(fs.readFileSync(files[i].path, 'utf8')); } catch {}
+  }
+  if (!latest) return null;
 
   let periodStart = null;
   for (let i = files.length - 1; i >= 0; i--) {
@@ -4496,12 +4594,25 @@ async function downloadAndApplyUpdate() {
               console.log('[update] swap script written:', swapScript);
             } else {
               const swapScript = path.join(appInstall, 'update-swap.sh');
-              // On Mac, relaunch the .app bundle, not the raw binary
+              // On Mac, relaunch the .app bundle, not the raw binary.
+              // CRITICAL: After replacing app.asar, the code signature is invalid.
+              // We must re-sign the bundle with ad-hoc signature before relaunching,
+              // otherwise macOS kills the process with "is not open anymore."
               const appBundle = process.execPath.replace(/\/Contents\/MacOS\/.*$/, '');
+              const installBinaryPath = path.join(appInstall, '.claude', 'tools', 'Merlin');
+              const stagedBinaryPath = installBinaryPath + '.update';
               fs.writeFileSync(swapScript, [
                 '#!/bin/bash',
                 'sleep 2',
                 `mv -f "${stagedPath}" "${asarPath}"`,
+                `# Swap staged binary if it exists`,
+                `[ -f "${stagedBinaryPath}" ] && mv -f "${stagedBinaryPath}" "${installBinaryPath}" && chmod +x "${installBinaryPath}"`,
+                `# Re-sign the entire .app bundle after modifying contents.`,
+                `# Without this, macOS kills the app with "is not open anymore"`,
+                `# because the original code signature no longer matches.`,
+                `codesign --force --deep --sign - "${appBundle}" 2>/dev/null || true`,
+                `# Clear quarantine on the re-signed bundle`,
+                `xattr -cr "${appBundle}" 2>/dev/null || true`,
                 `open "${appBundle}"`,
                 `rm -f "${swapScript}"`,
               ].join('\n'));
@@ -4513,14 +4624,23 @@ async function downloadAndApplyUpdate() {
           console.error('[update] asar staging failed:', e.message);
         }
       }
-      // Also stage the binary in the INSTALL location
+      // Stage install-dir binary copy for the swap script (Mac: avoid writing to
+      // the signed .app bundle while running — defer to swap script instead).
       if (binaryAsset) {
         try {
+          const workspaceBinary = path.join(appRoot, '.claude', 'tools', process.platform === 'win32' ? 'Merlin.exe' : 'Merlin');
           const installBinaryPath = path.join(appInstall, '.claude', 'tools', process.platform === 'win32' ? 'Merlin.exe' : 'Merlin');
-          if (fs.existsSync(path.dirname(installBinaryPath))) {
-            const binaryData = fs.readFileSync(path.join(appRoot, '.claude', 'tools', process.platform === 'win32' ? 'Merlin.exe' : 'Merlin'));
-            fs.writeFileSync(installBinaryPath, binaryData);
-            console.log('[update] install-dir binary synced');
+          if (fs.existsSync(path.dirname(installBinaryPath)) && fs.existsSync(workspaceBinary)) {
+            if (process.platform === 'darwin' && asarStaged) {
+              // On Mac, the swap script will handle this AFTER codesign
+              const stagedBinary = installBinaryPath + '.update';
+              fs.copyFileSync(workspaceBinary, stagedBinary);
+              console.log('[update] install-dir binary staged for swap script');
+            } else {
+              // Windows: write directly (no code signing concern)
+              fs.copyFileSync(workspaceBinary, installBinaryPath);
+              console.log('[update] install-dir binary synced');
+            }
           }
         } catch (e) {
           console.error('[update] install-dir binary sync failed:', e.message);

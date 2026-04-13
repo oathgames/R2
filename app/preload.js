@@ -1,5 +1,36 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// ── IPC Input Validation ──────────────────────────────────────
+// Defense-in-depth: validate types and lengths before forwarding
+// to main process. Prevents renderer-side injection/flood attacks.
+const MAX_STR = 10000;
+const MAX_TEXT = 50000;
+const BRAND_RE = /^[a-z0-9_-]{1,100}$/i;
+const PLATFORM_RE = /^[a-z0-9_-]{1,50}$/i;
+
+function assertStr(v, max = MAX_STR) {
+  if (typeof v !== 'string' || v.length > max) throw new Error('invalid string argument');
+  return v;
+}
+function assertBrand(v) {
+  if (v === undefined || v === null) return v;
+  if (typeof v !== 'string' || !BRAND_RE.test(v)) throw new Error('invalid brand');
+  return v;
+}
+function assertPlatform(v) {
+  if (typeof v !== 'string' || !PLATFORM_RE.test(v)) throw new Error('invalid platform');
+  return v;
+}
+function assertInt(v) {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) throw new Error('invalid integer');
+  return v;
+}
+function assertObj(v) {
+  if (v === undefined || v === null) return v;
+  if (typeof v !== 'object' || Array.isArray(v)) throw new Error('invalid object');
+  return v;
+}
+
 contextBridge.exposeInMainWorld('merlin', {
   // Platform
   platform: process.platform,
@@ -16,17 +47,17 @@ contextBridge.exposeInMainWorld('merlin', {
   getSubscription: () => ipcRenderer.invoke('get-subscription'),
   openSubscribe: () => ipcRenderer.invoke('open-subscribe'),
   openManage: () => ipcRenderer.invoke('open-manage'),
-  activateKey: (key) => ipcRenderer.invoke('activate-key', key),
+  activateKey: (key) => ipcRenderer.invoke('activate-key', assertStr(key, 200)),
 
   // Setup + Install
-  checkSetup: (force) => ipcRenderer.invoke('check-setup', force),
+  checkSetup: (force) => ipcRenderer.invoke('check-setup', !!force),
   installClaude: () => ipcRenderer.invoke('install-claude'),
-  setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
+  setApiKey: (key) => ipcRenderer.invoke('set-api-key', assertStr(key, 500)),
   hasApiKey: () => ipcRenderer.invoke('has-api-key'),
   openClaudeDownload: () => ipcRenderer.invoke('open-claude-download'),
   openMerlinFolder: () => ipcRenderer.invoke('open-merlin-folder'),
   checkTosAccepted: () => ipcRenderer.invoke('check-tos-accepted'),
-  acceptTos: (opts) => ipcRenderer.invoke('accept-tos', opts),
+  acceptTos: (opts) => ipcRenderer.invoke('accept-tos', assertObj(opts)),
 
   // Mobile
   getMobileQR: () => ipcRenderer.invoke('get-mobile-qr'),
@@ -35,65 +66,69 @@ contextBridge.exposeInMainWorld('merlin', {
   startSession: () => ipcRenderer.invoke('start-session'),
   stopGeneration: () => ipcRenderer.invoke('stop-generation'),
   getAccountInfo: () => ipcRenderer.invoke('get-account-info'),
-  getCredits: (brand) => ipcRenderer.invoke('get-credits', brand),
-  getConnectedPlatforms: (brand) => ipcRenderer.invoke('get-connected-platforms', brand),
+  getCredits: (brand) => ipcRenderer.invoke('get-credits', assertBrand(brand)),
+  getConnectedPlatforms: (brand) => ipcRenderer.invoke('get-connected-platforms', assertBrand(brand)),
   getBrands: () => ipcRenderer.invoke('get-brands'),
 
   // State persistence
-  saveState: (data) => ipcRenderer.invoke('save-state', data),
+  saveState: (data) => ipcRenderer.invoke('save-state', assertObj(data)),
   loadState: () => ipcRenderer.invoke('load-state'),
 
   // Revenue tracker
   getStatsCache: () => ipcRenderer.invoke('get-stats-cache'),
 
   // Performance + Activity
-  getPerfSummary: (days, brand) => ipcRenderer.invoke('get-perf-summary', days, brand),
-  refreshPerf: (brand) => ipcRenderer.invoke('refresh-perf', brand),
-  getPerfUpdated: (brand) => ipcRenderer.invoke('get-perf-updated', brand),
-  getActivityFeed: (brand, limit) => ipcRenderer.invoke('get-activity-feed', brand, limit),
+  getPerfSummary: (days, brand) => ipcRenderer.invoke('get-perf-summary', assertInt(days || 7), assertBrand(brand)),
+  refreshPerf: (brand) => ipcRenderer.invoke('refresh-perf', assertBrand(brand)),
+  getPerfUpdated: (brand) => ipcRenderer.invoke('get-perf-updated', assertBrand(brand)),
+  getActivityFeed: (brand, limit) => ipcRenderer.invoke('get-activity-feed', assertBrand(brand), assertInt(limit || 50)),
 
   // Archive
-  getArchiveItems: (filters) => ipcRenderer.invoke('get-archive-items', filters),
-  getLiveAds: (brand) => ipcRenderer.invoke('get-live-ads', brand),
-  openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
-  copyImage: (filePath) => ipcRenderer.invoke('copy-image', filePath),
-  deleteFile: (folderPath) => ipcRenderer.invoke('delete-file', folderPath),
+  getArchiveItems: (filters) => ipcRenderer.invoke('get-archive-items', assertObj(filters)),
+  getLiveAds: (brand) => ipcRenderer.invoke('get-live-ads', assertBrand(brand)),
+  openFolder: (folderPath) => ipcRenderer.invoke('open-folder', assertStr(folderPath, 500)),
+  copyImage: (filePath) => ipcRenderer.invoke('copy-image', assertStr(filePath, 500)),
+  deleteFile: (folderPath) => ipcRenderer.invoke('delete-file', assertStr(folderPath, 500)),
 
   // Wisdom
-  getWisdom: (brandName) => ipcRenderer.invoke('get-wisdom', brandName),
+  getWisdom: (brandName) => ipcRenderer.invoke('get-wisdom', assertBrand(brandName)),
 
   // Disconnect platform
-  disconnectPlatform: (platform, brand) => ipcRenderer.invoke('disconnect-platform', platform, brand),
+  disconnectPlatform: (platform, brand) => ipcRenderer.invoke('disconnect-platform', assertPlatform(platform), assertBrand(brand)),
 
   // Competitor swipes
-  getSwipes: (brand) => ipcRenderer.invoke('get-swipes', brand),
+  getSwipes: (brand) => ipcRenderer.invoke('get-swipes', assertBrand(brand)),
 
   // Morning briefing
-  getBriefing: (brand) => ipcRenderer.invoke('get-briefing', brand),
-  dismissBriefing: (brand) => ipcRenderer.invoke('dismiss-briefing', brand),
+  getBriefing: (brand) => ipcRenderer.invoke('get-briefing', assertBrand(brand)),
+  dismissBriefing: (brand) => ipcRenderer.invoke('dismiss-briefing', assertBrand(brand)),
 
   // Referral
   getReferralInfo: () => ipcRenderer.invoke('get-referral-info'),
-  applyReferralCode: (code) => ipcRenderer.invoke('apply-referral-code', code),
+  applyReferralCode: (code) => ipcRenderer.invoke('apply-referral-code', assertStr(code, 100)),
 
   // Spellbook
   checkClaudeRunning: () => ipcRenderer.invoke('check-claude-running'),
   // listSpells moved below with brand param
-  toggleSpell: (id, enabled) => ipcRenderer.invoke('toggle-spell', id, enabled),
-  updateSpellMeta: (id, meta) => ipcRenderer.invoke('update-spell-meta', id, meta),
-  savePastedMedia: (dataUrl, filename) => ipcRenderer.invoke('save-pasted-media', dataUrl, filename),
-  runOAuth: (platform, brand, extra) => ipcRenderer.invoke('run-oauth', platform, brand, extra),
-  onConnectionsChanged: (cb) => ipcRenderer.on('connections-changed', () => cb()),
-  saveConfigField: (key, value, brand) => ipcRenderer.invoke('save-config-field', key, value, brand),
-  sendMessage: (text, options) => ipcRenderer.invoke('send-message', text, options),
-  sendSilent: (text) => ipcRenderer.invoke('send-message', text, { silent: true }),
-  createSpell: (taskId, cron, desc, prompt, brand) => ipcRenderer.invoke('create-spell', taskId, cron, desc, prompt, brand),
-  listSpells: (brand) => ipcRenderer.invoke('list-spells', brand),
+  toggleSpell: (id, enabled) => ipcRenderer.invoke('toggle-spell', assertStr(id, 200), !!enabled),
+  updateSpellMeta: (id, meta) => ipcRenderer.invoke('update-spell-meta', assertStr(id, 200), assertObj(meta)),
+  savePastedMedia: (dataUrl, filename) => ipcRenderer.invoke('save-pasted-media', assertStr(dataUrl, 5000000), assertStr(filename, 200)),
+  runOAuth: (platform, brand, extra) => ipcRenderer.invoke('run-oauth', assertPlatform(platform), assertBrand(brand), assertObj(extra)),
+  onConnectionsChanged: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('connections-changed', handler);
+    return () => ipcRenderer.removeListener('connections-changed', handler);
+  },
+  saveConfigField: (key, value, brand) => ipcRenderer.invoke('save-config-field', assertStr(key, 100), assertStr(String(value), 2000), assertBrand(brand)),
+  sendMessage: (text, options) => ipcRenderer.invoke('send-message', assertStr(text, MAX_TEXT), assertObj(options)),
+  sendSilent: (text) => ipcRenderer.invoke('send-message', assertStr(text, MAX_TEXT), { silent: true }),
+  createSpell: (taskId, cron, desc, prompt, brand) => ipcRenderer.invoke('create-spell', assertStr(taskId, 100), assertStr(cron, 50), assertStr(desc, 500), assertStr(prompt, MAX_STR), assertBrand(brand)),
+  listSpells: (brand) => ipcRenderer.invoke('list-spells', assertBrand(brand)),
 
   // Approvals
-  approveTool: (id) => ipcRenderer.invoke('approve-tool', id),
-  denyTool: (id) => ipcRenderer.invoke('deny-tool', id),
-  answerQuestion: (id, answers) => ipcRenderer.invoke('answer-question', id, answers),
+  approveTool: (id) => ipcRenderer.invoke('approve-tool', assertStr(id, 200)),
+  denyTool: (id) => ipcRenderer.invoke('deny-tool', assertStr(id, 200)),
+  answerQuestion: (id, answers) => ipcRenderer.invoke('answer-question', assertStr(id, 200), assertObj(answers)),
 
   // Auto-update
   applyUpdate: () => ipcRenderer.invoke('apply-update'),
@@ -101,27 +136,84 @@ contextBridge.exposeInMainWorld('merlin', {
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
 
-  // Events
-  onPlatform: (cb) => ipcRenderer.on('platform', (_, p) => cb(p)),
-  onSdkMessage: (cb) => ipcRenderer.on('sdk-message', (_, msg) => cb(msg)),
-  onApprovalRequest: (cb) => ipcRenderer.on('approval-request', (_, data) => cb(data)),
-  onAskUserQuestion: (cb) => ipcRenderer.on('ask-user-question', (_, data) => cb(data)),
-  onSdkError: (cb) => ipcRenderer.on('sdk-error', (_, err) => cb(err)),
-  onRemoteUserMessage: (cb) => ipcRenderer.on('remote-user-message', (_, text) => cb(text)),
-  onSubscriptionActivated: (cb) => ipcRenderer.on('subscription-activated', (_, data) => cb(data)),
-  onSpellActivity: (cb) => ipcRenderer.on('spell-activity', (_, data) => cb(data)),
-  onSpellCompleted: (cb) => ipcRenderer.on('spell-completed', (_, data) => cb(data)),
-  onPerfDataChanged: (cb) => ipcRenderer.on('perf-data-changed', (_, data) => cb(data)),
-  onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_, info) => cb(info)),
-  onUpdateProgress: (cb) => ipcRenderer.on('update-progress', (_, msg) => cb(msg)),
-  onUpdateReady: (cb) => ipcRenderer.on('update-ready', (_, info) => cb(info)),
-  onUpdateError: (cb) => ipcRenderer.on('update-error', (_, err) => cb(err)),
-  onTrialExpired: (cb) => ipcRenderer.on('trial-expired', () => cb()),
-  onBypassAttempt: (cb) => ipcRenderer.on('bypass-attempt', (_, info) => cb(info)),
-  onEngineStatus: (cb) => ipcRenderer.on('engine-status', (_, msg) => cb(msg)),
+  // Events — each returns a cleanup function: const unsub = merlin.onX(cb); unsub();
+  onPlatform: (cb) => {
+    const h = (_, p) => cb(p); ipcRenderer.on('platform', h);
+    return () => ipcRenderer.removeListener('platform', h);
+  },
+  onSdkMessage: (cb) => {
+    const h = (_, msg) => cb(msg); ipcRenderer.on('sdk-message', h);
+    return () => ipcRenderer.removeListener('sdk-message', h);
+  },
+  onApprovalRequest: (cb) => {
+    const h = (_, data) => cb(data); ipcRenderer.on('approval-request', h);
+    return () => ipcRenderer.removeListener('approval-request', h);
+  },
+  onAskUserQuestion: (cb) => {
+    const h = (_, data) => cb(data); ipcRenderer.on('ask-user-question', h);
+    return () => ipcRenderer.removeListener('ask-user-question', h);
+  },
+  onSdkError: (cb) => {
+    const h = (_, err) => cb(err); ipcRenderer.on('sdk-error', h);
+    return () => ipcRenderer.removeListener('sdk-error', h);
+  },
+  onRemoteUserMessage: (cb) => {
+    const h = (_, text) => cb(text); ipcRenderer.on('remote-user-message', h);
+    return () => ipcRenderer.removeListener('remote-user-message', h);
+  },
+  onSubscriptionActivated: (cb) => {
+    const h = (_, data) => cb(data); ipcRenderer.on('subscription-activated', h);
+    return () => ipcRenderer.removeListener('subscription-activated', h);
+  },
+  onSpellActivity: (cb) => {
+    const h = (_, data) => cb(data); ipcRenderer.on('spell-activity', h);
+    return () => ipcRenderer.removeListener('spell-activity', h);
+  },
+  onSpellCompleted: (cb) => {
+    const h = (_, data) => cb(data); ipcRenderer.on('spell-completed', h);
+    return () => ipcRenderer.removeListener('spell-completed', h);
+  },
+  onPerfDataChanged: (cb) => {
+    const h = (_, data) => cb(data); ipcRenderer.on('perf-data-changed', h);
+    return () => ipcRenderer.removeListener('perf-data-changed', h);
+  },
+  onUpdateAvailable: (cb) => {
+    const h = (_, info) => cb(info); ipcRenderer.on('update-available', h);
+    return () => ipcRenderer.removeListener('update-available', h);
+  },
+  onUpdateProgress: (cb) => {
+    const h = (_, msg) => cb(msg); ipcRenderer.on('update-progress', h);
+    return () => ipcRenderer.removeListener('update-progress', h);
+  },
+  onUpdateReady: (cb) => {
+    const h = (_, info) => cb(info); ipcRenderer.on('update-ready', h);
+    return () => ipcRenderer.removeListener('update-ready', h);
+  },
+  onUpdateError: (cb) => {
+    const h = (_, err) => cb(err); ipcRenderer.on('update-error', h);
+    return () => ipcRenderer.removeListener('update-error', h);
+  },
+  onTrialExpired: (cb) => {
+    const h = () => cb(); ipcRenderer.on('trial-expired', h);
+    return () => ipcRenderer.removeListener('trial-expired', h);
+  },
+  onBypassAttempt: (cb) => {
+    const h = (_, info) => cb(info); ipcRenderer.on('bypass-attempt', h);
+    return () => ipcRenderer.removeListener('bypass-attempt', h);
+  },
+  onEngineStatus: (cb) => {
+    const h = (_, msg) => cb(msg); ipcRenderer.on('engine-status', h);
+    return () => ipcRenderer.removeListener('engine-status', h);
+  },
   triggerClaudeLogin: () => ipcRenderer.invoke('trigger-claude-login'),
-  onAuthCodePrompt: (cb) => ipcRenderer.on('auth-code-prompt', () => cb()),
-  onAuthRequired: (cb) => ipcRenderer.on('auth-required', () => cb()),
-  submitAuthCode: (code) => ipcRenderer.send('auth-code-submit', code),
-  openExternal: (url) => ipcRenderer.invoke('open-external-url', url),
+  onAuthCodePrompt: (cb) => {
+    const h = () => cb(); ipcRenderer.on('auth-code-prompt', h);
+    return () => ipcRenderer.removeListener('auth-code-prompt', h);
+  },
+  onAuthRequired: (cb) => {
+    const h = () => cb(); ipcRenderer.on('auth-required', h);
+    return () => ipcRenderer.removeListener('auth-required', h);
+  },
+  submitAuthCode: (code) => ipcRenderer.send('auth-code-submit', assertStr(code, 500)),
+  openExternal: (url) => ipcRenderer.invoke('open-external-url', assertStr(url, 2000)),
 });

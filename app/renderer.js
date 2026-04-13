@@ -39,7 +39,15 @@ let sessionTotalTokens = 0;
 // ── Inline Modal (replaces native prompt/alert) ────────────
 // Pass `body` for plain text (escaped) or `bodyHTML` for trusted HTML.
 // Never pass user input through bodyHTML — it bypasses escaping.
+// Modal queue prevents stacking — nested calls are deferred until the current modal closes.
+let _modalQueue = [];
+let _modalActive = false;
 function showModal({ title, body, bodyHTML, inputPlaceholder, confirmLabel, cancelLabel, onConfirm, onCancel }) {
+  if (_modalActive) {
+    _modalQueue.push({ title, body, bodyHTML, inputPlaceholder, confirmLabel, cancelLabel, onConfirm, onCancel });
+    return;
+  }
+  _modalActive = true;
   const modal = document.getElementById('merlin-modal');
   const titleEl = document.getElementById('merlin-modal-title');
   const bodyEl = document.getElementById('merlin-modal-body');
@@ -77,6 +85,8 @@ function showModal({ title, body, bodyHTML, inputPlaceholder, confirmLabel, canc
     closeBtn.onclick = null;
     inputEl.onkeydown = null;
     document.removeEventListener('keydown', escHandler);
+    _modalActive = false;
+    if (_modalQueue.length > 0) setTimeout(() => showModal(_modalQueue.shift()), 100);
   }
 
   function escHandler(e) {
@@ -126,8 +136,22 @@ let _trialExpired = false;
     const days = sub?.daysLeft ?? 7;
     const bonus = sub?.bonusDays || 0;
     _trialExpired = days === 0;
-    const dayText = _trialExpired ? 'Expired' : `${days}D Left`;
-    document.getElementById('trial-text').textContent = bonus > 0 && !_trialExpired ? `${dayText} (+${bonus})` : dayText;
+    const trialEl = document.getElementById('trial-text');
+    const ctaEl = document.querySelector('.subscribe-cta');
+    if (_trialExpired) {
+      trialEl.textContent = 'Expired';
+      ctaEl.textContent = 'Upgrade Now';
+      btn.style.borderColor = 'rgba(239,68,68,.4)';
+      btn.style.animation = 'none'; // stop any pulsing
+    } else if (days <= 2) {
+      const dayText = `${days}D Left`;
+      trialEl.textContent = bonus > 0 ? `${dayText} (+${bonus})` : dayText;
+      ctaEl.textContent = 'Get Pro';
+      btn.style.borderColor = 'rgba(251,191,36,.4)';
+    } else {
+      const dayText = `${days}D Left`;
+      trialEl.textContent = bonus > 0 ? `${dayText} (+${bonus})` : dayText;
+    }
   }
 })();
 
@@ -570,6 +594,19 @@ function setInputDisabled(disabled) {
   }
 }
 
+// ── Offline Detection ────────────────────────────────────────
+const offlineBanner = document.getElementById('offline-banner');
+function updateOnlineStatus() {
+  if (navigator.onLine) {
+    offlineBanner.classList.add('hidden');
+  } else {
+    offlineBanner.classList.remove('hidden');
+  }
+}
+window.addEventListener('online', updateOnlineStatus);
+window.addEventListener('offline', updateOnlineStatus);
+updateOnlineStatus();
+
 let typingTimeout = null;
 let typingStuckTimeout = null;
 
@@ -632,11 +669,13 @@ function scheduleTypingIndicator() {
   if (!sessionActive) return;
   // If status is already showing something, don't override it
   if (document.getElementById('chat-status').innerHTML) return;
+  // Show feedback quickly (300ms) so the user never feels abandoned.
+  // Previous 2000ms delay created a dead zone where nothing appeared to happen.
   typingTimeout = setTimeout(() => {
     if (sessionActive && !currentBubble && !isStreaming) {
       showTypingIndicator();
     }
-  }, 2000);
+  }, 300);
 }
 
 // Only auto-scroll if user is near the bottom (respects scroll-up intent)
@@ -749,8 +788,10 @@ function renderMarkdown(text) {
     return `%%ARTIFACT_${artifacts.length - 1}%%`;
   });
 
-  // Parse markdown with marked
-  let html = marked.parse(text);
+  // Parse markdown with marked, then sanitize to prevent XSS
+  let html = typeof DOMPurify !== 'undefined'
+    ? DOMPurify.sanitize(marked.parse(text), { ADD_TAGS: ['video'], ADD_ATTR: ['data-path', 'data-file', 'loading', 'controls', 'playsinline', 'preload'], ALLOW_UNKNOWN_PROTOCOLS: true })
+    : marked.parse(text);
 
   // Normalize Windows backslash paths to forward slashes
   html = html.replace(/([a-zA-Z0-9_\-\.]+)\\([a-zA-Z0-9_\-\.\\]+\.(?:jpg|jpeg|png|gif|webp|mp4|webm|mov))/gi, (m, a, b) => `${a}/${b.replace(/\\/g, '/')}`);
@@ -767,11 +808,15 @@ function renderMarkdown(text) {
     return match;
   });
 
-  // Restore HTML artifacts as sandboxed iframes
+  // Restore HTML artifacts as sandboxed iframes with restrictive CSP
+  // No network access (connect-src/fetch/XHR blocked), no sub-frames, no form submission.
+  // Scripts allowed for interactive demos but sandboxed — cannot reach parent or network.
+  const artifactCSP = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; img-src data: blob:; font-src data:; connect-src \'none\'; frame-src \'none\'; object-src \'none\'; base-uri \'none\'; form-action \'none\';">';
   artifacts.forEach((code, i) => {
     const encoded = encodeURIComponent(code);
+    const safeSrc = (artifactCSP + code).replace(/"/g, '&amp;quot;').replace(/'/g, '&#39;');
     html = html.replace(`%%ARTIFACT_${i}%%`,
-      `<div class="artifact"><div class="code-block-header"><span>preview</span><button class="copy-btn" data-copy="${encoded}">Copy HTML</button></div><iframe sandbox="allow-scripts" srcdoc="${code.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="width:100%;min-height:200px;border:1px solid var(--border);border-radius:0 0 8px 8px;background:#fff"></iframe></div>`
+      `<div class="artifact"><div class="code-block-header"><span>preview</span><button class="copy-btn" data-copy="${encoded}">Copy HTML</button></div><iframe sandbox="allow-scripts" srcdoc="${safeSrc}" style="width:100%;min-height:200px;border:1px solid var(--border);border-radius:0 0 8px 8px;background:#fff"></iframe></div>`
     );
   });
 
@@ -797,40 +842,60 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// Sanitize raw errors into user-friendly messages
+// Sanitize raw errors into user-friendly messages with actionable "Try:" guidance
 function friendlyError(raw, platformName) {
-  if (!raw) return `Could not connect to ${platformName || 'the platform'}. Please try again.`;
+  if (!raw) return `Could not connect to ${platformName || 'the platform'}.\nTry: Check your internet connection and try again.`;
   const s = String(raw);
   const sl = s.toLowerCase();
 
-  // Balance / billing errors — detect actual platform from error text
+  // ── Platform-specific token expiration ──
+  if (sl.includes('token') && (sl.includes('expir') || sl.includes('invalid'))) {
+    if (sl.includes('meta') || sl.includes('facebook')) return 'Your Meta access token has expired (they last ~60 days).\nTry: Open the ✦ Magic panel and reconnect Meta Ads.';
+    if (sl.includes('tiktok')) return 'Your TikTok access token has expired.\nTry: Open the ✦ Magic panel and reconnect TikTok Ads.';
+    if (sl.includes('google')) return 'Your Google Ads token has expired.\nTry: Open the ✦ Magic panel and reconnect Google Ads.';
+    if (sl.includes('shopify')) return 'Your Shopify connection has expired.\nTry: Open the ✦ Magic panel and reconnect your Shopify store.';
+    if (sl.includes('etsy')) return 'Your Etsy access token has expired.\nTry: Open the ✦ Magic panel and reconnect Etsy.';
+    return `Your ${platformName || 'platform'} token has expired.\nTry: Reconnect the platform in the ✦ Magic panel.`;
+  }
+
+  // ── Meta-specific errors ──
+  if (sl.includes('1885183') || sl.includes('development mode')) return 'Meta app is in Development Mode — ad creatives are blocked by Meta.\nTry: This requires Meta App Review approval. Contact support.';
+  if (sl.includes('ad account') && sl.includes('disabled')) return 'Your Meta ad account has been disabled by Facebook.\nTry: Check your Meta Business Manager for policy violations or appeals.';
+
+  // ── Balance / billing errors ──
   if (sl.includes('exhausted balance') || sl.includes('top up') || sl.includes('insufficient') || sl.includes('billing')) {
     const src = sl.includes('fal.ai') ? 'fal.ai' : sl.includes('elevenlabs') ? 'ElevenLabs' : sl.includes('heygen') ? 'HeyGen' : (platformName || 'API');
-    return `Your ${src} balance is empty. Add credits to continue.`;
+    return `Your ${src} balance is empty.\nTry: Add credits at ${src === 'fal.ai' ? 'fal.ai/dashboard' : src === 'ElevenLabs' ? 'elevenlabs.io/subscription' : src === 'HeyGen' ? 'heygen.com/pricing' : 'your account dashboard'}.`;
   }
-  if (sl.includes('rate limit') || sl.includes('too many requests') || sl.includes('429')) return `Too many requests. Wait a moment and try again.`;
-  if (sl.includes('quota') || sl.includes('exceeded')) return `${platformName || 'API'} quota exceeded. Check your plan limits.`;
+  if (sl.includes('rate limit') || sl.includes('too many requests') || sl.includes('429')) return 'Too many requests — Merlin is protecting your account.\nTry: Wait 30 seconds and try again. This is normal.';
+  if (sl.includes('quota') || sl.includes('exceeded')) return `${platformName || 'API'} quota exceeded.\nTry: Check your plan limits or upgrade your ${platformName || 'API'} account.`;
 
-  // Auth errors
-  if (sl.includes('401') || sl.includes('unauthorized') || sl.includes('invalid.*key') || sl.includes('invalid.*token')) return `Authorization failed. Try reconnecting ${platformName || 'the platform'}.`;
-  if (sl.includes('403') || sl.includes('forbidden') || sl.includes('locked')) return `Access denied on ${platformName || 'the platform'}. Check your account status.`;
+  // ── Auth errors ──
+  if (sl.includes('401') || sl.includes('unauthorized') || sl.includes('invalid.*key') || sl.includes('invalid.*token')) return `Authorization failed for ${platformName || 'the platform'}.\nTry: Open the ✦ Magic panel and reconnect your account.`;
+  if (sl.includes('403') || sl.includes('forbidden') || sl.includes('locked')) return `Access denied on ${platformName || 'the platform'}.\nTry: Check that your account is active and has the right permissions.`;
 
-  // Network errors
-  if (sl.includes('enoent') || sl.includes('not found') || sl.includes('spawn')) return `Merlin engine not found. Try reinstalling or running /update.`;
-  if (sl.includes('etimedout') || sl.includes('timeout')) return `Connection timed out. Check your internet and try again.`;
-  if (sl.includes('econnrefused')) return `${platformName || 'Platform'} refused the connection. The service may be down.`;
-  if (sl.includes('enotfound') || sl.includes('dns')) return `Can't reach ${platformName || 'the service'}. Check your internet connection.`;
+  // ── Shopify-specific ──
+  if (sl.includes('shopify') && (sl.includes('404') || sl.includes('not found'))) return 'Shopify resource not found.\nTry: Check that the product/order still exists in your Shopify admin.';
+  if (sl.includes('shopify') && sl.includes('throttl')) return 'Shopify is rate-limiting requests.\nTry: Wait a moment — Merlin will auto-retry.';
 
-  // Command/binary errors — never show raw paths
+  // ── Network errors ──
+  if (sl.includes('enoent') || (sl.includes('not found') && sl.includes('spawn'))) return 'Merlin engine not found.\nTry: Type /update to reinstall, or restart the app.';
+  if (sl.includes('etimedout') || sl.includes('timeout')) return 'Connection timed out.\nTry: Check your internet connection and try again.';
+  if (sl.includes('econnrefused')) return `${platformName || 'Platform'} refused the connection.\nTry: The service may be down — wait a few minutes and retry.`;
+  if (sl.includes('enotfound') || sl.includes('dns')) return `Can't reach ${platformName || 'the service'}.\nTry: Check your Wi-Fi or internet connection.`;
+  if (sl.includes('econnreset') || sl.includes('socket hang up')) return `Connection was interrupted.\nTry: Check your internet connection and try again.`;
+
+  // ── Command/binary errors — never show raw paths ──
   if (s.includes('Command failed') || s.includes('.exe') || s.includes('--cmd') || s.includes('--config')) {
-    return `Could not connect to ${platformName || 'the platform'}. Please check your internet connection and try again.`;
+    return `Something went wrong running that action.\nTry: Type /update to make sure you have the latest version, then try again.`;
   }
 
-  // JSON / technical errors — strip and simplify
+  // ── JSON / technical errors — strip and simplify ──
   if (s.includes('{"') || s.includes('[ERROR]') || s.includes('HTTP 4') || s.includes('HTTP 5')) {
-    if (sl.includes('500') || sl.includes('internal server')) return `${platformName || 'Service'} is having issues. Try again in a few minutes.`;
-    if (sl.includes('404')) return `${platformName || 'Resource'} not found. It may have been moved or deleted.`;
-    return `Something went wrong with ${platformName || 'the service'}. Try again.`;
+    if (sl.includes('500') || sl.includes('internal server')) return `${platformName || 'Service'} is having issues.\nTry: Wait a few minutes and try again — this is on their end.`;
+    if (sl.includes('404')) return `${platformName || 'Resource'} not found.\nTry: It may have been moved or deleted. Check your ${platformName || 'platform'} dashboard.`;
+    if (sl.includes('400') || sl.includes('bad request')) return `${platformName || 'Platform'} didn't accept that request.\nTry: Check that all required fields are filled in and try again.`;
+    return `Something went wrong with ${platformName || 'the service'}.\nTry: Wait a moment and try again.`;
   }
 
   // Truncate anything still long
@@ -920,7 +985,10 @@ merlin.onSdkMessage((msg) => {
           const statsDiv = document.createElement('div');
           statsDiv.className = 'turn-stats';
           let statsText = `${duration}s`;
-          if (turnTokens > 0) statsText += ` \u00b7 ${turnTokens} tokens`;
+          if (turnTokens > 0) {
+            const formatted = turnTokens >= 1000 ? (turnTokens / 1000).toFixed(1) + 'K' : String(turnTokens);
+            statsText += ` \u00b7 ${formatted} tokens`;
+          }
           statsText += ' \u00b7 Merlin can make mistakes';
           statsDiv.textContent = statsText;
           messages.appendChild(statsDiv);
@@ -978,14 +1046,16 @@ function handleStreamEvent(msg) {
 // ── Approval Cards ──────────────────────────────────────────
 let _approvalCountdown = null; // track active countdown to prevent stacking
 
-merlin.onApprovalRequest(({ toolUseID, label, cost }) => {
+merlin.onApprovalRequest(({ toolUseID, label, cost, budget }) => {
   // Clear any previous countdown from a prior approval
   if (_approvalCountdown) { clearInterval(_approvalCountdown); _approvalCountdown = null; }
 
   document.getElementById('approval-label').textContent = label;
   const costEl = document.getElementById('approval-cost');
+  const budgetEl = document.getElementById('approval-budget');
   costEl.textContent = cost ? `Cost: ${cost}` : '';
-  costEl.style.color = '';
+  costEl.style.color = cost && cost.includes('⚠') ? '#ef4444' : '';
+  budgetEl.innerHTML = budget || '';
 
   const approveBtn = document.getElementById('btn-approve');
   const denyBtn = document.getElementById('btn-deny');
@@ -1002,6 +1072,7 @@ merlin.onApprovalRequest(({ toolUseID, label, cost }) => {
 
   // 15-minute countdown (matches backend APPROVAL_TIMEOUT_MS)
   let secondsLeft = 900;
+  const savedCost = cost;
   _approvalCountdown = setInterval(() => {
     secondsLeft--;
     if (secondsLeft <= 60) {
@@ -1013,6 +1084,11 @@ merlin.onApprovalRequest(({ toolUseID, label, cost }) => {
       _approvalCountdown = null;
       approval.classList.add('hidden');
       costEl.style.color = '';
+      budgetEl.innerHTML = '';
+      // Show toast so user knows it timed out
+      const bubble = addClaudeBubble();
+      textBuffer = `⏱ Approval timed out for: ${label}. Ask me again if you'd like to retry.`;
+      finalizeBubble();
     }
   }, 1000);
 
@@ -1020,6 +1096,7 @@ merlin.onApprovalRequest(({ toolUseID, label, cost }) => {
     if (_approvalCountdown) { clearInterval(_approvalCountdown); _approvalCountdown = null; }
     approval.classList.add('hidden');
     costEl.style.color = '';
+    budgetEl.innerHTML = '';
   };
 
   // Replace handlers cleanly (onclick= replaces previous, no stacking)
@@ -1399,10 +1476,71 @@ if (merlin.onAuthCodePrompt) {
 }
 
 // ── Auth Required Notification ───────────────────────────────
-// Shown when no credentials are found before session start.
+// Fired when startSession() finds no credentials and returns early
+// (instead of letting the SDK open a browser with no paste dialog).
+// Trigger the explicit login flow, which HAS paste-code support.
 if (merlin.onAuthRequired) {
-  merlin.onAuthRequired(() => {
-    console.log('[auth] No credentials — SDK will trigger interactive auth');
+  merlin.onAuthRequired(async () => {
+    console.log('[auth] No credentials — triggering explicit login flow');
+
+    // Show inline message so the user isn't staring at a blank loading state
+    const bubble = addClaudeBubble();
+    textBuffer = 'Connecting to your Claude account...\n\nA browser window will open for a quick sign-in. This only happens once.';
+    finalizeBubble();
+    bubble.style.borderColor = 'rgba(251,191,36,.3)';
+
+    try {
+      if (merlin.triggerClaudeLogin) {
+        const result = await merlin.triggerClaudeLogin();
+        if (result.success) {
+          // Dismiss paste dialog if it was open
+          const authDialog = document.getElementById('auth-code-dialog');
+          if (authDialog) authDialog.remove();
+          bubble.textContent = 'Signed in! Starting Merlin...';
+          setTimeout(() => {
+            _restartAttempts = 0;
+            sessionActive = true;
+            merlin.startSession();
+          }, 1000);
+          return;
+        }
+        // Login failed — show message + retry
+        bubble.textContent = result.timedOut
+          ? 'Sign-in timed out. Try again or use an API key.'
+          : (result.error || 'Sign-in failed.');
+      }
+    } catch (e) {
+      console.error('[auth-required] Login error:', e);
+      bubble.textContent = 'Sign-in failed. Try again below.';
+    }
+
+    // Add retry + API key buttons
+    const btnWrap = document.createElement('div');
+    btnWrap.style.cssText = 'display:flex;gap:8px;margin-top:12px';
+    const retryBtn = document.createElement('button');
+    retryBtn.textContent = 'Retry Sign In';
+    retryBtn.className = 'btn-action btn-approve-style';
+    retryBtn.style.cssText = 'width:auto;padding:8px 20px;font-size:13px';
+    retryBtn.onclick = () => {
+      _restartAttempts = 0;
+      sessionActive = true;
+      merlin.startSession();
+    };
+    const apiKeyBtn = document.createElement('button');
+    apiKeyBtn.textContent = 'Use API Key';
+    apiKeyBtn.className = 'btn-action btn-deny-style';
+    apiKeyBtn.style.cssText = 'width:auto;padding:8px 20px;font-size:13px';
+    apiKeyBtn.onclick = () => {
+      // Show API key form if available
+      const apiForm = document.getElementById('setup-apikey-form');
+      if (apiForm) {
+        document.getElementById('setup-container')?.classList.remove('hidden');
+        apiForm.style.display = '';
+      }
+    };
+    btnWrap.appendChild(retryBtn);
+    btnWrap.appendChild(apiKeyBtn);
+    bubble.appendChild(btnWrap);
   });
 }
 
@@ -2515,6 +2653,9 @@ function setStatusLabel(label) {
   _currentStatusLabel = label;
   if (_statusDebounce) clearTimeout(_statusDebounce);
   if (_stuckTimer) clearTimeout(_stuckTimer);
+  // Short debounce (50ms) to batch rapid status changes without creating a visible dead zone.
+  // Previous 300ms delay combined with the 2s scheduleTypingIndicator delay left users
+  // with no feedback for up to 2.3 seconds between responses.
   _statusDebounce = setTimeout(() => {
     const status = document.getElementById('chat-status');
     const existing = status.querySelector('.chat-status-label');
@@ -2524,7 +2665,7 @@ function setStatusLabel(label) {
       status.innerHTML = `<div class="chat-status-row"><span class="status-spinner">✦</span> <span class="chat-status-label">${escapeHtml(label)}</span></div>`;
     }
     _statusDebounce = null;
-  }, 300); // 300ms debounce — prevents rapid flicker
+  }, 50);
 
   // Stuck detection — if status doesn't change for 45s, show a hint
   _stuckTimer = setTimeout(() => {
@@ -2591,13 +2732,21 @@ function sendMessage() {
   const text = input.value.trim();
   if (!text) return;
 
+  // Offline gate — prevent sending when disconnected
+  if (!navigator.onLine) {
+    const bubble = addClaudeBubble();
+    textBuffer = 'You\'re offline. Check your internet connection and try again.';
+    finalizeBubble();
+    return;
+  }
+
   // Trial expiry gate — soft block, allow key activation
   if (_trialExpired) {
     showModal({
-      title: 'Free Trial Ended',
-      body: 'Your 7-day trial is up. Enter a license key or subscribe to keep using Merlin.',
+      title: 'Your Free Trial Has Ended',
+      body: 'Your brands, products, and all creative learnings are saved and ready to go. Subscribe to pick up right where you left off, or enter a license key below.',
       inputPlaceholder: 'License key (e.g. XXXX-XXXX)',
-      confirmLabel: 'Activate',
+      confirmLabel: 'Activate Key',
       cancelLabel: 'Subscribe',
       onConfirm: (key) => {
         if (key && key.length > 0) {
@@ -2958,7 +3107,7 @@ const perfState = {
 
 function renderPerfBar(perf) {
   const text = document.getElementById('perf-text');
-  if (!perf || (!perf.revenue && !perf.spend)) {
+  if (!perf || !perf.generatedAt) {
     text.innerHTML = 'No data yet — connect an ad platform to start tracking';
     return;
   }
@@ -3026,7 +3175,8 @@ function renderPerfBarSkeleton() {
 
 async function fetchPerfData(days, brand) {
   const perf = await merlin.getPerfSummary(days, brand);
-  if (perf && (perf.revenue || perf.spend)) {
+  // Cache if data exists (generatedAt proves a dashboard run happened, even if values are zero)
+  if (perf && perf.generatedAt) {
     if (!perfState.cache[brand]) perfState.cache[brand] = {};
     perfState.cache[brand][days] = perf;
   }
@@ -3049,10 +3199,25 @@ async function loadPerfBar(days, brandOverride) {
     const perf = await fetchPerfData(days, brand);
     // Race guard: only render if still on the same brand+period
     if (perfState.currentBrand !== brand || perfState.currentPeriod !== days) return;
-    if (perf && (perf.revenue || perf.spend)) {
+    if (perf && perf.generatedAt) {
+      // Data exists (even if revenue/spend are zero — that's a valid state, not "no data")
       renderPerfBar(perf);
+    } else if (!cached && brand && !perfState._refreshedBrands?.has(brand)) {
+      // No data for this brand AND we haven't already tried refreshing it.
+      // Guard prevents infinite refresh loops for brands with no connected platforms.
+      if (!perfState._refreshedBrands) perfState._refreshedBrands = new Set();
+      perfState._refreshedBrands.add(brand);
+      renderPerfBar(null);
+      try {
+        await merlin.refreshPerf(brand);
+        // Re-check that user hasn't switched brands during the 30-60s refresh
+        if (perfState.currentBrand !== brand || perfState.currentPeriod !== days) return;
+        const retryPerf = await fetchPerfData(days, brand);
+        if (perfState.currentBrand === brand && perfState.currentPeriod === days) {
+          renderPerfBar(retryPerf);
+        }
+      } catch {}
     } else if (!cached) {
-      // No cached data AND no fresh data — show empty state or skeleton
       renderPerfBar(null);
     }
     // If cached exists but fresh is null, keep showing cached (don't blank)
@@ -3073,29 +3238,40 @@ if (merlin.onPerfDataChanged) {
   });
 }
 
-// Load on startup — preload everything so sidebar opens instantly
-loadBrands().then(() => { loadConnections(); loadSpells(); });
-loadPerfBar(7);
+// Load on startup — wait for brands to load FIRST, then load perf bar with the active brand.
+// Previous bug: loadPerfBar(7) ran before brands loaded, so it used empty brand → global data.
+loadBrands().then(() => {
+  loadConnections();
+  loadSpells();
+  const activeBrand = document.getElementById('brand-select')?.value || '';
+  loadPerfBar(7, activeBrand);
 
-// Background perf refresh — pull fresh data on launch + every 4 hours
-(async function refreshPerfOnLaunch() {
-  try {
-    const lastUpdate = await merlin.getPerfUpdated();
-    const stale = !lastUpdate || (Date.now() - new Date(lastUpdate).getTime() > 4 * 60 * 60 * 1000);
-    if (stale) {
-      const activeBrand = document.getElementById('brand-select')?.value || '';
-      await merlin.refreshPerf(activeBrand);
-      const activePeriod = document.querySelector('.perf-period-btn.active')?.dataset.days || '7';
-      loadPerfBar(parseInt(activePeriod));
-    }
-  } catch {}
-})();
+  // Background perf refresh — pull fresh data on launch if brand data is stale
+  (async function refreshPerfOnLaunch() {
+    try {
+      const lastUpdate = await merlin.getPerfUpdated(activeBrand);
+      const stale = !lastUpdate || (Date.now() - new Date(lastUpdate).getTime() > 4 * 60 * 60 * 1000);
+      if (stale) {
+        await merlin.refreshPerf(activeBrand);
+        // Re-read the current brand from DOM — user may have switched during the 30-60s refresh
+        const currentBrand = document.getElementById('brand-select')?.value || '';
+        if (currentBrand === activeBrand) {
+          const activePeriod = document.querySelector('.perf-period-btn.active')?.dataset.days || '7';
+          loadPerfBar(parseInt(activePeriod), activeBrand);
+        }
+        // If user switched brands, don't overwrite their selection
+      }
+    } catch {}
+  })();
+});
+
+// Periodic refresh — every 4 hours, refresh the currently selected brand
 setInterval(async () => {
   try {
     const activeBrand = document.getElementById('brand-select')?.value || '';
     await merlin.refreshPerf(activeBrand);
     const activePeriod = document.querySelector('.perf-period-btn.active')?.dataset.days || '7';
-    loadPerfBar(parseInt(activePeriod));
+    loadPerfBar(parseInt(activePeriod), activeBrand);
   } catch {}
 }, 4 * 60 * 60 * 1000); // every 4 hours
 
@@ -3941,17 +4117,19 @@ document.addEventListener('click', (e) => {
 
 // ── Trial Expired ──────────────────────────────────────────
 merlin.onTrialExpired(() => {
+  _trialExpired = true;
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
   overlay.id = 'trial-overlay';
   overlay.innerHTML = `
     <div class="setup-card">
       <div class="setup-mascot">✦</div>
-      <h1>Trial Ended</h1>
-      <p class="setup-sub">Your free trial has expired</p>
-      <p class="setup-explain">Subscribe to keep using Merlin. Your brands, products, and creative learnings are all saved and waiting.</p>
-      <button class="btn-primary" id="trial-subscribe-btn">Subscribe</button>
+      <h1>Your Free Trial Has Ended</h1>
+      <p class="setup-sub">Everything you've built is saved and waiting</p>
+      <p class="setup-explain">Your brands, products, ad creatives, and performance learnings are all intact. Subscribe to unlock Merlin and keep scaling, or enter a license key if you have one.</p>
+      <button class="btn-primary" id="trial-subscribe-btn">Subscribe to Merlin Pro</button>
       <button class="btn-secondary" id="trial-key-btn">I have a license key</button>
+      <p style="font-size:11px;color:var(--text-dim);margin-top:12px">Invite 3 friends with your referral link for up to 21 extra free days.</p>
     </div>
   `;
   document.body.appendChild(overlay);

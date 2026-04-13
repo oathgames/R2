@@ -1,5 +1,5 @@
 {
-  "version": "0.9.98",
+  "version": "0.9.99",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -23,10 +23,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v0.9.98: BFF security migration, Mac dock fix, Meta budget control.",
+  "notes": "v0.9.99: Mac auth fix — seamless sign-in, no more paste-code page.",
   "whatsNew": [
-    "OAuth secrets moved server-side — tokens never leave your infrastructure",
-    "Mac dock bounce fix — SDK subprocess no longer launches as GUI app",
-    "Meta budget control — set daily budgets on existing campaigns and ad sets"
+    "Mac auth completely rebuilt — in-app sign-in window auto-captures OAuth code",
+    "No more 'Paste this into Claude Code' — redirect intercepted automatically",
+    "Session blocked until auth completes — no more blank loading screens"
   ]
 }
