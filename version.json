@@ -1,5 +1,5 @@
 {
-  "version": "1.0.2",
+  "version": "1.0.3",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -23,10 +23,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v1.0.2: Auth flow rewrite — paste dialog now shows reliably on all platforms.",
+  "notes": "v1.0.3: Meta insights now blazingly fast — 7 API calls reduced to 1-2 per pull.",
   "whatsNew": [
-    "Sign-in: paste dialog now opens immediately so you always have a place to paste the code",
-    "Removed fragile in-app browser — system browser handles sign-in everywhere (password managers, 2FA, SSO all just work)",
-    "Extended sign-in timeout to 3 minutes for slower networks and 2FA flows"
+    "Fixed 'rate limited' errors on back-to-back Meta insights pulls",
+    "Cut Meta API calls per insights pull by 70% — now 1-2 calls instead of 7",
+    "Raised internal rate limit headroom so interactive use no longer hits the ceiling"
   ]
 }
