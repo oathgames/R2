@@ -222,6 +222,10 @@ contextBridge.exposeInMainWorld('merlin', {
     return () => ipcRenderer.removeListener('engine-status', h);
   },
   triggerClaudeLogin: () => ipcRenderer.invoke('trigger-claude-login'),
+  // Cancel an in-flight login subprocess. Returns { ok: true } after killing
+  // the child. Safe to call even if no login is running (ipcMain will just
+  // error and we swallow it renderer-side).
+  cancelClaudeLogin: () => ipcRenderer.invoke('cancel-claude-login').catch(() => ({ ok: false })),
   onAuthCodePrompt: (cb) => {
     const h = () => cb(); ipcRenderer.on('auth-code-prompt', h);
     return () => ipcRenderer.removeListener('auth-code-prompt', h);
@@ -229,6 +233,14 @@ contextBridge.exposeInMainWorld('merlin', {
   onAuthCodeDismiss: (cb) => {
     const h = () => cb(); ipcRenderer.on('auth-code-dismiss', h);
     return () => ipcRenderer.removeListener('auth-code-dismiss', h);
+  },
+  // Unified auth-required event (Codex P1 #1). Fires whenever the main
+  // process discovers missing or invalid credentials — from startSession,
+  // from SDK errors, from anywhere. The renderer auto-triggers login and
+  // replays the triggering message on success.
+  onAuthRequired: (cb) => {
+    const h = (_, data) => cb(data || {}); ipcRenderer.on('auth-required', h);
+    return () => ipcRenderer.removeListener('auth-required', h);
   },
   // Two paths:
   //   - send:   fire-and-forget (legacy, no feedback)

@@ -1200,21 +1200,34 @@ merlin.onUpdateError((err) => {
 });
 
 // ── Auth Code Paste Dialog ─────────────────────────────────
-// When the SDK's localhost callback fails and it falls back to a paste-code
-// flow, show an inline dialog so the user can paste the code from the browser.
-// This only happens on first-ever auth — credentials are persisted after.
+// FALLBACK path only. The happy path is: the Claude Agent SDK opens the
+// browser, the user signs in, Claude redirects to http://localhost:<port>/
+// callback, and the SDK's own HTTP listener catches the code without any
+// manual intervention. This dialog only appears when the SDK detects the
+// localhost flow failed and it has to prompt for manual paste — which we
+// detect from its stdout ("paste code here if prompted").
+//
+// CRITICAL: the exact paste format the SDK wants is `code#state` — a code
+// string, a literal `#` separator, then the state string. Confirmed by
+// inspecting node_modules/@anthropic-ai/claude-agent-sdk/cli.js: it calls
+// `b.split("#")` and rejects input with "Invalid code. Please make sure
+// the full code was copied" if either half is missing.
+//
+// The paste page at https://platform.claude.com/oauth/code/success shows
+// the combined `code#state` string with a "Copy Code" button. Users who
+// click the button get the right format automatically. Users who partial-
+// select or type fragments get the format validation below.
 if (merlin.onAuthCodePrompt) {
   merlin.onAuthCodePrompt(() => {
-    // Check if dialog already exists
     if (document.getElementById('auth-code-dialog')) return;
 
     const dialog = document.createElement('div');
     dialog.id = 'auth-code-dialog';
-    dialog.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10000;background:var(--bg-deep);border:1px solid var(--accent);border-radius:16px;padding:24px 32px;max-width:420px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,.6);text-align:center';
+    dialog.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10000;background:var(--bg-deep);border:1px solid var(--accent);border-radius:16px;padding:24px 32px;max-width:460px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,.6);text-align:center';
     dialog.innerHTML = `
       <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:8px">Paste your authentication code</div>
-      <div style="font-size:13px;color:var(--text-muted);margin-bottom:16px;line-height:1.5">Copy the code from the browser window that just opened and paste it below. This only happens once.</div>
-      <input id="auth-code-input" type="text" placeholder="Paste code here..." style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-family:var(--font);font-size:14px;outline:none;margin-bottom:12px;text-align:center;letter-spacing:1px" autocomplete="off" spellcheck="false">
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:16px;line-height:1.5">Your browser should have opened a Claude page. Click the <b>Copy Code</b> button on that page and paste the full string below. It looks like <code style="background:var(--surface);padding:1px 5px;border-radius:4px">xxxxxxxx#yyyyyyyy</code> — make sure you copy the part after the <code style="background:var(--surface);padding:1px 5px;border-radius:4px">#</code> too.</div>
+      <input id="auth-code-input" type="text" placeholder="Paste the full code here..." style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-family:var(--font);font-size:13px;outline:none;margin-bottom:12px;text-align:center" autocomplete="off" spellcheck="false">
       <div style="display:flex;gap:8px">
         <button id="auth-code-submit-btn" style="flex:1;padding:10px 24px;border-radius:10px;border:none;background:var(--accent);color:#fff;font-weight:600;font-size:14px;cursor:pointer">Submit</button>
         <button id="auth-code-cancel-btn" style="padding:10px 16px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:14px;cursor:pointer">Cancel</button>
@@ -1222,21 +1235,49 @@ if (merlin.onAuthCodePrompt) {
     `;
     document.body.appendChild(dialog);
 
-    const input = document.getElementById('auth-code-input');
+    const inputEl = document.getElementById('auth-code-input');
     const btn = document.getElementById('auth-code-submit-btn');
-    input.focus();
+    inputEl.focus();
+
+    function showHint(text, color) {
+      let hint = document.getElementById('auth-code-hint');
+      if (!hint) {
+        hint = document.createElement('div');
+        hint.id = 'auth-code-hint';
+        hint.style.cssText = 'font-size:11px;margin-bottom:8px;line-height:1.4';
+        inputEl.parentNode.insertBefore(hint, inputEl.nextSibling);
+      }
+      hint.style.color = color || 'var(--text-muted)';
+      hint.textContent = text;
+    }
 
     async function submit() {
-      const code = input.value.trim();
-      if (!code) return;
+      const code = inputEl.value.trim();
+      if (!code) {
+        showHint('Paste the full code first.', '#ef4444');
+        return;
+      }
+      // Client-side format validation: the CLI expects `code#state`. If the
+      // user only pasted one half we can tell them immediately instead of
+      // writing garbage to stdin and waiting for a silent rejection.
+      if (!code.includes('#')) {
+        showHint('That looks incomplete — the code should contain a # character. Copy it from Claude again using the Copy Code button.', '#ef4444');
+        return;
+      }
+      const parts = code.split('#');
+      if (parts.length !== 2 || !parts[0] || !parts[1]) {
+        showHint('That code is missing one half. Make sure you copy the entire string including everything after the #.', '#ef4444');
+        return;
+      }
+
       btn.textContent = 'Submitting...';
       btn.disabled = true;
-      input.disabled = true;
+      inputEl.disabled = true;
 
       // Use the invoke path so we get feedback on whether the paste actually
-      // reached the CLI subprocess. The legacy `submitAuthCode` fire-and-forget
-      // path silently failed when child.stdin was closed, leaving users with
-      // no indication why their click did nothing.
+      // reached the CLI subprocess. The legacy fire-and-forget path silently
+      // failed when child.stdin was closed, leaving users with no indication
+      // why their click did nothing.
       let result = { ok: false, reason: 'no-handler' };
       if (merlin.submitAuthCodeWithResult) {
         try {
@@ -1245,62 +1286,56 @@ if (merlin.onAuthCodePrompt) {
           result = { ok: false, reason: e && e.message ? e.message : 'invoke-threw' };
         }
       } else if (merlin.submitAuthCode) {
-        // Older preload — fall back to fire-and-forget, hope for the best
         merlin.submitAuthCode(code);
         result = { ok: true };
       }
 
-      // Show real feedback instead of the old 3-second-silent-spinner.
       if (!document.getElementById('auth-code-dialog')) return;
-      let hint = document.getElementById('auth-code-hint');
-      if (!hint) {
-        hint = document.createElement('div');
-        hint.id = 'auth-code-hint';
-        hint.style.cssText = 'font-size:11px;margin-bottom:8px;line-height:1.4';
-        input.parentNode.insertBefore(hint, input.nextSibling);
-      }
 
       if (result.ok) {
-        hint.style.color = 'var(--text-muted)';
-        hint.textContent = 'Sent to Claude — waiting for it to exchange the code for a token...';
+        showHint('Sent to Claude — waiting for the token exchange to complete...', 'var(--text-muted)');
         btn.textContent = 'Submit';
         btn.disabled = false;
-        input.disabled = false;
-        input.value = '';
-        input.focus();
+        inputEl.disabled = false;
+        inputEl.value = '';
+        inputEl.focus();
       } else {
-        hint.style.color = '#ef4444';
         const reason = result.reason === 'child-stdin-destroyed'
-          ? 'The Claude login process already exited. Close this dialog and click Sign In again to restart.'
+          ? 'The Claude login process already exited. Close this dialog and try again.'
           : result.reason === 'empty'
           ? 'Please paste the code first.'
-          : 'Could not send the code (' + (result.reason || 'unknown') + '). Close and click Sign In again.';
-        hint.textContent = reason;
+          : 'Could not send the code (' + (result.reason || 'unknown') + '). Close and try again.';
+        showHint(reason, '#ef4444');
         btn.textContent = 'Submit';
         btn.disabled = false;
-        input.disabled = false;
+        inputEl.disabled = false;
       }
     }
 
-    function dismissDialog() {
+    // Cancel actually kills the subprocess — not just the UI (Codex P2 #7).
+    async function dismissDialog() {
       const d = document.getElementById('auth-code-dialog');
       if (d) d.remove();
+      if (merlin.cancelClaudeLogin) {
+        try { await merlin.cancelClaudeLogin(); } catch {}
+      }
     }
 
     btn.onclick = submit;
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
     document.getElementById('auth-code-cancel-btn').onclick = dismissDialog;
     document.addEventListener('keydown', function escHandler(e) {
-      if (e.key === 'Escape') { dismissDialog(); document.removeEventListener('keydown', escHandler); }
+      if (e.key === 'Escape') {
+        dismissDialog();
+        document.removeEventListener('keydown', escHandler);
+      }
     });
   });
 }
 
 // ── Auth Code Dismiss (CLI exited — dialog no longer needed) ──
-// Fires when the Claude CLI subprocess closes (success or failure). The
-// paste dialog is always opened preemptively as a safety net the moment
-// we see the auth URL — this event removes it if the CLI's built-in
-// localhost callback captured the code before the user needed to paste.
+// Fires when the Claude CLI subprocess closes (success or failure). Removes
+// the paste dialog if it was open.
 if (merlin.onAuthCodeDismiss) {
   merlin.onAuthCodeDismiss(() => {
     const d = document.getElementById('auth-code-dialog');
@@ -1308,9 +1343,132 @@ if (merlin.onAuthCodeDismiss) {
   });
 }
 
-// (onAuthRequired handler removed — the no-credentials path now goes
-// through sendInlineMessage() in main.js, which renders via onInlineMessage
-// above. No setup overlay, no hard blocker.)
+// ── Unified Auth-Required Handler ──────────────────────────────────────────
+// Single source of truth for "user has no working Claude credentials". Fired
+// by the main process from startSession() (missing creds) and from SDK auth
+// errors. This handler:
+//
+//   1. Shows an inline bubble so the user knows what's happening
+//   2. Auto-triggers triggerClaudeLogin() — no button click required
+//   3. On success: re-sends the triggering user message, so the user's
+//      original request completes as if nothing happened (Codex P1 #5)
+//   4. On failure: shows a Sign In button so the user can retry manually,
+//      and surfaces the real error from the CLI instead of a silent shrug
+//
+// If an auth-required event fires while a login is already in progress,
+// we ignore the duplicate so we don't spawn a second subprocess.
+let _authLoginInFlight = false;
+if (merlin.onAuthRequired) {
+  merlin.onAuthRequired(async (data) => {
+    if (_authLoginInFlight) {
+      console.log('[auth] onAuthRequired fired while login already in flight — ignoring duplicate');
+      return;
+    }
+    _authLoginInFlight = true;
+
+    // Capture the triggering message NOW (before any async ops) so we can
+    // replay it even if _lastUserMessage gets overwritten by some other path
+    // while login is running.
+    const pendingMessage = _lastUserMessage;
+
+    // Clear in-flight turn state — same cleanup onInlineMessage does
+    if (typingTimeout) { clearTimeout(typingTimeout); typingTimeout = null; }
+    removeTypingIndicator();
+    stopTickingTimer();
+    finalizeBubble();
+    sessionActive = false;
+    isStreaming = false;
+    setInputDisabled(false);
+
+    // Show a live status bubble that updates as auth progresses
+    const bubble = addClaudeBubble();
+    bubble.style.borderColor = 'rgba(251,191,36,.3)';
+    const statusEl = bubble.querySelector('.bubble-text') || bubble;
+    function setStatus(text) {
+      if (statusEl === bubble) {
+        textBuffer = text;
+        finalizeBubble();
+      } else {
+        statusEl.textContent = text;
+      }
+    }
+    setStatus('Opening Claude sign-in in your browser...');
+
+    try {
+      if (!merlin.triggerClaudeLogin) {
+        setStatus('Claude sign-in is not available in this build. Please restart Merlin.');
+        return;
+      }
+      const result = await merlin.triggerClaudeLogin();
+      if (result && result.success) {
+        // Token is verified by main (readCredentials retry loop). Replay.
+        if (pendingMessage) {
+          setStatus('Signed in — replaying your request...');
+          // Small delay so the user sees the transition
+          await new Promise(r => setTimeout(r, 250));
+          _lastUserMessage = pendingMessage;
+          addUserBubble(pendingMessage);
+          showTypingIndicator();
+          turnStartTime = Date.now();
+          turnTokens = 0;
+          sessionActive = true;
+          startTickingTimer();
+          merlin.sendMessage(pendingMessage);
+        } else {
+          setStatus('Signed in to Claude. Ask me anything.');
+        }
+      } else if (result && result.cancelled) {
+        setStatus('Sign-in cancelled. Click the button below to try again.');
+        addRetryButton(bubble);
+      } else {
+        const err = (result && result.error) || 'Sign-in failed.';
+        setStatus(err);
+        addRetryButton(bubble);
+      }
+    } catch (e) {
+      console.error('[auth] triggerClaudeLogin threw:', e);
+      setStatus('Sign-in failed unexpectedly. ' + (e && e.message ? e.message : ''));
+      addRetryButton(bubble);
+    } finally {
+      _authLoginInFlight = false;
+    }
+  });
+}
+
+// addRetryButton appends a "Sign In to Claude" button to a bubble. Clicking
+// it fires the auth-required flow again. Used when the first auto-triggered
+// login attempt failed and we want the user to try manually.
+function addRetryButton(bubble) {
+  if (!bubble || bubble.querySelector('.auth-retry-btn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'auth-retry-btn';
+  btn.textContent = 'Sign In to Claude';
+  btn.style.cssText = 'margin-top:12px;padding:8px 20px;border-radius:10px;border:none;background:var(--accent);color:#fff;font-weight:600;font-size:13px;cursor:pointer';
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = 'Opening...';
+    if (!merlin.triggerClaudeLogin) return;
+    try {
+      const result = await merlin.triggerClaudeLogin();
+      if (result && result.success && _lastUserMessage) {
+        bubble.remove();
+        addUserBubble(_lastUserMessage);
+        showTypingIndicator();
+        sessionActive = true;
+        turnStartTime = Date.now();
+        startTickingTimer();
+        merlin.sendMessage(_lastUserMessage);
+      } else if (result && !result.success) {
+        btn.disabled = false;
+        btn.textContent = 'Sign In to Claude';
+      }
+    } catch {
+      btn.disabled = false;
+      btn.textContent = 'Sign In to Claude';
+    }
+  };
+  bubble.appendChild(btn);
+}
 
 // ── Engine Status (binary download progress) ─────────────────
 // Renders the engine download status into a persistent toast at the bottom

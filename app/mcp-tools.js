@@ -16,6 +16,77 @@ const os = require('os');
 const path = require('path');
 const { redactOutput } = require('./mcp-redact');
 
+// ── Budget validation ────────────────────────────────────────
+//
+// Claude occasionally pre-converts dollar budgets to cents (e.g. passes 1000
+// meaning $10/day) because it knows Meta/TikTok/Google APIs take cents under
+// the hood. The MCP schema says "dollars", but Claude has misread this in the
+// past — and once the value reaches the binary it gets multiplied by 100 AGAIN,
+// turning a $10/day request into a $1000/day spend commitment. The user sees
+// $1000/day on the approval card and rightly panics.
+//
+// This guard is defense-in-depth: detect values that are clearly nonsense for
+// daily ad budgets and REJECT the tool call with an explanatory error so Claude
+// can correct and retry. The binary also has a hard cap (see main.go validate).
+//
+// We use TWO signals:
+//   1. Absolute ceiling — reject anything ≥ BUDGET_HARD_CEILING (no sane user
+//      runs a $5000/day solo DTC ad budget; we assume 5000+ means cents).
+//   2. Relative to maxDailyAdBudget — if the user configured a cap and the
+//      requested budget exceeds it by more than 10x, treat as cents.
+//
+// Normal ad budgets for solo DTC founders: $5-$500/day. We reject anything
+// above $1000/day unless the user's configured cap is at least 1/10 of that.
+const BUDGET_HARD_CEILING = 5000; // dollars — above this is almost certainly cents
+
+function validateBudget(ctx, args, platform) {
+	const budget = args.dailyBudget;
+	if (budget === undefined || budget === null) return null;
+	if (typeof budget !== 'number' || !Number.isFinite(budget) || budget < 0) {
+		return `dailyBudget must be a positive number in dollars (e.g. 10 for $10/day). Got: ${budget}`;
+	}
+	if (budget === 0) return null;
+
+	// Read user's configured cap to check for "relative cents" (budget > 10x cap).
+	let maxCap = 0;
+	try {
+		const brand = args.brand || '';
+		const cfg = brand ? ctx.readBrandConfig(brand) : ctx.readConfig();
+		maxCap = Number(cfg.maxDailyAdBudget || cfg.dailyAdBudget || 0);
+	} catch {}
+
+	// Absolute ceiling — anything this high is almost certainly Claude pre-converting.
+	if (budget >= BUDGET_HARD_CEILING) {
+		return `dailyBudget=${budget} looks like cents, not dollars. ${platform} ads: pass dollars (e.g. 10 for $10/day). If you really need $${budget}/day, ask the user to confirm and raise maxDailyAdBudget in config. NEVER pre-convert dollars to cents — Merlin handles that internally.`;
+	}
+
+	// Relative ceiling — budget more than 10x the user's configured cap is very likely cents.
+	if (maxCap > 0 && budget > maxCap * 10) {
+		return `dailyBudget=${budget} is more than 10x your configured max of $${maxCap}/day. This looks like cents, not dollars — Claude should pass ${Math.round(budget / 100)} for $${Math.round(budget / 100)}/day. NEVER pre-convert to cents.`;
+	}
+
+	// Also validate nested ads[] entries (bulk-push / carousel paths)
+	if (Array.isArray(args.ads)) {
+		for (let i = 0; i < args.ads.length; i++) {
+			const nested = args.ads[i];
+			if (!nested || typeof nested !== 'object') continue;
+			const nb = nested.dailyBudget;
+			if (nb === undefined || nb === null || nb === 0) continue;
+			if (typeof nb !== 'number' || !Number.isFinite(nb) || nb < 0) {
+				return `ads[${i}].dailyBudget must be a positive number in dollars. Got: ${nb}`;
+			}
+			if (nb >= BUDGET_HARD_CEILING) {
+				return `ads[${i}].dailyBudget=${nb} looks like cents. Pass dollars (e.g. 10 for $10/day).`;
+			}
+			if (maxCap > 0 && nb > maxCap * 10) {
+				return `ads[${i}].dailyBudget=${nb} is more than 10x your $${maxCap}/day cap. Likely cents — pass ${Math.round(nb / 100)}.`;
+			}
+		}
+	}
+
+	return null;
+}
+
 // ── Shared binary runner ─────────────────────────────────────
 
 /**
@@ -136,7 +207,7 @@ function buildTools(tool, z, ctx) {
       adHeadline: z.string().optional().describe('Ad headline text'),
       adBody: z.string().optional().describe('Ad primary text'),
       adLink: z.string().optional().describe('Destination URL'),
-      dailyBudget: z.number().optional().describe('Daily budget in dollars'),
+      dailyBudget: z.number().optional().describe('Daily budget in DOLLARS (not cents). Example: pass 10 for $10/day, 50 for $50/day, 200 for $200/day. NEVER pre-convert to cents — Merlin handles the cents conversion internally when calling the platform\'s API. If the user says "$10 a day", pass 10. If unsure, ask the user.'),
       batchCount: z.number().optional().describe('Days of data (-1=today, 7=last week, 30=last month)'),
       sortBy: z.string().optional().describe('Sort results by: spend, roas, ctr, clicks, impressions, cpc, purchases'),
       sortOrder: z.string().optional().describe('Sort order: desc (default) or asc'),
@@ -150,6 +221,11 @@ function buildTools(tool, z, ctx) {
       status: z.string().optional().describe('Filter by status: active, paused, all (for import)'),
     },
     async (args) => {
+      // Cents-detection guard (defense-in-depth; binary has its own cap).
+      const budgetError = validateBudget(ctx, args, 'Meta');
+      if (budgetError) {
+        return { content: [{ type: 'text', text: budgetError }], isError: true };
+      }
       const action = 'meta-' + (args.action === 'setup-retargeting' ? 'setup-retargeting' : args.action);
       const result = await runBinary(ctx, action, args);
 
@@ -208,6 +284,8 @@ function buildTools(tool, z, ctx) {
       limit: z.number().optional().describe('Max results to return'),
     },
     async (args) => {
+      const budgetError = validateBudget(ctx, args, 'TikTok');
+      if (budgetError) return { content: [{ type: 'text', text: budgetError }], isError: true };
       const result = await runBinary(ctx, 'tiktok-' + args.action, args);
       return { content: [{ type: 'text', text: result.text }], isError: result.error };
     }
@@ -232,6 +310,8 @@ function buildTools(tool, z, ctx) {
       limit: z.number().optional().describe('Max results to return'),
     },
     async (args) => {
+      const budgetError = validateBudget(ctx, args, 'Google Ads');
+      if (budgetError) return { content: [{ type: 'text', text: budgetError }], isError: true };
       const result = await runBinary(ctx, 'google-ads-' + args.action, args);
       return { content: [{ type: 'text', text: result.text }], isError: result.error };
     }
@@ -250,6 +330,8 @@ function buildTools(tool, z, ctx) {
       batchCount: z.number().optional().describe('Days of data'),
     },
     async (args) => {
+      const budgetError = validateBudget(ctx, args, 'Amazon');
+      if (budgetError) return { content: [{ type: 'text', text: budgetError }], isError: true };
       const prefix = ['products', 'orders'].includes(args.action) ? 'amazon-' : 'amazon-ads-';
       const result = await runBinary(ctx, prefix + args.action, args);
       return { content: [{ type: 'text', text: result.text }], isError: result.error };
@@ -329,7 +411,7 @@ function buildTools(tool, z, ctx) {
       imagePrompt: z.string().optional().describe('Freeform image prompt'),
       imageCount: z.number().optional().describe('Number of images (1-4)'),
       imageFormat: z.string().optional().describe('"portrait", "square", or "both"'),
-      imageModel: z.string().optional().describe('"flux", "ideogram", or "recraft"'),
+      imageModel: z.string().optional().describe('Full fal.ai model slug (preferred) or legacy alias. ALWAYS pass the full slug when possible — the binary accepts any "fal-ai/..." path directly, so new models work without app updates. Examples: "fal-ai/nano-banana-pro", "fal-ai/nano-banana-pro/edit", "fal-ai/bytedance/seedream/v4.5/text-to-image", "fal-ai/flux-pro/v1.1", "fal-ai/ideogram/v3", "fal-ai/imagen4/preview/ultra". Use the "/edit" variant when reference images exist. If the user asks for a model you don\'t know the exact slug for, fetch https://fal.ai/models to find it. Legacy aliases ("flux", "ideogram", "recraft", "seedream", "imagen", "imagen-ultra", "banana", "banana-edit", "banana-pro", "banana-pro-edit") still work but may resolve to outdated slugs.'),
       adBrief: z.any().optional().describe('Structured ad brief object'),
       compositeMode: z.boolean().optional().describe('Use real product photo + AI scene'),
       productRefPath: z.string().optional().describe('Path to product reference photo'),
@@ -366,7 +448,7 @@ function buildTools(tool, z, ctx) {
       format: z.string().optional().describe('"9:16", "16:9", or "1:1"'),
       duration: z.number().optional().describe('Duration in seconds'),
       provider: z.string().optional().describe('"fal", "veo", "arcads", "heygen"'),
-      falModel: z.string().optional().describe('"kling", "veo", "seedance", "minimax", "wan"'),
+      falModel: z.string().optional().describe('Full fal.ai model slug (preferred) or legacy alias. ALWAYS pass the full slug — the binary accepts any "fal-ai/..." path directly, so new models work without app updates. Examples: "fal-ai/bytedance/seedance/v2/pro/text-to-video", "fal-ai/veo3", "fal-ai/kling-video/v2.1/master/text-to-video", "fal-ai/minimax/video-01-live". If the user asks for a model you don\'t know the exact slug for, fetch https://fal.ai/models to find it before calling this tool. NEVER SUBSTITUTE — if the user asks for Seedance and you can\'t find the slug, stop and ask them. Do NOT pick a different model "as a fallback". The binary will fail loudly on any silent substitution. Legacy aliases ("kling", "veo", "seedance", "seedance-2", "minimax", "wan", "hunyuan") still work but resolve to possibly-outdated slugs.'),
       mode: z.string().optional().describe('"talking-head", "product-showcase", "auto"'),
       avatarId: z.string().optional(),
       voiceId: z.string().optional(),
@@ -453,12 +535,14 @@ function buildTools(tool, z, ctx) {
       campaignId: z.string().optional().describe('Campaign ID'),
       adId: z.string().optional().describe('Ad or ad group ID'),
       campaignName: z.string().optional().describe('Campaign name'),
-      dailyBudget: z.number().optional().describe('Daily budget in dollars'),
+      dailyBudget: z.number().optional().describe('Daily budget in DOLLARS (not cents). Example: pass 10 for $10/day, 50 for $50/day, 200 for $200/day. NEVER pre-convert to cents — Merlin handles the cents conversion internally when calling the platform\'s API. If the user says "$10 a day", pass 10. If unsure, ask the user.'),
       adHeadline: z.string().optional().describe('Ad headline'),
       adLink: z.string().optional().describe('Destination URL'),
       batchCount: z.number().optional().describe('Days of data (for insights)'),
     },
     async (args) => {
+      const budgetError = validateBudget(ctx, args, 'Reddit');
+      if (budgetError) return { content: [{ type: 'text', text: budgetError }], isError: true };
       const result = await runBinary(ctx, 'reddit-' + args.action, args);
       return { content: [{ type: 'text', text: result.text }], isError: result.error };
     },
@@ -475,13 +559,15 @@ function buildTools(tool, z, ctx) {
       campaignId: z.string().optional().describe('Campaign ID or URN'),
       adId: z.string().optional().describe('Creative ID or URN'),
       campaignName: z.string().optional().describe('Campaign name'),
-      dailyBudget: z.number().optional().describe('Daily budget in dollars'),
+      dailyBudget: z.number().optional().describe('Daily budget in DOLLARS (not cents). Example: pass 10 for $10/day, 50 for $50/day, 200 for $200/day. NEVER pre-convert to cents — Merlin handles the cents conversion internally when calling the platform\'s API. If the user says "$10 a day", pass 10. If unsure, ask the user.'),
       adHeadline: z.string().optional().describe('Ad headline'),
       adBody: z.string().optional().describe('Ad body text'),
       adLink: z.string().optional().describe('Destination URL'),
       batchCount: z.number().optional().describe('Days of data (for insights)'),
     },
     async (args) => {
+      const budgetError = validateBudget(ctx, args, 'LinkedIn');
+      if (budgetError) return { content: [{ type: 'text', text: budgetError }], isError: true };
       const result = await runBinary(ctx, 'linkedin-' + args.action, args);
       return { content: [{ type: 'text', text: result.text }], isError: result.error };
     },

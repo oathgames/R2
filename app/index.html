@@ -370,31 +370,8 @@
   </div>
 </div>
 
-<!-- Setup overlay (shown when Claude is not ready yet) -->
-<div id="setup" class="overlay">
-  <div class="setup-card">
-    <div class="setup-mascot">✦</div>
-    <h1>Merlin</h1>
-    <p class="setup-sub">Your AI CMO Wizard</p>
-    <p id="setup-status" class="setup-desc" style="white-space:pre-line">Setting up...</p>
-    <div id="setup-main">
-      <p class="setup-explain">Merlin is powered by <strong style="color:var(--text)">Claude</strong> from Anthropic.<br>We'll help you open Claude Desktop and finish setup automatically.</p>
-      <button id="setup-auto-btn" class="btn-primary">Open Claude Desktop</button>
-      <p style="font-size:10px;color:var(--text-dim);margin-top:8px;text-align:center">Requires a Claude account (Pro or Max recommended)</p>
-      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
-        <button id="setup-manual-btn" class="btn-secondary" style="width:100%;margin-bottom:6px">I already have Claude &mdash; retry</button>
-        <button id="setup-apikey-btn" class="btn-secondary" style="width:100%">Use API key instead</button>
-      </div>
-    </div>
-    <div id="setup-apikey-form" style="display:none">
-      <p class="setup-explain">Paste your Anthropic API key. Get one at <a href="#" onclick="merlin.openExternal('https://console.anthropic.com/settings/keys');return false" style="color:var(--accent)">console.anthropic.com</a></p>
-      <input id="setup-apikey-input" type="password" placeholder="sk-ant-..." style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-size:13px;font-family:monospace;outline:none;margin-bottom:8px">
-      <div id="setup-apikey-error" style="color:#ef4444;font-size:11px;margin-bottom:8px"></div>
-      <button id="setup-apikey-save" class="btn-primary">Connect</button>
-      <button id="setup-apikey-back" class="btn-secondary" style="width:100%;margin-top:6px">Back</button>
-    </div>
-  </div>
-</div>
+<!-- Setup overlay removed: users go straight to chat after ToS.
+     Claude auth is requested inline when the user sends their first message. -->
 
 <script src="marked.min.js"></script>
 <script src="purify.min.js"></script>

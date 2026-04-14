@@ -1,5 +1,5 @@
 {
-  "version": "1.0.5",
+  "version": "1.0.6",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -23,10 +23,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v1.0.5: Claude sign-in fix — no more copy/paste required, no more silent failures.",
+  "notes": "v1.0.6: Videos play inline, budget safety rails, Seedance 2.0 support, zero-setup onboarding.",
   "whatsNew": [
-    "Removed BROWSER=none bug that forced users onto the copy/paste fallback page",
-    "Claude Code CLI's built-in localhost callback now works — sign in via browser, done",
-    "Real feedback in the paste dialog when the CLI subprocess exits early (used to silently do nothing)"
+    "Videos render inline in chat and play immediately — fixed empty 0:00 player, Meta video upload now waits for processing, Seedance 2.0 compatibility",
+    "Budget safety rails — rejects cents-as-dollars mistakes across every ad platform before any spend hits your account",
+    "Merlin launches straight into chat — no more setup blocker; Claude auth is requested inline only when you send your first message"
   ]
 }

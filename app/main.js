@@ -475,9 +475,15 @@ async function readCredentials() {
     } catch {}
   }
 
-  // 4. Windows — check alternate credential file locations
-  //    Windows Credential Manager can't be read without P/Invoke or third-party
-  //    modules. Instead, check alternate file paths where Claude might store creds.
+  // 4. Windows — check alternate credential file locations AND Credential
+  //    Manager via PowerShell. Claude Code's CLI primarily stores at
+  //    ~/.claude/.credentials.json (already checked as CLAUDE_CRED_FILE at
+  //    the top), but older versions or the Claude Desktop app may store
+  //    elsewhere. Codex P2 #6: we used to skip Credential Manager entirely
+  //    "because it needs P/Invoke" — but we can shell out to PowerShell's
+  //    Get-StoredCredential or use the built-in cmdkey command. It's slow
+  //    (~200ms) but runs only on startup and only if the filesystem checks
+  //    already failed.
   if (process.platform === 'win32') {
     const winCredPaths = [
       path.join(process.env.APPDATA || '', 'Claude', '.credentials.json'),
@@ -495,6 +501,30 @@ async function readCredentials() {
           return result.token;
         }
       } catch {}
+    }
+
+    // Windows Credential Manager fallback via PowerShell. We query for any
+    // credential whose Target name contains "Claude" or "Anthropic". This
+    // catches tokens written by future CLI versions or by Claude Desktop.
+    // Wrapped in a 3s timeout so a hung PowerShell doesn't block startup.
+    try {
+      const { execSync } = require('child_process');
+      // cmdkey /list is native Windows and doesn't need PowerShell — faster.
+      // It only lists Target names, not secrets, but it tells us whether a
+      // Claude-related credential exists. If one does, the actual read
+      // requires a third-party module, so we log for debugging and move on.
+      const cmdkeyOut = execSync('cmdkey /list', { timeout: 3000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const claudeTargets = (cmdkeyOut || '')
+        .split('\n')
+        .filter(line => /target:.*\b(claude|anthropic)\b/i.test(line))
+        .map(line => line.replace(/^\s*Target:\s*/i, '').trim());
+      if (claudeTargets.length > 0) {
+        console.log('[auth] Windows Credential Manager has Claude entries:', claudeTargets.join(', '));
+        console.log('[auth] (Reading the actual secret requires a native module — falling through to re-auth)');
+      }
+    } catch (e) {
+      // cmdkey missing or timed out — not fatal, just skip the check.
+      console.log('[auth] Windows Credential Manager check skipped:', e.message);
     }
   }
 
@@ -599,6 +629,42 @@ function sendInlineMessage(text, opts = {}) {
   }
   if (wsServer && typeof wsServer.broadcast === 'function') {
     wsServer.broadcast('inline-message', payload);
+  }
+}
+
+// requireAuth is the UNIFIED auth-failure entry point. Called from every
+// code path that discovers "we don't have working credentials" — startSession
+// missing-creds, SDK auth-error responses, token-expired errors, etc.
+//
+// This function does NOT render a passive message and hope the user figures
+// out what to do. It fires an `auth-required` IPC event to the renderer,
+// which immediately:
+//   1. Shows an inline bubble: "Connecting your Claude account…"
+//   2. Calls triggerClaudeLogin() automatically — no user click required
+//   3. On success, replays the message that triggered auth (so the user's
+//      original request is not dropped — critical UX, covered by Codex P1 #5)
+//   4. On failure, renders a Sign In button for manual retry
+//
+// Why a dedicated event instead of a generic inline-message + button: the
+// inline-message path is a dumb bubble renderer. Unifying auth through its
+// own event means: (a) one source of truth for "user is unauthenticated",
+// (b) auto-triggering login without a second click, (c) reliably replaying
+// the triggering prompt (inline-message has no hook for that).
+//
+// `context` is an optional string describing why auth failed (e.g. "session
+// start", "token expired"). Shown in the bubble so the user gets minimal
+// but useful feedback.
+function requireAuth(context) {
+  const payload = {
+    context: context || 'session start',
+    timestamp: Date.now(),
+  };
+  console.log('[auth] requireAuth emitting auth-required event:', payload);
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('auth-required', payload);
+  }
+  if (wsServer && typeof wsServer.broadcast === 'function') {
+    wsServer.broadcast('auth-required', payload);
   }
 }
 
@@ -804,6 +870,14 @@ let pendingApprovals = new Map();
 let activeQuery = null;
 let _suppressNextResponse = false; // Suppress SDK responses for internal actions (spell toggle/create)
 
+// True while we're between "auth failed" and "user completed login". While
+// this flag is set, the session finally block must NOT clear pendingMessageQueue
+// — we want the triggering user message to survive across auth recovery so it
+// gets replayed automatically once the new session starts. Set in startSession()
+// when credentials are missing, cleared when the next session successfully drains
+// the queue or when the renderer explicitly abandons the pending auth.
+let _queueFrozenForAuth = false;
+
 
 // Auto-expire pending approvals after 15 minutes
 const APPROVAL_TIMEOUT_MS = 15 * 60 * 1000;
@@ -833,22 +907,130 @@ async function createWindow() {
     },
   });
 
-  // Register protocol for inline images — with path traversal protection
-  protocol.handle('merlin', (request) => {
-    const requested = decodeURIComponent(request.url.replace('merlin://', ''));
+  // Register protocol for inline media — images, video, audio, PDFs.
+  //
+  // Video playback requires HTTP Range request support: HTML5 <video> elements
+  // issue byte-range requests to Chromium and expect 206 Partial Content
+  // responses with Content-Range / Accept-Ranges / Content-Length headers.
+  // Without these, Chromium loads the file but can't determine duration,
+  // can't seek, and often shows an empty 0:00 player. The original handler
+  // returned a single full-body Response with no Range semantics, which
+  // broke all video playback.
+  //
+  // This handler:
+  //   - Validates the resolved path stays within appRoot (traversal guard)
+  //   - Parses the Range header if present, returns 206 Partial Content
+  //   - Otherwise returns 200 OK with Accept-Ranges: bytes so Chromium
+  //     knows it can issue subsequent Range requests
+  //   - Streams bytes instead of buffering the whole file in memory
+  //   - Maps common media extensions to correct Content-Type (including .mov)
+  const MIME_TYPES = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mov': 'video/quicktime',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.m4a': 'audio/mp4',
+    '.ogg': 'audio/ogg',
+    '.pdf': 'application/pdf',
+  };
+
+  protocol.handle('merlin', async (request) => {
+    // Keep the same URL parsing the original handler used — treating the
+    // entire `merlin://...` tail as a relative path. Using `new URL()` would
+    // treat the first segment as the hostname and break paths like
+    // `merlin://results/ad_xxx/final.mp4` → would drop the `results/` prefix.
+    const requested = decodeURIComponent(request.url.replace(/^merlin:\/\//, ''));
     const filePath = path.resolve(appRoot, requested);
     const resolvedRoot = path.resolve(appRoot);
-    if (!filePath.startsWith(resolvedRoot)) {
+    if (!filePath.startsWith(resolvedRoot + path.sep) && filePath !== resolvedRoot) {
       return new Response('Forbidden', { status: 403 });
     }
+
+    let stat;
     try {
-      const data = fs.readFileSync(filePath);
-      const ext = path.extname(filePath).toLowerCase();
-      const types = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.mp4': 'video/mp4', '.webm': 'video/webm', '.pdf': 'application/pdf' };
-      return new Response(data, { headers: { 'Content-Type': types[ext] || 'application/octet-stream' } });
+      stat = fs.statSync(filePath);
     } catch {
       return new Response('Not found', { status: 404 });
     }
+    if (!stat.isFile()) {
+      return new Response('Not found', { status: 404 });
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+    const totalSize = stat.size;
+
+    // Parse Range header — Chromium's <video> element issues these
+    const rangeHeader = request.headers.get('range') || request.headers.get('Range');
+    if (rangeHeader) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+      if (match) {
+        let start = match[1] === '' ? NaN : parseInt(match[1], 10);
+        let end = match[2] === '' ? NaN : parseInt(match[2], 10);
+        // Handle "bytes=-N" (last N bytes) and "bytes=N-" (from N to end)
+        if (Number.isNaN(start) && !Number.isNaN(end)) {
+          start = Math.max(0, totalSize - end);
+          end = totalSize - 1;
+        } else if (!Number.isNaN(start) && Number.isNaN(end)) {
+          end = totalSize - 1;
+        }
+        if (Number.isNaN(start) || Number.isNaN(end) || start < 0 || end >= totalSize || start > end) {
+          return new Response('Range not satisfiable', {
+            status: 416,
+            headers: { 'Content-Range': `bytes */${totalSize}` },
+          });
+        }
+        const chunkSize = end - start + 1;
+        // Stream the requested slice — don't buffer in memory
+        const nodeStream = fs.createReadStream(filePath, { start, end });
+        const webStream = new ReadableStream({
+          start(controller) {
+            nodeStream.on('data', (chunk) => controller.enqueue(new Uint8Array(chunk)));
+            nodeStream.on('end', () => controller.close());
+            nodeStream.on('error', (err) => controller.error(err));
+          },
+          cancel() { nodeStream.destroy(); },
+        });
+        return new Response(webStream, {
+          status: 206,
+          headers: {
+            'Content-Type': contentType,
+            'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': String(chunkSize),
+            'Cache-Control': 'no-cache',
+          },
+        });
+      }
+    }
+
+    // No Range header — return full body as a stream with Accept-Ranges: bytes
+    // so Chromium knows it can issue subsequent Range requests for seeking.
+    const nodeStream = fs.createReadStream(filePath);
+    const webStream = new ReadableStream({
+      start(controller) {
+        nodeStream.on('data', (chunk) => controller.enqueue(new Uint8Array(chunk)));
+        nodeStream.on('end', () => controller.close());
+        nodeStream.on('error', (err) => controller.error(err));
+      },
+      cancel() { nodeStream.destroy(); },
+    });
+    return new Response(webStream, {
+      status: 200,
+      headers: {
+        'Content-Type': contentType,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': String(totalSize),
+        'Cache-Control': 'no-cache',
+      },
+    });
   });
 
   win.loadFile(path.join(__dirname, 'index.html'));
@@ -1286,6 +1468,27 @@ async function handleToolApproval(toolName, input) {
     if (SPEND.has(action)) {
       const budgetCtx = getBudgetContext();
       const adBudget = input.dailyBudget || 5;
+
+      // HARD DENY: catch Claude-passed-cents BEFORE showing the approval card.
+      // Sanity check: values ≥ $5000/day or >10x the configured cap are almost
+      // certainly cents. Refuse the tool call with an explanatory message so
+      // Claude retries with the correct dollar value. The user never sees a
+      // shocking "$1000/day" card.
+      const HARD_CEILING = 5000;
+      const capForComparison = budgetCtx && budgetCtx.dailyCap > 0 ? budgetCtx.dailyCap : 0;
+      if (adBudget >= HARD_CEILING) {
+        return {
+          behavior: 'deny',
+          message: `dailyBudget=${adBudget} looks like cents, not dollars. Pass dollars (e.g. 10 for $10/day). NEVER pre-convert — Merlin converts to cents internally.`,
+        };
+      }
+      if (capForComparison > 0 && adBudget > capForComparison * 10) {
+        return {
+          behavior: 'deny',
+          message: `dailyBudget=${adBudget} is more than 10x the user's $${capForComparison}/day cap. This looks like cents — pass ${Math.round(adBudget / 100)} for $${Math.round(adBudget / 100)}/day.`,
+        };
+      }
+
       const translations = {
         'push': { label: 'Publish this ad', cost: `$${adBudget}/day budget` },
         'duplicate': { label: 'Scale this winning ad', cost: 'Increases budget' },
@@ -1342,6 +1545,23 @@ async function handleToolApproval(toolName, input) {
       const translated = translateTool(toolName, input);
       const budgetMatch = input.command.match(/"dailyBudget"\s*:\s*(\d+)/);
       const adBudget = budgetMatch ? parseInt(budgetMatch[1]) : 5;
+
+      // Same hard deny as MCP spend path — catch cents-by-mistake early.
+      const HARD_CEILING = 5000;
+      const capForComparison = budgetCtx && budgetCtx.dailyCap > 0 ? budgetCtx.dailyCap : 0;
+      if (adBudget >= HARD_CEILING) {
+        return {
+          behavior: 'deny',
+          message: `dailyBudget=${adBudget} looks like cents, not dollars. Pass dollars (e.g. 10 for $10/day). NEVER pre-convert.`,
+        };
+      }
+      if (capForComparison > 0 && adBudget > capForComparison * 10) {
+        return {
+          behavior: 'deny',
+          message: `dailyBudget=${adBudget} is more than 10x the user's $${capForComparison}/day cap. Likely cents — pass ${Math.round(adBudget / 100)}.`,
+        };
+      }
+
       let budgetDetail = null;
       if (budgetCtx && budgetCtx.dailyCap > 0) {
         const overBudget = budgetCtx.remaining < adBudget;
@@ -1412,6 +1632,13 @@ function inferBrandDomain() {
 }
 
 async function startSession() {
+  // Clear the auth-recovery flag at the top of every startSession. If we
+  // were frozen for auth and we're now starting a new session, either the
+  // user just completed login (in which case the queue should drain) or the
+  // user abandoned (in which case the queue should still drain on their next
+  // message). Either way, the freeze is over.
+  _queueFrozenForAuth = false;
+
   // Hard trial enforcement — block session if expired and not subscribed
   const sub = getSubscriptionState();
   if (!sub.subscribed && sub.expired) {
@@ -1489,13 +1716,16 @@ async function startSession() {
       sessionEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
       console.log('[auth] Injected OAuth token into session env');
     } else {
-      // No credentials found. Don't proceed to query() (SDK would open a browser
-      // and strand the user on a paste-code page). Instead, emit a friendly
-      // inline message in the chat and return — the user can explore the UI
-      // freely and re-send when they've connected Claude.
-      console.warn('[auth] No credentials found — sending inline prompt');
-      sendInlineMessage('Please connect your Claude account to continue.');
-      pendingMessageQueue = []; // Drop queued messages — user will re-send after connecting
+      // No credentials found. Fire the unified auth-required event; the
+      // renderer will auto-trigger login and replay the pending message
+      // after auth succeeds. We DO NOT clear pendingMessageQueue here —
+      // the renderer is responsible for replaying via a stashed copy,
+      // but we also leave the queue intact as belt-and-suspenders in case
+      // the renderer path breaks. The next startSession() call (after
+      // successful login) drains whatever's still in the queue.
+      console.warn('[auth] No credentials found — emitting auth-required');
+      _queueFrozenForAuth = true; // signal the finally block not to wipe
+      requireAuth('session start: no credentials');
       return;
     }
   }
@@ -1704,13 +1934,14 @@ async function startSession() {
     // Write to error log for production debugging (no DevTools in packaged builds)
     try { fs.appendFileSync(path.join(appRoot, '.merlin-errors.log'), `${new Date().toISOString()} SDK: ${errMsg}\n${err.stack || ''}\n`); } catch {}
     if (win && !win.isDestroyed()) {
-      // Auth-related failures get a friendly inline bubble instead of a raw error.
-      // This is the replacement for the deleted setup overlay — we let the user
-      // into the chat unconditionally, then show this when they try to send.
+      // Auth-related failures route through the unified requireAuth() entry
+      // point, which auto-triggers login and replays the pending message on
+      // success. Non-auth errors go through the generic sdk-error channel.
       const isAuth = isClaudeAuthError(errMsg)
         || /not logged in|please run \/login|login required|no credentials|account information/i.test(errMsg);
       if (isAuth) {
-        sendInlineMessage('Please connect your Claude account to continue.', { kind: 'auth' });
+        _queueFrozenForAuth = true; // preserve the queue across auth recovery
+        requireAuth('session error: ' + errMsg.slice(0, 120));
       } else {
         win.webContents.send('sdk-error', errMsg);
         wsServer.broadcast('sdk-error', errMsg);
@@ -1722,7 +1953,13 @@ async function startSession() {
     // Resolve pending generator promise so it exits cleanly (null = stop signal)
     if (resolveNextMessage) { resolveNextMessage(null); }
     resolveNextMessage = null;
-    pendingMessageQueue = []; // Clear stale messages from failed session
+    // Only clear the queue when we're NOT in an auth-recovery window. If auth
+    // failed and we're waiting for login, keep the triggering message so it
+    // replays automatically when the next session starts. Covered by Codex
+    // P1 #5 (dropped prompt).
+    if (!_queueFrozenForAuth) {
+      pendingMessageQueue = []; // Clear stale messages from failed session
+    }
     // Clear any orphaned approval cards
     for (const [id, entry] of pendingApprovals) {
       clearTimeout(entry.timer);
@@ -1892,14 +2129,21 @@ ipcMain.handle('trigger-claude-login', async () => {
       let stderr = '';
       let pastePromptShown = false;
 
-      // Detect whether the CLI wants manual paste input. The CLI's auth flow
-      // emits "Paste code here if prompted > " ONLY when its localhost callback
-      // failed and it's falling back to manual entry. If we see this prompt,
-      // show the in-app paste dialog so the user can enter the code from the
-      // browser's platform.claude.com/oauth/code/callback fallback page.
+      // Detect whether the CLI wants manual paste input. The CLI uses Ink
+      // (React-for-terminals) and renders its UI with ANSI escape codes
+      // interleaved through the text. Strip the escape codes before matching
+      // so the regex actually finds "paste code" when surrounded by color
+      // sequences like "\x1b[36mPaste code here\x1b[0m".
+      //
+      // The CLI only prints these strings when its localhost callback flow
+      // failed and it's falling back to manual entry — which is the ONLY
+      // time we should show our paste dialog. The happy path (localhost
+      // callback) never hits this.
       function maybeShowPasteDialog(combined) {
         if (pastePromptShown) return;
-        if (!/paste code|paste the code|authorization code/i.test(combined)) return;
+        // eslint-disable-next-line no-control-regex
+        const clean = combined.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+        if (!/paste code|paste the code|paste this|authorization code/i.test(clean)) return;
         pastePromptShown = true;
         console.log('[claude-login] CLI is asking for manual paste — showing dialog');
         if (win && !win.isDestroyed()) win.webContents.send('auth-code-prompt');
@@ -1955,49 +2199,92 @@ ipcMain.handle('trigger-claude-login', async () => {
       ipcMain.on('auth-code-submit', legacyPasteHandler);
       // New invoke-based path (renderer gets success/failure back)
       const invokePasteHandler = async (_, code) => pasteHandler(code);
+      try { ipcMain.removeHandler('auth-code-submit-invoke'); } catch {}
       ipcMain.handle('auth-code-submit-invoke', invokePasteHandler);
+
+      // Cancel handler. When the user hits Cancel/Escape on the paste dialog,
+      // we must actually KILL the subprocess — not just hide the UI. Leaving
+      // the CLI running strands a zombie that holds credentials state and
+      // makes the next retry attempt collide with the old process. Covered
+      // by Codex P2 #7 (cancel hides dialog but doesn't cancel subprocess).
+      const cancelHandler = () => {
+        console.log('[claude-login] cancel requested — killing child');
+        clearTimeout(uxTimeout);
+        try { credWatcher?.close(); } catch {}
+        try { child.kill('SIGTERM'); } catch (e) {
+          console.warn('[claude-login] child.kill threw:', e.message);
+        }
+        if (win && !win.isDestroyed()) win.webContents.send('auth-code-dismiss');
+        finish({ success: false, cancelled: true, error: 'Login cancelled' });
+      };
+      try { ipcMain.removeHandler('cancel-claude-login'); } catch {}
+      ipcMain.handle('cancel-claude-login', async () => {
+        cancelHandler();
+        return { ok: true };
+      });
+
+      // verifyLoginResult is the SINGLE source of truth for "did login succeed".
+      // It calls readCredentials() (which checks file, env, Keychain, Windows
+      // Credential Manager paths) with a short retry loop to absorb the race
+      // between the CLI writing its credential file and us reading it. Only
+      // returns success if a non-empty token is actually present. Covered by
+      // Codex P1 #4 (success not verified) and P2 #6 (Windows cred detection).
+      //
+      // Why a retry loop: on fast machines the CLI can exit, we read the file
+      // 10ms later, and the fsync hasn't landed yet — especially on Windows
+      // where antivirus can hold a write lock briefly. 5 attempts × 200ms is
+      // 1s total worst case and eliminates the flakiness we'd otherwise see.
+      async function verifyLoginResult() {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const token = await readCredentials();
+          if (token) {
+            console.log('[claude-login] verifyLoginResult OK after attempt', attempt + 1);
+            return true;
+          }
+          if (attempt < 4) {
+            await new Promise(r => setTimeout(r, 200));
+          }
+        }
+        console.warn('[claude-login] verifyLoginResult failed after 5 attempts — no usable token');
+        return false;
+      }
 
       child.on('close', async (code) => {
         clearTimeout(uxTimeout);
         try { credWatcher?.close(); } catch {}
         if (win && !win.isDestroyed()) win.webContents.send('auth-code-dismiss');
         ipcMain.removeListener('auth-code-submit', legacyPasteHandler);
-        ipcMain.removeHandler('auth-code-submit-invoke');
+        try { ipcMain.removeHandler('auth-code-submit-invoke'); } catch {}
+        try { ipcMain.removeHandler('cancel-claude-login'); } catch {}
         if (resolved) return;
         console.log('[claude-login] child exited code=' + code + ' stdout-len=' + stdout.length + ' stderr-len=' + stderr.length);
-        if (code === 0) {
-          console.log('[claude-login] login completed successfully');
-          if (process.platform === 'darwin') await readMacCredentials();
+
+        // Verify the actual outcome regardless of exit code. The CLI can exit
+        // 0 without writing credentials (crashed during token exchange), and
+        // it can exit non-zero with credentials written (SIGKILL after fs.watch
+        // already saw the file). The only thing that matters is whether a
+        // usable token now exists.
+        const haveToken = await verifyLoginResult();
+        if (haveToken) {
+          console.log('[claude-login] login verified — token readable');
           finish({ success: true });
-        } else {
-          console.error('[claude-login] exit code:', code);
-          // CLI can write credentials and still exit non-zero (race with kill,
-          // stdin close, etc.). Check for a valid credential file anyway.
-          const credFile = path.join(os.homedir(), '.claude', '.credentials.json');
-          try {
-            const raw = fs.readFileSync(credFile, 'utf8').trim();
-            if (raw && JSON.parse(raw)) {
-              console.log('[claude-login] credentials file found despite non-zero exit — treating as success');
-              finish({ success: true });
-              return;
-            }
-          } catch {}
-          if (process.platform === 'darwin') {
-            const token = await readMacCredentials();
-            if (token) { finish({ success: true }); return; }
-          }
-          // Include a redacted stderr preview in the error so the renderer can
-          // surface something useful when the user hits "try again".
-          const stderrPreview = stderr.replace(/\s+/g, ' ').trim().slice(0, 200);
-          finish({
-            success: false,
-            error: `Login process exited with code ${code}${stderrPreview ? ': ' + stderrPreview : ''}`,
-          });
+          return;
         }
+
+        // No token. Build an error message that actually helps the user.
+        const stderrPreview = stderr.replace(/\s+/g, ' ').trim().slice(0, 200);
+        const reason = code === 0
+          ? 'Claude Code signed in but no credential file was produced. Check your network and try again.'
+          : `Claude Code login exited with code ${code}${stderrPreview ? ': ' + stderrPreview : ''}`;
+        console.error('[claude-login] verification failed:', reason);
+        finish({ success: false, error: reason });
       });
 
       child.on('error', (e) => {
         clearTimeout(uxTimeout);
+        ipcMain.removeListener('auth-code-submit', legacyPasteHandler);
+        try { ipcMain.removeHandler('auth-code-submit-invoke'); } catch {}
+        try { ipcMain.removeHandler('cancel-claude-login'); } catch {}
         if (win && !win.isDestroyed()) win.webContents.send('auth-code-dismiss');
         console.error('[claude-login] spawn error:', e.message);
         finish({ success: false, error: e.message });

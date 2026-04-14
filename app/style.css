@@ -551,71 +551,9 @@ a:hover{text-decoration:underline}
   justify-content:center;
   padding:24px;
 }
-.setup-card{
-  text-align:center;
-  max-width:340px;
-  width:100%;
-  position:relative;
-}
-.setup-close{
-  position:absolute;
-  top:-8px;right:-8px;
-  width:32px;height:32px;
-  border:none;
-  background:rgba(255,255,255,.06);
-  border-radius:8px;
-  color:var(--text-dim);
-  font-size:18px;
-  cursor:pointer;
-  display:flex;align-items:center;justify-content:center;
-  transition:all .2s;
-}
-.setup-close:hover{background:rgba(255,255,255,.12);color:var(--text)}
-.setup-mascot{
-  font-size:24px;
-  margin-bottom:16px;
-  background:linear-gradient(135deg,var(--accent),var(--success));
-  -webkit-background-clip:text;
-  -webkit-text-fill-color:transparent;
-}
-.setup-card h1{
-  font-size:28px;
-  font-weight:800;
-  letter-spacing:-.03em;
-  margin-bottom:4px;
-  background:linear-gradient(135deg,var(--accent),var(--success));
-  -webkit-background-clip:text;
-  -webkit-text-fill-color:transparent;
-}
-.setup-sub{
-  font-size:14px;
-  color:var(--text-muted);
-  margin-bottom:24px;
-}
-.setup-desc{
-  font-size:13px;
-  color:var(--text-muted);
-  margin-bottom:8px;
-  line-height:1.5;
-}
-.setup-explain{
-  font-size:11px;
-  color:var(--text-dim);
-  margin-bottom:16px;
-  line-height:1.5;
-}
-.setup-steps{
-  text-align:left;
-  margin-bottom:20px;
-}
-.setup-step{
-  font-size:13px;
-  color:var(--text-dim);
-  padding:6px 0;
-  border-bottom:1px solid var(--border);
-}
-.setup-step:last-child{border:none}
-.setup-step a{font-weight:500}
+/* .setup-* classes removed — the setup overlay was deleted. Users now
+   go straight to chat after ToS; auth prompts render inline via the
+   sendInlineMessage() path. */
 .btn-secondary{
   width:100%;
   padding:12px;
@@ -631,11 +569,6 @@ a:hover{text-decoration:underline}
   margin-bottom:8px;
 }
 .btn-secondary:hover{background:var(--surface-hover);border-color:var(--accent-border)}
-.setup-hint{
-  font-size:12px;
-  color:var(--text-dim);
-  margin-bottom:16px;
-}
 #key-input{
   width:100%;
   background:var(--surface);
@@ -672,11 +605,6 @@ a:hover{text-decoration:underline}
 }
 .btn-primary:hover{opacity:.85}
 .btn-primary:disabled{opacity:.4;cursor:default}
-.setup-help{
-  font-size:11px;
-  color:var(--text-dim);
-}
-
 /* ── Animations ──────────────────────────────────────────── */
 @keyframes fadeUp{
   from{opacity:0;transform:translateY(8px)}
