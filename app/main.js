@@ -893,7 +893,9 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      // electron-41-upgrade: preload.js requires require('electron'), which
+      // needs the preload process unsandboxed under modern Electron.
+      sandbox: false,
       spellcheck: true,
     },
   });

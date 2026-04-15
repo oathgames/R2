@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -23,10 +23,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v1.1.0: Platforms regrouped into Universal vs Brand Specific, voice input works on macOS, and every binary call now carries a signed license token.",
+  "notes": "v1.1.1: Upgraded the bundled runtime for macOS 26 compatibility, fixing a startup crash on Apple Silicon Macs.",
   "whatsNew": [
-    "Platforms split: Universal (one key everywhere) vs Brand Specific (per-brand OAuth)",
-    "Voice input now works on macOS — microphone entitlement shipped",
-    "Signed license token on every binary call — subscription enforced end-to-end"
+    "Fixed startup crash on macOS 26.x Apple Silicon",
+    "Upgraded the bundled Chromium runtime for performance and security",
+    "Added a defensive entitlement for modern macOS JIT enforcement"
   ]
 }

@@ -6,6 +6,9 @@
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
+    <!-- electron-41-upgrade: defensive additive for macOS 26 JIT page transitions -->
+    <key>com.apple.security.cs.disable-executable-page-protection</key>
+    <true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
