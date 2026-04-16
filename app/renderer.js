@@ -3260,9 +3260,19 @@ function showContextMenu(e, items) {
     el.addEventListener('click', () => { menu.remove(); item.action(); });
     menu.appendChild(el);
   });
-  menu.style.left = e.clientX + 'px';
-  menu.style.top = e.clientY + 'px';
+  // Position off-screen first so the menu can be measured, then clamp to
+  // viewport so it never clips at the right or bottom edge (users right-click
+  // anywhere, including on platform cards near the window edge — "Disconnect"
+  // was being cut off when the card sat close to the right border).
+  menu.style.left = '-9999px';
+  menu.style.top = '-9999px';
   document.body.appendChild(menu);
+  const mw = menu.offsetWidth;
+  const mh = menu.offsetHeight;
+  const left = Math.max(4, Math.min(e.clientX, window.innerWidth - mw - 8));
+  const top = Math.max(4, Math.min(e.clientY, window.innerHeight - mh - 8));
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
   const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
   setTimeout(() => document.addEventListener('click', close), 0);
 }
@@ -3425,11 +3435,18 @@ async function transcribeCurrent(isInterim) {
       else input.classList.remove('voice-interim');
       autoResize();
     } else if (result && result.error && !isInterim) {
-      showModal({
-        title: 'Transcription failed',
-        body: result.error,
-        confirmLabel: 'OK',
-      });
+      // If the main-process tagged the failure as installable, switch into
+      // the auto-install flow instead of showing a dead-end "go download
+      // these three files" wall. Keeps the UX close to "just works".
+      if (result.installable) {
+        offerVoiceAutoInstall(result, bytes);
+      } else {
+        showModal({
+          title: 'Transcription failed',
+          body: result.error,
+          confirmLabel: 'OK',
+        });
+      }
     }
   } catch (err) {
     // Interim failures are silent — next chunk will retry. Only surface
@@ -3442,6 +3459,119 @@ async function transcribeCurrent(isInterim) {
         confirmLabel: 'OK',
       });
     }
+  }
+}
+
+// Offer a one-click auto-install for voice input dependencies (whisper-cli,
+// voice model, ffmpeg) and, on success, automatically retry the transcription
+// the user was trying to do — so from their perspective it "just worked" with
+// a single confirmation dialog + a progress bar.
+//
+// `missing` from the main-process tells us which components are gone, so the
+// download-size estimate we show the user is accurate (it'd be rude to warn
+// about 150 MB when they only need the 10 MB whisper binary).
+function offerVoiceAutoInstall(errorResult, originalAudioBytes) {
+  const missing = Array.isArray(errorResult.missing) ? errorResult.missing : ['whisper', 'model', 'ffmpeg'];
+  const sizeMap = { whisper: 10, model: 74, ffmpeg: 60 };
+  const estMB = missing.reduce((sum, k) => sum + (sizeMap[k] || 0), 0);
+  const componentLabels = {
+    whisper: 'speech-to-text engine',
+    model:   'voice recognition model',
+    ffmpeg:  'audio transcoder',
+  };
+  const itemList = missing.map(k => `• ${componentLabels[k] || k}`).join('\n');
+
+  showModal({
+    title: 'Set up voice input?',
+    body: `Merlin needs to install the voice tools before it can transcribe audio:\n\n${itemList}\n\nTotal download: ~${estMB} MB. Takes a minute or two on a normal connection.`,
+    confirmLabel: 'Install',
+    cancelLabel: 'Not now',
+    onConfirm: () => runVoiceAutoInstall(originalAudioBytes),
+  });
+}
+
+async function runVoiceAutoInstall(originalAudioBytes) {
+  // Build a live-updating progress modal. Using bodyHTML lets us write in
+  // a <progress> element and a status line, then mutate them from the
+  // install-progress event handler — without re-rendering the whole modal
+  // every tick (which would steal focus and feel janky).
+  showModal({
+    title: 'Installing voice tools...',
+    bodyHTML: `
+      <div id="voice-install-status" style="margin-bottom:10px;color:var(--text-dim);font-size:12px">Preparing...</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;height:8px;overflow:hidden">
+        <div id="voice-install-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#8b5cf6,#10b981);transition:width .3s"></div>
+      </div>
+      <div id="voice-install-pct" style="margin-top:6px;font-size:11px;color:var(--text-dim);text-align:right">0%</div>
+    `,
+    // Hide confirm/cancel while install runs — it completes on its own.
+    // We close the modal programmatically via the close button's click
+    // once the final result comes back.
+    confirmLabel: ' ',
+    cancelLabel: 'Hide',
+  });
+
+  // Hide the confirm button during install — it's not actionable.
+  const confirmBtn = document.getElementById('merlin-modal-confirm');
+  if (confirmBtn) confirmBtn.style.display = 'none';
+
+  const setProgress = (data) => {
+    const statusEl = document.getElementById('voice-install-status');
+    const barEl = document.getElementById('voice-install-bar');
+    const pctEl = document.getElementById('voice-install-pct');
+    if (statusEl && data.note) statusEl.textContent = data.note;
+    if (barEl && typeof data.pct === 'number') barEl.style.width = data.pct + '%';
+    if (pctEl && typeof data.pct === 'number') pctEl.textContent = Math.round(data.pct) + '%';
+  };
+
+  const unsub = merlin.onVoiceInstallProgress(setProgress);
+
+  let result;
+  try {
+    result = await merlin.installVoiceTools();
+  } catch (err) {
+    result = { error: String(err && err.message ? err.message : err) };
+  } finally {
+    if (typeof unsub === 'function') unsub();
+  }
+
+  // Restore the confirm button's display BEFORE closing so the next modal
+  // (the result dialog) shows its OK button. showModal's cleanup doesn't
+  // reset element styles between invocations, so this leak is on us.
+  if (confirmBtn) confirmBtn.style.display = '';
+
+  // Tear down the progress modal before showing the result — avoids a
+  // queued-modal flicker where the progress bar briefly reappears behind
+  // the success/failure dialog.
+  const closeBtn = document.getElementById('merlin-modal-close');
+  if (closeBtn) closeBtn.click();
+
+  if (result && result.success) {
+    // Auto-retry the transcription the user kicked off originally, so the
+    // whole flow feels like "I hit record, it asked to install, then my
+    // words appeared" — zero extra clicks.
+    if (Array.isArray(originalAudioBytes) && originalAudioBytes.length > 0) {
+      try {
+        const retry = await merlin.transcribeAudio(originalAudioBytes);
+        if (retry && retry.transcript && retry.transcript.trim()) {
+          input.value = (voiceBaseText + retry.transcript.trim()).replace(/^\s+/, '');
+          input.classList.remove('voice-interim');
+          autoResize();
+          return;
+        }
+      } catch {}
+    }
+    showModal({
+      title: 'Voice input ready',
+      body: 'Voice tools are installed. Hit the mic and try again.',
+      confirmLabel: 'OK',
+    });
+  } else {
+    showModal({
+      title: 'Install failed',
+      body: (result && result.error) || 'Voice tools install failed. Try again, or check your internet connection.',
+      confirmLabel: 'OK',
+    });
   }
 }
 
@@ -4669,7 +4799,7 @@ async function loadArchive() {
     // Show live ads instead of archive items
     const brand = document.getElementById('brand-select')?.value;
     const activeBrand = brand || null;
-    const ads = await merlin.getLiveAds(activeBrand);
+    let ads = await merlin.getLiveAds(activeBrand);
     loading.style.display = 'none';
 
     if (!ads || ads.length === 0) {
@@ -4679,34 +4809,103 @@ async function loadArchive() {
       return;
     }
 
+    // Rank ads by decision-value so the Archive doesn't flood with dozens of
+    // zero-impression shells. Order of priority:
+    //   1. Paused ads stay visible but sink (so users see them last, not lost)
+    //   2. Ads with spend > 0 sort by spend desc — these are the ones a CMO
+    //      actually has to act on (kill/scale)
+    //   3. Recently-updated ads come next
+    //   4. Pure placeholder entries (zero impressions + zero spend) drop to
+    //      the end and visually dim so they don't crowd the grid
+    const adValue = (a) => {
+      const spend = Number(a.spend) || 0;
+      const imps = Number(a.impressions) || 0;
+      const roas = Number(a.lastRoas) || 0;
+      // Paused ads get a floor below any live ad so they sink — but still
+      // within-group sorted by spend so high-spend paused ads surface first.
+      const statusPenalty = a.status === 'paused' ? -1e9 : 0;
+      // Strong signal: actual spend. Secondary: ROAS as a tiebreaker so two
+      // equal-spend ads still surface the winner. Impressions as third-tier.
+      return statusPenalty + spend * 1000 + roas * 100 + imps * 0.001;
+    };
+    ads = ads.slice().sort((a, b) => adValue(b) - adValue(a));
+
     ads.forEach(ad => {
       const card = document.createElement('div');
       card.className = 'archive-card';
 
       const statusClass = ad.status === 'live' ? 'status-live' : ad.status === 'paused' ? 'status-paused' : 'status-pending';
       const statusText = ad.status === 'live' ? '● Live' : ad.status === 'paused' ? '○ Paused' : '◐ Pending';
-      const roasText = ad.lastRoas ? `${ad.lastRoas.toFixed(1)}x` : 'Collecting...';
       const budgetText = ad.budget ? `$${ad.budget}/day` : '';
+
+      // Format KPIs defensively — insights may not have run yet for a new ad
+      const fmtMoney = (n) => n >= 1000 ? `$${(n/1000).toFixed(1)}k` : `$${n.toFixed(2)}`;
+      const fmtInt = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}k` : `${Math.round(n)}`;
+      const roas = Number(ad.lastRoas) || 0;
+      const spend = Number(ad.spend) || 0;
+      const impressions = Number(ad.impressions) || 0;
+      const ctr = Number(ad.ctr) || 0;
+      const cpa = Number(ad.cpa) || 0;
+      const hasMetrics = spend > 0 || impressions > 0;
+      const isDormant = !hasMetrics && !ad.creativePath;
+
+      // ROAS coloring: green >= 2x, amber 1-2x, red < 1x, dim for no data
+      let roasClass = 'kpi-dim';
+      if (roas >= 2) roasClass = 'kpi-good';
+      else if (roas >= 1) roasClass = 'kpi-warn';
+      else if (roas > 0) roasClass = 'kpi-bad';
+
+      // Dim the whole card if it's a pure placeholder — still visible but
+      // clearly deprioritized so users don't mistake it for a live winner.
+      if (isDormant) card.classList.add('archive-card-dormant');
 
       if (ad.creativePath) {
         card.innerHTML = `<img class="archive-card-thumb" src="${escapeHtml(merlinUrl(ad.creativePath))}" alt="" loading="lazy">`;
       } else {
-        card.innerHTML = `<div class="archive-card-thumb" style="display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--text-dim)">📢</div>`;
+        // Render a richer placeholder — platform initial + ad name preview
+        // gives far more at-a-glance info than a generic megaphone.
+        const platformInitial = (ad.platform || '?').charAt(0).toUpperCase();
+        const labelPreview = escapeHtml((ad.adName || ad.product || '').slice(0, 40));
+        card.innerHTML = `<div class="archive-card-thumb archive-card-thumb-placeholder">
+          <div class="placeholder-platform">${escapeHtml(platformInitial)}</div>
+          ${labelPreview ? `<div class="placeholder-label">${labelPreview}</div>` : ''}
+        </div>`;
       }
 
       const brandLabel = ad.brand ? ad.brand.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : '';
+      const displayTitle = ad.adName || ad.product || ad.platform || 'Ad';
+
+      // KPI strip — show only what we actually have. Avoids "Collecting..."
+      // soup that made every card look identical.
+      const kpiChips = [];
+      if (roas > 0) {
+        kpiChips.push(`<span class="kpi-chip ${roasClass}" data-tip="Return on ad spend — revenue ÷ spend" data-tip-pos="top">${roas.toFixed(2)}x ROAS</span>`);
+      }
+      if (spend > 0) {
+        kpiChips.push(`<span class="kpi-chip" data-tip="Total spend this window" data-tip-pos="top">${fmtMoney(spend)}</span>`);
+      }
+      if (ctr > 0) {
+        const ctrClass = ctr >= 2 ? 'kpi-good' : ctr >= 1 ? 'kpi-warn' : 'kpi-bad';
+        kpiChips.push(`<span class="kpi-chip ${ctrClass}" data-tip="Click-through rate — clicks ÷ impressions" data-tip-pos="top">${ctr.toFixed(2)}% CTR</span>`);
+      }
+      if (cpa > 0) {
+        kpiChips.push(`<span class="kpi-chip" data-tip="Cost per acquisition" data-tip-pos="top">${fmtMoney(cpa)} CPA</span>`);
+      }
+      if (impressions > 0) {
+        kpiChips.push(`<span class="kpi-chip kpi-dim" data-tip="Impressions this window" data-tip-pos="top">${fmtInt(impressions)} imp</span>`);
+      }
+
       card.innerHTML += `
         <div class="archive-card-info">
-          <div class="archive-card-title">${escapeHtml(ad.product || ad.platform || 'Ad')}</div>
+          <div class="archive-card-title" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</div>
           <div class="archive-card-meta">
             <span class="archive-card-badge ${statusClass}">${statusText}</span>
-            <span>${budgetText}</span>
-          </div>
-          <div class="archive-card-meta" style="margin-top:1px">
             <span class="platform-badge platform-${(ad.platform || '').toLowerCase()}">${escapeHtml(ad.platform || '')}</span>
-            <span>${roasText}</span>
+            ${budgetText ? `<span>${budgetText}</span>` : ''}
           </div>
-          ${brandLabel ? `<div class="archive-card-meta" style="margin-top:1px"><span>${escapeHtml(brandLabel)}</span></div>` : ''}
+          ${kpiChips.length ? `<div class="archive-card-kpis">${kpiChips.join('')}</div>` :
+            hasMetrics ? '' : `<div class="archive-card-meta archive-card-hint">Awaiting first impressions</div>`}
+          ${brandLabel ? `<div class="archive-card-meta archive-card-brand">${escapeHtml(brandLabel)}</div>` : ''}
         </div>`;
 
       // Left click: preview the creative

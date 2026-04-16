@@ -271,4 +271,15 @@ contextBridge.exposeInMainWorld('merlin', {
     if (bytes.length > 50 * 1024 * 1024) throw new Error('audio too large');
     return ipcRenderer.invoke('transcribe-audio', bytes);
   },
+  // Auto-install whisper-cli + ggml-tiny.en.bin + ffmpeg into
+  // .claude/tools/. Main-process handler streams 'voice-install-progress'
+  // events so the renderer can show a live bar; returns { success } or
+  // { error } at the end. Windows only today — mac/linux return an error
+  // with manual instructions.
+  installVoiceTools: () => ipcRenderer.invoke('install-voice-tools'),
+  onVoiceInstallProgress: (cb) => {
+    const h = (_, data) => cb(data);
+    ipcRenderer.on('voice-install-progress', h);
+    return () => ipcRenderer.removeListener('voice-install-progress', h);
+  },
 });

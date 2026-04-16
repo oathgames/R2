@@ -1807,6 +1807,76 @@ body.platform-mac .titlebar-drag{
 .badge-image { background: rgba(59,130,246,.15); color: #60a5fa; }
 .badge-video { background: rgba(168,85,247,.15); color: #c084fc; }
 
+/* ── Live Ad card KPI strip ───────────────────────────────────
+   Replaces the "Collecting..." soup with a compact chip row — each chip
+   is a single high-signal metric (ROAS, spend, CTR, CPA, impressions).
+   Color follows traffic-light semantics so a CMO can scan the grid and
+   instantly see which ads are winning, warning, or losing money. */
+.archive-card-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+.kpi-chip {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255,255,255,.05);
+  color: var(--text);
+  border: 1px solid var(--border);
+  line-height: 1.4;
+  letter-spacing: .02em;
+}
+.kpi-chip.kpi-good { background: rgba(34,197,94,.12); color: #4ade80; border-color: rgba(34,197,94,.25); }
+.kpi-chip.kpi-warn { background: rgba(250,204,21,.10); color: #facc15; border-color: rgba(250,204,21,.22); }
+.kpi-chip.kpi-bad  { background: rgba(239,68,68,.10);  color: #f87171; border-color: rgba(239,68,68,.22); }
+.kpi-chip.kpi-dim  { color: var(--text-dim); background: transparent; }
+
+.archive-card-hint {
+  font-size: 9px;
+  color: var(--text-dim);
+  font-style: italic;
+  margin-top: 3px;
+}
+.archive-card-brand {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+.archive-card-dormant { opacity: .55; }
+.archive-card-dormant:hover { opacity: 1; }
+
+/* Richer placeholder when there's no thumbnail yet — platform initial
+   plus ad name preview beats a generic megaphone every time. */
+.archive-card-thumb-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: linear-gradient(135deg, rgba(255,255,255,.02), rgba(255,255,255,.06));
+  padding: 8px;
+  text-align: center;
+}
+.placeholder-platform {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text-dim);
+  line-height: 1;
+  opacity: .5;
+}
+.placeholder-label {
+  font-size: 9px;
+  color: var(--text-dim);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: .8;
+}
+
 .archive-date-header {
   grid-column: 1 / -1;
   font-size: 11px;

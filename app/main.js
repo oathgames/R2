@@ -5,6 +5,20 @@ const os = require('os');
 const wsServer = require('./ws-server');
 const { generateQRDataUri } = require('./qr');
 
+// Register merlin:// as a privileged scheme BEFORE app ready. Without this,
+// <video src="merlin://..."> fails two ways:
+//   1. CSP treats the scheme as non-secure and blocks it under media-src
+//      (videos render a black player with no content).
+//   2. Chrome's media stack can't seek/range-request the stream, so even
+//      when it loads, scrubbing and resume-after-pause silently fail.
+// `stream: true` enables HTTP range requests (required for <video> seek),
+// `supportFetchAPI: true` lets renderer fetch() merlin:// paths for blobs,
+// `secure: true` lets the page's CSP accept it as a same-origin equivalent,
+// `standard: true` normalises URL parsing so percent-encoded paths round-trip.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'merlin', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
+]);
+
 function installApplicationMenu() {
   // macOS requires an application menu with Edit role entries for Cmd+C/V/X/A
   // to work in any input field. Electron 41 on recent macOS builds has been
@@ -2795,30 +2809,31 @@ ipcMain.handle('transcribe-audio', async (_, audioBytes) => {
 
   if (!ffmpegPath) {
     // ffmpeg is intentionally excluded from the Electron installer (~200MB
-    // per exe would bloat the download). Users who trigger voice input
-    // before ffmpeg has been fetched see this message — point them at the
-    // exact file and where to put it, rather than the misleading "install
-    // corrupted" phrasing. Auto-download is planned for a later release.
-    const target = path.join(appRoot, '.claude', 'tools', isWin ? 'ffmpeg.exe' : 'ffmpeg');
-    const downloadUrl = isWin
-      ? 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
-      : (process.platform === 'darwin'
-        ? 'https://evermeet.cx/ffmpeg/'
-        : 'https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz');
+    // per exe would bloat the download). On Windows we offer auto-install
+    // via `install-voice-tools` — renderer sees `installable: true` and
+    // triggers the download flow. Mac/Linux still get a manual pointer
+    // since whisper.cpp only publishes Windows binaries upstream.
     return {
-      error: `ffmpeg not installed yet.\n\nVoice input needs ffmpeg to transcode audio. Download it from:\n${downloadUrl}\n\nExtract the archive and place the ffmpeg${isWin ? '.exe' : ''} binary at:\n${target}\n\n(Auto-install coming in a future update.)`,
+      error: 'Audio transcoder (ffmpeg) not installed yet.',
+      installable: isWin,
+      missing: ['ffmpeg'],
     };
   }
   if (!whisperBin) {
-    const target = path.join(appRoot, '.claude', 'tools', isWin ? 'whisper-cli.exe' : 'whisper-cli');
+    // Return a structured error so the renderer can offer auto-install instead
+    // of just showing a wall of text with a download link. `installable: true`
+    // is the renderer's cue to surface the "Set up voice input?" flow.
     return {
-      error: `Voice setup needed.\n\nDownload whisper-cli from:\nhttps://github.com/ggerganov/whisper.cpp/releases\n\nExtract and place at:\n${target}\n\n(Auto-install coming in next update.)`,
+      error: 'Voice transcription tool not installed yet.',
+      installable: isWin,
+      missing: ['whisper'],
     };
   }
   if (!modelPath) {
-    const target = path.join(appRoot, '.claude', 'tools', 'ggml-tiny.en.bin');
     return {
-      error: `Voice model missing.\n\nDownload ggml-tiny.en.bin (74MB) from:\nhttps://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin\n\nPlace at:\n${target}`,
+      error: 'Voice model not installed yet.',
+      installable: isWin,
+      missing: ['model'],
     };
   }
 
@@ -2878,6 +2893,255 @@ ipcMain.handle('transcribe-audio', async (_, audioBytes) => {
   } finally {
     try { fs.unlinkSync(webmPath); } catch {}
     try { fs.unlinkSync(wavPath); } catch {}
+  }
+});
+
+// ── Voice Tools Auto-Install (Windows) ──────────────────────
+// Fetches whisper-cli.exe, the ggml-tiny.en model, and ffmpeg.exe into
+// <appRoot>/.claude/tools/ so voice input "just works" after first-run
+// instead of dropping the user at a Github/HuggingFace treasure hunt.
+//
+// Security / supply chain:
+//   - Download URLs are hardcoded (no user-supplied paths, no redirects off
+//     the pinned hosts). Whisper.cpp tag is pinned — upgrades are a
+//     deliberate source change, not a silent "latest" pull.
+//   - HTTPS only (Node's agent enforces cert validation).
+//   - Zip extraction uses PowerShell Expand-Archive, which refuses
+//     path-traversal entries ("..\..\foo"). We only COPY specific filenames
+//     out of the extracted tree — never by relative path from the zip.
+//   - Total disk footprint: ~150 MB (whisper ~10 MB, model 74 MB,
+//     ffmpeg ~60 MB). Progress events stream to the renderer so the user
+//     sees movement instead of a frozen modal.
+const VOICE_TOOL_SOURCES = {
+  // Pin to a specific whisper.cpp release so a bad upstream build or a
+  // renamed asset doesn't brick voice input for every user overnight.
+  // Bump here + verify manually before shipping.
+  whisperZip: 'https://github.com/ggerganov/whisper.cpp/releases/download/v1.7.6/whisper-bin-x64.zip',
+  model:      'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin',
+  // gyan.dev is the canonical ffmpeg Windows builder recommended by the
+  // ffmpeg project itself (https://ffmpeg.org/download.html#build-windows).
+  ffmpegZip:  'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
+};
+
+// Stream an HTTPS download to disk with percent progress. Follows redirects
+// (HuggingFace and github.com both 302 to CDN hosts). 10-redirect cap + per-
+// request timeout keeps a stuck CDN from hanging the install forever.
+function downloadWithProgress(url, destPath, onProgress, depth = 0) {
+  return new Promise((resolve, reject) => {
+    if (depth > 10) return reject(new Error('Too many redirects'));
+    const https = require('https');
+    const req = https.get(url, {
+      headers: { 'User-Agent': 'Merlin-Desktop' },
+      timeout: 60000,
+    }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        const next = new URL(res.headers.location, url).toString();
+        downloadWithProgress(next, destPath, onProgress, depth + 1).then(resolve, reject);
+        return;
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode} fetching ${url}`));
+      }
+      const total = parseInt(res.headers['content-length'] || '0', 10);
+      let got = 0;
+      const out = fs.createWriteStream(destPath);
+      res.on('data', (chunk) => {
+        got += chunk.length;
+        if (total > 0 && typeof onProgress === 'function') {
+          onProgress(Math.min(100, (got / total) * 100), got, total);
+        }
+      });
+      res.on('error', (err) => { try { out.destroy(); fs.unlinkSync(destPath); } catch {} reject(err); });
+      res.pipe(out);
+      out.on('finish', () => out.close(() => resolve()));
+      out.on('error', (err) => { try { fs.unlinkSync(destPath); } catch {} reject(err); });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')); });
+  });
+}
+
+// Extract a zip via PowerShell Expand-Archive. Ships with every supported
+// Windows version (PowerShell 5+ / Windows 10+), so no external dependency.
+// Path is passed via -LiteralPath to stop PowerShell globbing on brackets.
+function extractZipWindows(zipPath, destDir) {
+  return new Promise((resolve, reject) => {
+    fs.mkdirSync(destDir, { recursive: true });
+    const { spawn } = require('child_process');
+    // LiteralPath wants single-quoted strings; escape embedded single quotes
+    // by doubling them per PowerShell convention.
+    const psQuote = (s) => s.replace(/'/g, "''");
+    const ps = spawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-Command',
+      `Expand-Archive -LiteralPath '${psQuote(zipPath)}' -DestinationPath '${psQuote(destDir)}' -Force`,
+    ], { windowsHide: true });
+    let stderr = '';
+    ps.stderr.on('data', (d) => { stderr += d.toString(); });
+    ps.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Extraction failed (exit ${code}): ${stderr.slice(0, 300).trim()}`));
+    });
+    ps.on('error', reject);
+  });
+}
+
+// Walk a directory and return absolute paths of files whose basename matches
+// the predicate. Used after extraction to locate whisper-cli.exe / ffmpeg.exe
+// regardless of how deep the upstream zip nests them.
+function walkFindFiles(rootDir, predicate) {
+  const out = [];
+  const walk = (d) => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile() && predicate(e.name, p)) out.push(p);
+    }
+  };
+  walk(rootDir);
+  return out;
+}
+
+ipcMain.handle('install-voice-tools', async () => {
+  const isWin = process.platform === 'win32';
+  if (!isWin) {
+    // whisper.cpp publishes only Windows prebuilt binaries. Mac/Linux users
+    // still get a clear pointer — we don't silently succeed.
+    return {
+      error: 'Auto-install is available on Windows only right now. On macOS or Linux, build whisper.cpp from source and drop the binaries into .claude/tools/.',
+    };
+  }
+
+  const toolsDir = path.join(appRoot, '.claude', 'tools');
+  const tmpDir = path.join(os.tmpdir(), `merlin-voice-install-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  try {
+    fs.mkdirSync(toolsDir, { recursive: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
+  } catch (err) {
+    return { error: `Cannot create install directory: ${err.message}` };
+  }
+
+  const send = (stage, pct, note) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('voice-install-progress', {
+        stage,
+        pct: Math.max(0, Math.min(100, Math.round(pct))),
+        note: note || '',
+      });
+    }
+  };
+
+  // Re-check presence at install time (not just at the transcribe call) —
+  // the user might have manually dropped one of the three files in by hand
+  // between the error toast and clicking "Install". Skip what we don't need.
+  const has = (name) => fs.existsSync(path.join(toolsDir, name));
+  const needWhisper = !has('whisper-cli.exe');
+  const needModel   = !has('ggml-tiny.en.bin');
+  const needFfmpeg  = !has('ffmpeg.exe');
+
+  // Progress budget: each stage gets a slice of 0-100 proportional to its
+  // download size so the bar moves smoothly end-to-end instead of stalling
+  // at 30% while the model grinds through 74 MB.
+  const budget = {
+    whisper: needWhisper ? 10 : 0,   // ~10 MB
+    model:   needModel   ? 74 : 0,   // 74 MB
+    ffmpeg:  needFfmpeg  ? 60 : 0,   // ~60 MB
+  };
+  const totalBudget = budget.whisper + budget.model + budget.ffmpeg;
+  if (totalBudget === 0) {
+    send('done', 100, 'Voice input is already set up.');
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    return { success: true, already: true };
+  }
+  let completed = 0;
+  const stagePct = (stage, frac) => ((completed + budget[stage] * frac) / totalBudget) * 100;
+
+  try {
+    // ── Whisper binary + DLLs ──
+    if (needWhisper) {
+      send('whisper', stagePct('whisper', 0), 'Downloading whisper-cli...');
+      const zipPath = path.join(tmpDir, 'whisper.zip');
+      await downloadWithProgress(VOICE_TOOL_SOURCES.whisperZip, zipPath, (pct) => {
+        send('whisper', stagePct('whisper', pct / 100 * 0.8), 'Downloading whisper-cli...');
+      });
+      send('whisper', stagePct('whisper', 0.85), 'Extracting whisper-cli...');
+      const extractDir = path.join(tmpDir, 'whisper-extracted');
+      await extractZipWindows(zipPath, extractDir);
+
+      // The release zip nests binaries under Release/ (or similar). Grab
+      // whisper-cli.exe + every .dll we can find — whisper depends on
+      // ggml-*.dll, whisper.dll, and sometimes SDL2.dll. Missing any DLL
+      // makes whisper-cli.exe fail to even start, so copy them all.
+      const cliFiles = walkFindFiles(extractDir, (n) => /^whisper-cli\.exe$/i.test(n));
+      if (cliFiles.length === 0) {
+        throw new Error('whisper-cli.exe not found in downloaded zip — upstream layout may have changed.');
+      }
+      fs.copyFileSync(cliFiles[0], path.join(toolsDir, 'whisper-cli.exe'));
+      const dllFiles = walkFindFiles(extractDir, (n) => /\.dll$/i.test(n));
+      for (const dll of dllFiles) {
+        fs.copyFileSync(dll, path.join(toolsDir, path.basename(dll)));
+      }
+      completed += budget.whisper;
+      send('whisper', stagePct('whisper', 1), 'whisper-cli installed');
+    }
+
+    // ── Model ──
+    if (needModel) {
+      send('model', stagePct('model', 0), 'Downloading voice model (74 MB)...');
+      // Write to a .partial file then rename atomically so a crash mid-
+      // download doesn't leave a corrupt ggml-tiny.en.bin that whisper
+      // will load and segfault on next launch.
+      const tmpModel = path.join(toolsDir, 'ggml-tiny.en.bin.partial');
+      await downloadWithProgress(VOICE_TOOL_SOURCES.model, tmpModel, (pct) => {
+        send('model', stagePct('model', pct / 100), `Downloading voice model... ${Math.round(pct)}%`);
+      });
+      try { fs.renameSync(tmpModel, path.join(toolsDir, 'ggml-tiny.en.bin')); }
+      catch (err) { try { fs.unlinkSync(tmpModel); } catch {} throw err; }
+      completed += budget.model;
+      send('model', stagePct('model', 1), 'Voice model installed');
+    }
+
+    // ── FFmpeg ──
+    if (needFfmpeg) {
+      send('ffmpeg', stagePct('ffmpeg', 0), 'Downloading ffmpeg...');
+      const zipPath = path.join(tmpDir, 'ffmpeg.zip');
+      await downloadWithProgress(VOICE_TOOL_SOURCES.ffmpegZip, zipPath, (pct) => {
+        send('ffmpeg', stagePct('ffmpeg', pct / 100 * 0.85), `Downloading ffmpeg... ${Math.round(pct)}%`);
+      });
+      send('ffmpeg', stagePct('ffmpeg', 0.9), 'Extracting ffmpeg...');
+      const extractDir = path.join(tmpDir, 'ffmpeg-extracted');
+      await extractZipWindows(zipPath, extractDir);
+
+      // gyan.dev zip nests under ffmpeg-X.X-essentials_build/bin/. Locate by
+      // filename so a version bump on their side doesn't break the copy.
+      const ffmpegExe = walkFindFiles(extractDir, (n) => /^ffmpeg\.exe$/i.test(n))[0];
+      if (!ffmpegExe) {
+        throw new Error('ffmpeg.exe not found in downloaded zip.');
+      }
+      fs.copyFileSync(ffmpegExe, path.join(toolsDir, 'ffmpeg.exe'));
+      // ffprobe is optional but useful for any future audio-duration checks.
+      const ffprobeExe = walkFindFiles(extractDir, (n) => /^ffprobe\.exe$/i.test(n))[0];
+      if (ffprobeExe) fs.copyFileSync(ffprobeExe, path.join(toolsDir, 'ffprobe.exe'));
+      completed += budget.ffmpeg;
+      send('ffmpeg', stagePct('ffmpeg', 1), 'ffmpeg installed');
+    }
+
+    send('done', 100, 'Voice input ready');
+    return { success: true };
+  } catch (err) {
+    // Surface a human-readable reason — the renderer passes this straight
+    // through friendlyError(), so don't leak stack traces or raw paths.
+    const msg = String(err && err.message ? err.message : err);
+    return { error: `Voice install failed: ${msg}` };
+  } finally {
+    // ALWAYS wipe the temp scratch dir, even if the install threw.
+    // Leftover zips and extracted folders on every failed attempt would
+    // balloon %TEMP% quickly — whisper zip alone is ~10 MB.
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
 });
 
