@@ -1,0 +1,109 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "TodoWrite",
+      "mcp__merlin__*",
+      "Bash(curl -sI *)",
+      "Bash(curl *github.com*)",
+      "Bash(curl *merlingotme.com*)",
+      "Bash(ls *)",
+      "Bash(cp *)",
+      "Bash(mkdir *)",
+      "Bash(wc *)",
+      "mcp__scheduled-tasks__list_scheduled_tasks",
+      "mcp__scheduled-tasks__create_scheduled_task",
+      "mcp__scheduled-tasks__update_scheduled_task"
+    ],
+    "deny": [
+      "Bash(*graph.facebook.com*)",
+      "Bash(*business.facebook.com*)",
+      "Bash(*business-api.tiktok.com*)",
+      "Bash(*open-api.tiktok.com*)",
+      "Bash(*open.tiktokapis.com*)",
+      "Bash(*googleads.googleapis.com*)",
+      "Bash(*advertising-api.amazon*)",
+      "Bash(*sellingpartnerapi*)",
+      "Bash(*api.klaviyo.com*)",
+      "Bash(*a.klaviyo.com*)",
+      "Bash(*ads-api.reddit.com*)",
+      "Bash(*openapi.etsy.com*)",
+      "Bash(*graph.threads.net*)",
+      "Bash(*curl*|*sh*)",
+      "Bash(*curl*|*bash*)",
+      "Bash(*wget*-O-*|*sh*)",
+      "Bash(*nc -*)",
+      "Bash(*ncat *)",
+      "Bash(*socat *)",
+      "Bash(*openssl s_client*)",
+      "Bash(*cp*.merlin-*)",
+      "Bash(*cp*merlin-config*)",
+      "Bash(*copy*.merlin-*)",
+      "Bash(*Copy-Item*.merlin-*)",
+      "Bash(*rm*.merlin-ratelimit*)",
+      "Bash(*rm*.merlin-vault*)",
+      "Bash(*rm*.merlin-audit*)",
+      "Bash(*rm*merlin-config*)",
+      "Bash(*del*.merlin-*)",
+      "Bash(*Remove-Item*.merlin-*)",
+      "WebFetch(*graph.facebook.com*)",
+      "WebFetch(*business-api.tiktok.com*)",
+      "WebFetch(*googleads.googleapis.com*)",
+      "WebFetch(*api.klaviyo.com*)",
+      "WebFetch(*.myshopify.com/admin/api*)",
+      "WebFetch(*ads-api.reddit.com*)",
+      "WebFetch(*openapi.etsy.com*)",
+      "WebFetch(*graph.threads.net*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const c=(JSON.parse(process.env.TOOL_INPUT||'{}').command||'');const blocked=[/\\brm\\s+-rf\\s+[\\\\/~]/i,/\\bformat\\s+[a-z]:/i,/\\bshutdown\\b/i,/\\breboot\\b/i,/\\bmkfs\\b/i,/\\bdd\\s+if=/i,/\\bdel\\s+\\\\/[sS]/i,/\\breg\\s+(add|delete)/i,/\\bchmod\\s+777\\s+\\\\//i,/\\bgit\\s+(push|reset\\s+--hard|rebase|force)/i,/\\bnpm\\s+(install|i)\\s+-g/i,/\\bpip\\s+install/i,/\\bbrew\\s+install/i,/\\bapt(-get)?\\s+(install|remove|purge)/i,/\\bsudo\\b/i,/\\bpowershell.*-[eE]nc/i,/\\bcurl.*\\|\\s*(ba)?sh/i];if(blocked.some(r=>r.test(c))){console.error('BLOCKED: This command is not allowed for safety.');process.exit(2)}const stripped=c.replace(/\\\"(?:[^\\\"\\\\\\\\]|\\\\\\\\.)*\\\"/g,'').replace(/'[^']*'/g,'');if(/[Mm]erlin/i.test(c)&&/[&|;\\`]|\\$\\(/.test(stripped)){console.error('BLOCKED: Merlin commands must not contain shell operators.');process.exit(2)}\""
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/block-api-bypass.js"
+          }
+        ]
+      },
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/block-api-bypass.js"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Edit|Write|NotebookEdit|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/block-api-bypass.js"
+          },
+          {
+            "type": "command",
+            "command": "node -e \"const p=(JSON.parse(process.env.TOOL_INPUT||'{}').file_path||'').replace(/\\\\\\\\/g,'/');const blocked=[/\\/app\\/(main|renderer|preload|ws-server|mcp-server|mcp-tools|mcp-redact)\\.js$/,/\\/app\\/(style\\.css|index\\.html)$/,/\\.claude\\/settings\\.json$/,/\\.claude\\/commands\\//,/\\.claude\\/hooks\\//,/CLAUDE\\.md$/,/version\\.json$/,/package\\.json$/,/package-lock\\.json$/,/\\.(ssh|gnupg)\\//,/\\.(env|bashrc|zshrc|profile)$/,/(etc|Windows[\\\\/]System)/i];if(blocked.some(r=>r.test(p))){console.error('BLOCKED: Cannot modify app source or system files.');process.exit(2)}\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "prompt",
+        "prompt": "Check if any new content was generated this session (new folders in results/ created today). If yes, append a one-line entry to memory.md Run Log: date | brand | product | type | result. Keep it brief. If no new content, do nothing."
+      }
+    ]
+  }
+}
