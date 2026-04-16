@@ -1,5 +1,5 @@
 {
-  "version": "1.1.3",
+  "version": "1.2.0",
   "updatable": [
     "CLAUDE.md",
     "README.txt",
@@ -23,11 +23,10 @@
   "preserveUserBrands": "assets/brands/* except assets/brands/example/ (example is updatable, user brands are not)",
   "binaryName": "Merlin",
   "repo": "oathgames/Merlin",
-  "notes": "v1.1.3: Brand-gated OAuth, checksum-verified auto-updates, Meta warmup action, and a major SEO overhaul of merlingotme.com.",
+  "notes": "v1.2.0: HeyGen Video Agent (prompt-to-video), deep security hardening across OAuth / hook guard / attribution, and a Mac license-activation fix.",
   "whatsNew": [
-    "Connecting a platform now requires an active brand — no more orphan OAuth",
-    "Auto-updates verify a SHA-256 checksum before installing the new version",
-    "Meta warmup action: gradual budget ramp for new ad accounts",
-    "merlingotme.com rewritten for search — structured data, canonical URL, richer meta"
+    "New HeyGen Video Agent: describe your ad in plain English, get a finished avatar video back",
+    "Major security pass — OAuth flows, hook guard, and attribution tightened after adversarial review; Shopify OAuth now validates CSRF state",
+    "Mac trial-expiry screen now opens the license-key modal directly — no more blank screens when activating Pro"
   ]
 }
