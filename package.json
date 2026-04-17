@@ -35,26 +35,9 @@
     "afterSign": "build/notarize.js",
     "files": [
       "app/**/*",
-      "!.claude${/*}",
-      "!assets${/*}",
-      "!build${/*}",
-      "!bootstrapper${/*}",
-      "!pwa${/*}",
-      "!results${/*}",
-      "!voice-tools-work${/*}",
-      "!dist${/*}",
-      "!.merlin-backup${/*}",
-      "!CLAUDE.md",
-      "!memory.md",
-      "!version.json",
-      "!README.md",
-      "!README.txt",
-      "!LICENSE.txt",
-      "!seasonal.json",
-      "!test-sdk.js",
-      "!*.exe",
-      "!*.dmg",
-      "!*.zip"
+      "pwa/**/*",
+      "seasonal.json",
+      "package.json"
     ],
     "extraResources": [
       {
