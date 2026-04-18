@@ -1062,13 +1062,17 @@ body.platform-mac .titlebar-drag{
 /* ── Subscribe Button (in header) ─────────────────────────── */
 .magic-header-right{display:flex;align-items:center;gap:6px;-webkit-app-region:no-drag}
 .subscribe-header-btn{
-  height:24px;
-  padding:0 8px;
+  height:28px;
+  padding:0 10px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  box-sizing:border-box;
   background:linear-gradient(135deg,rgba(167,139,250,.12),rgba(52,211,153,.12));
   border:1px solid rgba(167,139,250,.2);
-  border-radius:6px;
+  border-radius:7px;
   color:var(--text-dim);
-  font-size:10px;
+  font-size:11px;
   font-weight:500;
   font-family:var(--font);
   cursor:pointer;
@@ -1492,6 +1496,17 @@ body.platform-mac .titlebar-drag{
 .wisdom-grid{
   display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;
 }
+.wisdom-card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:14px 16px;
+  min-width:0;
+}
+.wisdom-grid > .wisdom-benchmark,
+.wisdom-grid > .wisdom-callout{
+  grid-column:1 / -1;
+}
 .wisdom-card-title{
   font-size:11px;font-weight:600;
   text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px;
@@ -1542,8 +1557,8 @@ body.platform-mac .titlebar-drag{
 
 /* Callouts (intel = purple/teal accent, seasonal = warm). */
 .wisdom-callout{
-  margin-top:12px;padding:10px 12px;border-radius:8px;
-  font-size:11px;line-height:1.45;
+  margin-top:0;padding:12px 16px;border-radius:10px;
+  font-size:12px;line-height:1.5;
 }
 .wisdom-callout.intel{
   background:rgba(139,92,246,.08);
@@ -1557,11 +1572,16 @@ body.platform-mac .titlebar-drag{
 }
 .wisdom-callout strong{color:var(--text);font-weight:600}
 
-/* Benchmark rows (your value vs collective). */
-.wisdom-benchmark{margin-top:6px}
+/* Benchmark hero (your value vs collective) — full-width banner. */
+.wisdom-benchmark{
+  margin-top:0;padding:14px 18px;border-radius:10px;
+  background:linear-gradient(135deg,rgba(139,92,246,.08),rgba(52,211,153,.05));
+  border:1px solid rgba(139,92,246,.18);
+}
+.wisdom-benchmark .wisdom-card-title{margin-bottom:8px}
 .wisdom-benchmark-row{
   display:flex;justify-content:space-between;align-items:baseline;
-  margin-bottom:4px;
+  margin-bottom:4px;gap:16px;flex-wrap:wrap;
 }
 .wisdom-benchmark-row:last-child{margin-bottom:0}
 .wisdom-benchmark-label{font-size:11px;color:var(--text-dim)}
@@ -1603,22 +1623,10 @@ body.platform-mac .titlebar-drag{
   color:var(--text);
   outline:none;
 }
-.wisdom-info-btn::after{
-  content:attr(data-tip);
-  position:absolute;top:calc(100% + 8px);right:0;
-  width:260px;padding:10px 12px;
-  background:var(--bg);
-  border:1px solid var(--border);border-radius:8px;
-  font-size:11px;line-height:1.45;color:var(--text-muted);
-  text-align:left;white-space:normal;
-  box-shadow:0 6px 24px var(--shadow-md);
-  opacity:0;pointer-events:none;transform:translateY(-4px);
-  transition:opacity .15s,transform .15s;
-  z-index:60;
-}
-.wisdom-info-btn:hover::after,.wisdom-info-btn:focus-visible::after{
-  opacity:1;transform:translateY(0);
-}
+/* Tooltip rendering is handled by the global [data-tip] handler in
+   renderer.js (viewport-fixed, auto-flipped, never clipped). A CSS ::after
+   tooltip here would fire in addition to the JS one — two tooltips stacked
+   on top of each other, which overlapped the Wisdom cards below. */
 
 /* Color classes for rank values + bar fills (replaces inline color). */
 .wisdom-rank-value.color-hooks,.color-hooks{color:var(--accent)}
