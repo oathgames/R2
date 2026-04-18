@@ -153,6 +153,16 @@ contextBridge.exposeInMainWorld('merlin', {
   // Competitor swipes
   getSwipes: (brand) => ipcRenderer.invoke('get-swipes', assertBrand(brand)),
 
+  // Brand guide — read persisted brand-guide.json for the onboarding review
+  // card. Main process resolves assets/brands/<brand>/brand-guide.json,
+  // validates the path stays inside assets/brands, and returns the raw JSON
+  // string or null if missing. Never exposes arbitrary file-read.
+  readBrandGuide: (brand) => ipcRenderer.invoke('read-brand-guide', assertBrand(brand)),
+  onBrandGuideUpdated: (cb) => {
+    const h = (_, data) => cb(data); ipcRenderer.on('brand-guide-updated', h);
+    return () => ipcRenderer.removeListener('brand-guide-updated', h);
+  },
+
   // Morning briefing
   getBriefing: (brand) => ipcRenderer.invoke('get-briefing', assertBrand(brand)),
   dismissBriefing: (brand) => ipcRenderer.invoke('dismiss-briefing', assertBrand(brand)),
