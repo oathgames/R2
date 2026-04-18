@@ -8029,19 +8029,31 @@ app.whenReady().then(async () => {
     if (win && !win.isDestroyed()) win.webContents.send('engine-status', msg);
   });
 
+  // Workspace sync MUST run before createWindow / pre-warm. It copies the
+  // installed versions of .claude/commands/*.md, .claude/settings.json, and
+  // .claude/hooks/block-api-bypass.js into appRoot on upgrade. The SDK
+  // subprocess reads those files when it spawns (pre-warm fires ~100–300 ms
+  // after the window paints, see renderer.js init()) — if sync hasn't run,
+  // an upgrade-day launch would spin up against stale commands and hook
+  // rules until the next restart. Common case is a ~5 ms version-match
+  // no-op, so keeping this synchronous costs nothing on non-upgrade days.
+  try {
+    syncWorkspaceFromInstalledResources();
+  } catch (err) {
+    console.error('[workspace-sync]', err.message);
+  }
+
   await createWindow();
 
   // Bootstrap workspace AFTER window is visible (prevents "Not Responding" on first launch)
   setTimeout(bootstrapWorkspace, 500);
 
-  // Warmup-perf: move workspace sync + idempotent migrations off the critical
-  // path so the window paints and the renderer's init IPCs answer immediately.
-  // These are fast no-ops after first run (version-match short-circuit + "already
-  // migrated" guards), but a fresh install or upgrade can spend several hundred
-  // ms here — enough for the user to notice a blank window before content appears.
-  // Pushed to the same deferral window as bootstrapWorkspace.
+  // Warmup-perf: move the idempotent migrations off the critical path. These
+  // only touch user state files (tokens, vault, legacy skills/results, stray
+  // brand files) — nothing the SDK preflight reads — so they're safe to run
+  // after the window paints. Fast no-op on return launches (each has its own
+  // "already migrated" guard); real first-run cost is ~50–300 ms aggregate.
   setTimeout(() => {
-    try { syncWorkspaceFromInstalledResources(); } catch (err) { console.error('[workspace-sync]', err.message); }
     // Migrate global tokens to per-brand (runs once, idempotent)
     try { migratePerBrand(); } catch (err) { console.error('[migration]', err.message); }
     // Migrate plaintext tokens to vault (runs once, idempotent)

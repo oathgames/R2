@@ -284,7 +284,10 @@ async function init() {
   // streams in as the definitive readiness signal.
   const welcomeBubble = addClaudeBubble();
   welcomeBubble.classList.remove('streaming');
-  welcomeBubble.innerHTML = 'Welcome back.';
+  // Neutral initial text — "Welcome back." is wrong for a first-run user and
+  // would flash visibly into "Hey — I'm Merlin…" once Promise.all resolves.
+  // "Welcome." is accurate for both the returning and new-user branches below.
+  welcomeBubble.innerHTML = 'Welcome.';
 
   // Fire the three main-process reads in parallel (previously awaited serially,
   // ~100 ms × 3 = up to ~300 ms of chained IPC latency during first paint).
@@ -364,15 +367,17 @@ async function init() {
 
   window._welcomeShown = true;
 
-  // Warmup-perf: pre-warm the SDK subprocess in the background. For returning
-  // authenticated users this spawns the Claude Agent SDK, injects the OAuth
-  // token, and runs the silent /merlin preflight concurrently with the user
-  // reading the chat — so when they hit Enter on their first message, the
-  // subprocess is already hot and resolveNextMessage is wired up (input → SDK
-  // is immediate, no 1–3 s cold-start). For first-run users who aren't signed
-  // in yet, startSession triggers the unified auth-required flow (same
-  // behavior as before — user sees the browser sign-in instead of a cold
-  // failure on first send).
+  // Warmup-perf: pre-warm the SDK subprocess in the background so the first
+  // user message doesn't pay for a cold spawn + OAuth inject + preflight
+  // round-trip. For authenticated returning users the SDK spawns and runs
+  // its silent /merlin preflight concurrently with the user reading the
+  // welcome; any message they type during warmup queues into
+  // pendingMessageQueue (main.js send-message handler) and drains right
+  // after the preflight response, so no keystroke is ever lost. For
+  // first-run users who aren't signed in, startSession triggers the unified
+  // auth-required flow — same behavior as before, just fires proactively
+  // instead of waiting for the user's first Enter to surface the missing
+  // credentials.
   merlin.checkSetup(false).then(() => { merlin.startSession(); })
     .catch(() => { merlin.startSession(); });
 }
