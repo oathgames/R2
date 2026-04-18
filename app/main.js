@@ -3052,7 +3052,7 @@ const CONFIG_FIELD_ALLOWLIST = new Set([
   'amazonAccessToken', 'amazonRefreshToken', 'amazonProfileId', 'amazonSellerId',
   'klaviyoAccessToken', 'klaviyoApiKey',
   'pinterestAccessToken', 'pinterestRefreshToken',
-  'falApiKey', 'elevenLabsApiKey', 'heygenApiKey', 'arcadsApiKey',
+  'falApiKey', 'elevenLabsApiKey', 'heygenApiKey', 'arcadsApiKey', 'foreplayApiKey',
   'slackBotToken', 'slackWebhookUrl', 'slackChannel',
   'discordGuildId', 'discordChannelId',
   'productName', 'productUrl', 'productDescription', 'vertical', 'outputDir',
@@ -5523,6 +5523,7 @@ function getConnections(brandName) {
     if (globalCfg.elevenLabsApiKey || vaultGet('_global', 'elevenLabsApiKey')) connected.push({ platform: 'elevenlabs', status: 'connected' });
     if (globalCfg.heygenApiKey || vaultGet('_global', 'heygenApiKey')) connected.push({ platform: 'heygen', status: 'connected' });
     if (globalCfg.arcadsApiKey || vaultGet('_global', 'arcadsApiKey')) connected.push({ platform: 'arcads', status: 'connected' });
+    if (globalCfg.foreplayApiKey || vaultGet('_global', 'foreplayApiKey')) connected.push({ platform: 'foreplay', status: 'connected' });
     // Slack posting requires a webhook URL. Bot token alone (from OAuth) enables
     // channel discovery but NOT posting. Show "needs setup" if only bot token exists.
     if (globalCfg.slackWebhookUrl) {
@@ -5575,12 +5576,13 @@ ipcMain.handle('disconnect-platform', (_, platform, brandName) => {
       elevenlabs: ['elevenLabsApiKey'],
       heygen: ['heygenApiKey'],
       arcads: ['arcadsApiKey'],
+      foreplay: ['foreplayApiKey'],
     };
     const keys = keyMap[platform];
     if (!keys) return { success: false, error: 'unknown platform' };
 
     // Keys that live in global config (not per-brand files)
-    const GLOBAL_KEYS_SET = new Set(['falApiKey', 'elevenLabsApiKey', 'heygenApiKey', 'slackBotToken', 'slackWebhookUrl', 'slackChannel', 'discordGuildId', 'discordChannelId']);
+    const GLOBAL_KEYS_SET = new Set(['falApiKey', 'elevenLabsApiKey', 'heygenApiKey', 'foreplayApiKey', 'slackBotToken', 'slackWebhookUrl', 'slackChannel', 'discordGuildId', 'discordChannelId']);
     const isGlobalPlatform = keys.every(k => GLOBAL_KEYS_SET.has(k));
 
     // 1. Clear from global config (for global platforms + legacy single-brand setups)
