@@ -75,6 +75,7 @@ Every user message includes an `[ACTIVE_BRAND: <name>]` tag injected by the app.
 - **Memory compression.** Pipe-delimited in `memory.md` — `key:value|key:value`, no prose. Replace contradictions, don't stack.
 - **Pasted media.** When user pastes/drops an image, it saves to `results/`. Ask which product, then copy to `assets/brands/<brand>/products/<product>/references/`.
 - **Creative tags.** After performance data exists, update result folder's `metadata.json`: `"tags": { "verdict": "winner|kill|testing", "roas": 3.2, "hook": "ugc", "scene": "lifestyle", "platform": "meta", "daysRunning": 14 }`. Archive UI reads these.
+- **Vertical context — use the offering noun, not "product".** Before writing ad copy, image/video prompts, emails, or blogs, run `{"action":"vertical-profile"}` to fetch `offeringNoun`/`audienceNoun`/`primaryKPI` for the brand's vertical. Mapping: `ecommerce`=product/customers/revenue, `saas`=plan/users/MRR, `games`=title/players/installs, `creator`=course/students/enrollments, `local`=service/clients/leads, `agency`=engagement/clients/qualified-leads, `b2b`=solution/accounts/pipeline. Never "your product" to SaaS, never "buy now" to B2B. Schema: `autocmo-core/vertical.go`.
 
 ## Ad Intelligence Rules (deterministic — override Claude judgment on financial decisions)
 
