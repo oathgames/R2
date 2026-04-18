@@ -78,3 +78,8 @@ Thumbs.db
 .merlin-referral-bonus
 .merlin-errors.log
 .merlin-errors.log.old
+
+# Session-review artifacts (tools/review-session.sh output)
+.session-review.md
+.session-review.json
+.session-review.json.err
