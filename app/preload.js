@@ -120,6 +120,13 @@ contextBridge.exposeInMainWorld('merlin', {
   refreshLiveAds: (brand) => ipcRenderer.invoke('refresh-live-ads', assertBrand(brand)),
   openFolder: (folderPath) => ipcRenderer.invoke('open-folder', assertStr(folderPath, 500)),
   copyImage: (filePath) => ipcRenderer.invoke('copy-image', assertStr(filePath, 500)),
+  // Copy an in-memory PNG data URL (e.g. the share card canvas) to the
+  // OS clipboard via Electron's native clipboard API. More reliable than
+  // the browser ClipboardItem API, which is blocked in many contexts and
+  // silently falls back to text — the share card is supposed to be an
+  // image, never a paragraph of copy.
+  copyImageDataUrl: (dataUrl) => ipcRenderer.invoke('copy-image-data-url', assertStr(dataUrl, 8_000_000)),
+  saveImageDataUrl: (dataUrl, filename) => ipcRenderer.invoke('save-image-data-url', assertStr(dataUrl, 8_000_000), assertStr(filename, 200)),
   // Accepts either a single relative path (legacy — used by context menus on
   // message images) or an array of paths (archive cards — the renderer
   // decides whether to delete a whole run folder or just the loose file(s)).

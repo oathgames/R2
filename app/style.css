@@ -450,6 +450,90 @@ a:hover{text-decoration:underline}
 }
 .chip.selected:hover{opacity:.9}
 
+/* Starter-prompt chips shown under the first welcome bubble. Visual DNA
+   matches the branded ad placeholder (dual radial + soft linear) but the
+   gradient is shifted sky→violet instead of violet→mint so the row is
+   tonally related to the brand without clashing with every other
+   violet-mint surface in the app. */
+.starter-chips{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  margin-top:14px;
+  max-width:640px;
+}
+.starter-chip{
+  position:relative;
+  overflow:hidden;
+  display:inline-flex;
+  align-items:center;
+  gap:9px;
+  padding:10px 16px 10px 14px;
+  border-radius:22px;
+  border:1px solid rgba(125,211,252,.28);
+  background:
+    radial-gradient(circle at 22% 30%, rgba(125,211,252,.22), transparent 60%),
+    radial-gradient(circle at 82% 78%, rgba(167,139,250,.20), transparent 60%),
+    linear-gradient(135deg, rgba(125,211,252,.10), rgba(167,139,250,.08));
+  color:var(--text);
+  font:500 13px var(--font);
+  cursor:pointer;
+  transition:transform .15s ease, border-color .2s ease, box-shadow .2s ease;
+}
+.starter-chip::after{
+  content:'';
+  position:absolute;
+  inset:0;
+  background:linear-gradient(135deg, transparent 40%, rgba(255,255,255,.05) 50%, transparent 60%);
+  pointer-events:none;
+}
+.starter-chip:hover{
+  transform:translateY(-1px);
+  border-color:rgba(167,139,250,.55);
+  box-shadow:0 6px 20px -10px rgba(167,139,250,.45);
+}
+.starter-chip:active{transform:translateY(0)}
+.starter-chip-glyph{
+  font-size:15px;
+  line-height:1;
+  background:linear-gradient(135deg, #7dd3fc, #a78bfa);
+  -webkit-background-clip:text;
+  background-clip:text;
+  -webkit-text-fill-color:transparent;
+  color:transparent;
+  filter:drop-shadow(0 0 6px rgba(125,211,252,.35));
+  position:relative;
+  z-index:1;
+}
+.starter-chip-label{position:relative;z-index:1}
+
+/* Undo toast variant — reuses .spell-toast stacking & fade but adds an
+   inline "Undo" button and a softer border so it reads as an affordance,
+   not a failure. */
+.spell-toast.spell-toast-undo{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  padding-right:10px;
+  border-color:rgba(167,139,250,.45);
+  background:linear-gradient(135deg,rgba(167,139,250,.10),rgba(52,211,153,.08)),var(--surface);
+}
+.spell-toast-undo-btn{
+  border:1px solid rgba(167,139,250,.55);
+  background:rgba(167,139,250,.14);
+  color:#e9d5ff;
+  font:600 12px var(--font);
+  padding:5px 12px;
+  border-radius:14px;
+  cursor:pointer;
+  transition:background .15s ease, border-color .15s ease;
+}
+.spell-toast-undo-btn:hover{
+  background:linear-gradient(135deg,#a78bfa,#34d399);
+  color:#0a0a0a;
+  border-color:transparent;
+}
+
 /* ── Input Bar ───────────────────────────────────────────── */
 /* Help nudge */
 .help-nudge{

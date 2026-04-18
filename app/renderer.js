@@ -323,6 +323,7 @@ async function init() {
       }
     } else if (!hasPriorThread) {
       welcomeBubble.innerHTML = `Welcome back — loading ${escapeHtml(brandName)}...`;
+      renderStarterChips(welcomeBubble, 'returning');
     } else {
       // Prior thread will paint; drop the empty welcome bubble so the chat
       // doesn't start with a stray "..." above the restored history.
@@ -346,6 +347,7 @@ async function init() {
   } else {
     // New user — clean welcome, native progress bar handles status
     welcomeBubble.innerHTML = 'Hey — I\'m Merlin, your AI marketing wizard.<br>Tell me your brand or website first, and I\'ll set everything up before we connect stores or ad accounts.';
+    renderStarterChips(welcomeBubble, 'new');
   }
 
   // Don't start the SDK session here. The user sees the chat immediately and can
@@ -368,6 +370,52 @@ async function init() {
   }).catch(() => {});
 }
 
+
+// Starter chips under the first welcome bubble. Give new users a visible
+// first-click instead of a blank input box. Each chip, when clicked,
+// pre-fills the composer and sends it through the normal sendMessage()
+// path so the bubble renders like a real user turn and SDK routing runs
+// as if the user typed it. Chips vanish once any user message has been
+// sent (handled by dismissStarterChips()).
+function renderStarterChips(hostBubble, mode) {
+  if (!hostBubble) return;
+  const row = document.createElement('div');
+  row.className = 'starter-chips';
+  row.setAttribute('data-starter-chips', '1');
+  const presets = mode === 'new'
+    ? [
+        { glyph: '✦', label: 'Set up my brand',       prompt: 'Help me set up a new brand. Ask me for my website and walk me through the rest.' },
+        { glyph: '🎨', label: 'Make a sample ad',      prompt: 'Make a sample ad so I can see what Merlin can do.' },
+        { glyph: '🎓', label: 'Show me how Merlin works', prompt: 'Give me a quick tour of what Merlin can do for my marketing.' },
+      ]
+    : [
+        { glyph: '📈', label: 'How are my ads?',      prompt: 'How are my ads performing right now? Show me the cross-platform dashboard.' },
+        { glyph: '🎨', label: 'Make an ad',            prompt: 'Make me a new ad. Ask me which product and which platform.' },
+        { glyph: '🚀', label: 'Push to Meta',          prompt: 'Push my latest ad to Meta. Show me the preview and cost before anything runs.' },
+        { glyph: '🔍', label: 'Audit my SEO',          prompt: 'Audit my SEO — find the highest-impact wins I can ship this week.' },
+        { glyph: '📧', label: 'Plan an email',         prompt: 'Plan a Klaviyo email campaign. Ask me which flow (welcome / cart / win-back / etc.).' },
+      ];
+  presets.forEach(p => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'starter-chip';
+    chip.innerHTML = `<span class="starter-chip-glyph">${p.glyph}</span><span class="starter-chip-label"></span>`;
+    chip.querySelector('.starter-chip-label').textContent = p.label;
+    chip.addEventListener('click', () => {
+      if (!input) return;
+      input.value = p.prompt;
+      try { autoResize(); } catch {}
+      dismissStarterChips();
+      sendMessage();
+    });
+    row.appendChild(chip);
+  });
+  hostBubble.appendChild(row);
+}
+
+function dismissStarterChips() {
+  document.querySelectorAll('[data-starter-chips]').forEach(el => el.remove());
+}
 
 // Setup overlay was deleted — no setup event handlers needed.
 // Claude auth is now checked on message send (see main.js send-message handler).
@@ -963,6 +1011,8 @@ merlin.onSdkMessage((msg) => {
         turnStartTime = null;
       }
       input.focus();
+      // Surface any undo toasts now that the turn has fully ended.
+      try { flushUndoQueue(); } catch {}
       break;
   }
 });
@@ -986,6 +1036,7 @@ function handleStreamEvent(msg) {
     if (event.content_block && event.content_block.type === 'tool_use') {
       const toolName = event.content_block.name || '';
       const input = event.content_block.input || {};
+      queueKillForUndo(toolName, input);
       const labels = {
         'Bash': 'Casting a spell', 'Read': 'Reading the scrolls', 'Write': 'Inscribing',
         'Edit': 'Refining the formula', 'Glob': 'Scanning the vault', 'Grep': 'Divining patterns',
@@ -2861,59 +2912,47 @@ function drawStatsShareCard() {
 
 async function copyShareCardToClipboard() {
   const canvas = drawStatsShareCard();
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(async (blob) => {
-      if (!blob) { reject(new Error('blob failed')); return; }
-      try {
-        if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-          resolve('image');
-          return;
-        }
-      } catch (err) { /* fall through to text fallback */ }
-      reject(new Error('no-image-clipboard'));
-    }, 'image/png');
-  });
-}
-
-function buildShareText() {
-  const brand = document.getElementById('stats-brand-name').textContent;
-  const rev = document.getElementById('stats-revenue').textContent;
-  const revLabel = document.getElementById('stats-revenue-label').textContent;
-  const period = document.getElementById('stats-period').textContent;
-  const roas = document.getElementById('stats-roas').textContent;
-  const story = document.getElementById('stats-story').textContent;
-  const spend = document.getElementById('stats-spend').textContent;
-  const customers = document.getElementById('stats-customers').textContent;
-  const trendEl = document.getElementById('stats-trend-pill');
-  const trend = trendEl && !trendEl.classList.contains('hidden') ? trendEl.textContent : '';
-  const top = document.getElementById('stats-top-ad').textContent;
-  const lines = [
-    '\u2726 Merlin Got Me',
-    `${brand} \u2014 ${period}`,
-    `${rev} ${revLabel}`,
-  ];
-  if (trend) lines.push(trend);
-  if (story) lines.push(story);
-  lines.push(`${spend} spent \u00b7 ${roas} return \u00b7 ${customers} new customers`);
-  if (top) lines.push(top);
-  lines.push('merlingotme.com');
-  return lines.join('\n');
+  // Path 1 — browser ClipboardItem. Fast, zero round-trip. Fails in many
+  // Electron window states (unfocused, file:// origin, strict perms).
+  try {
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
+      if (blob) {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        return 'image';
+      }
+    }
+  } catch { /* fall through to IPC */ }
+  // Path 2 — Electron main-process clipboard. Bypasses browser sandbox
+  // entirely. This is the reliable path; the ClipboardItem attempt above
+  // is only there to stay fast when it happens to work.
+  try {
+    const dataUrl = canvas.toDataURL('image/png');
+    const res = await merlin.copyImageDataUrl(dataUrl);
+    if (res && res.success) return 'image';
+  } catch { /* fall through to save */ }
+  // Path 3 — save to disk and reveal. Still an image, never text.
+  try {
+    const dataUrl = canvas.toDataURL('image/png');
+    const name = `merlin-share-${Date.now()}.png`;
+    const res = await merlin.saveImageDataUrl(dataUrl, name);
+    if (res && res.success) return 'saved';
+  } catch { /* fall through */ }
+  throw new Error('no-image-clipboard');
 }
 
 document.getElementById('stats-share').addEventListener('click', async () => {
   const btn = document.getElementById('stats-share');
   const orig = btn.innerHTML;
-  let mode = 'text';
+  let mode = 'failed';
   try {
-    await copyShareCardToClipboard();
-    mode = 'image';
-  } catch {
-    try { await navigator.clipboard.writeText(buildShareText()); } catch {}
-    mode = 'text';
-  }
-  btn.textContent = mode === 'image' ? 'Image copied!' : 'Text copied!';
-  btn.style.background = 'var(--success)';
+    mode = await copyShareCardToClipboard();
+  } catch { mode = 'failed'; }
+  const label = mode === 'image' ? 'Image copied!'
+              : mode === 'saved' ? 'Saved to Downloads'
+              : 'Couldn\u2019t copy';
+  btn.textContent = label;
+  btn.style.background = mode === 'failed' ? '' : 'var(--success)';
   setTimeout(() => { btn.innerHTML = orig; btn.style.background = ''; }, 2000);
 });
 
@@ -4103,6 +4142,83 @@ function showSpellToast(title, detail, type) {
   }, 5000);
 }
 
+// Undo toast — appears after a destructive turn (ad pause) and offers a
+// one-click revert that re-routes through the SDK as a silent message.
+// The SDK / skill layer is the source of truth for what was killed, so
+// we just describe the intent ("reactivate the ad you just paused") and
+// let Claude resolve the target from recent conversation context.
+function showUndoToast({ title, detail, undoPrompt }) {
+  const offset = _toastCount * 56;
+  _toastCount++;
+  const toast = document.createElement('div');
+  toast.className = 'spell-toast spell-toast-undo';
+  toast.style.bottom = `${80 + offset}px`;
+  const body = document.createElement('div');
+  body.style.flex = '1';
+  body.innerHTML = `<strong>${escapeHtml(title)}</strong>`;
+  if (detail) body.innerHTML += `<br><span style="font-size:11px;opacity:.7">${escapeHtml(detail).slice(0, 80)}</span>`;
+  toast.appendChild(body);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'spell-toast-undo-btn';
+  btn.textContent = 'Undo';
+  let fired = false;
+  const dismiss = () => {
+    toast.style.opacity = '0';
+    setTimeout(() => { toast.remove(); _toastCount = Math.max(0, _toastCount - 1); }, 300);
+  };
+  btn.addEventListener('click', () => {
+    if (fired) return;
+    fired = true;
+    btn.textContent = 'Undoing…';
+    btn.disabled = true;
+    try { merlin.sendSilent(undoPrompt); } catch {}
+    dismiss();
+  });
+  toast.appendChild(btn);
+  document.body.appendChild(toast);
+  setTimeout(() => { if (!fired) dismiss(); }, 6000);
+}
+
+// Queue of kill actions observed this turn. We wait until `result` (turn
+// end) before surfacing the undo toast so the toast only appears after
+// the model's response has printed — otherwise the toast overlaps the
+// still-streaming "Pausing…" status row and feels like a glitch.
+let _undoQueue = [];
+function queueKillForUndo(toolName, input) {
+  if (!toolName || typeof toolName !== 'string') return;
+  if (!toolName.startsWith('mcp__merlin__')) return;
+  if (!input || input.action !== 'kill') return;
+  const tool = toolName.slice('mcp__merlin__'.length);
+  const platformKey = tool.replace('_ads', '');
+  const platformLabel = platformKey.charAt(0).toUpperCase() + platformKey.slice(1);
+  const adRef = input.adId || input.ad_id || input.name || '';
+  _undoQueue.push({
+    platformKey,
+    platformLabel,
+    adRef,
+  });
+}
+function flushUndoQueue() {
+  if (!_undoQueue.length) return;
+  // Collapse to one toast per platform — if Claude killed six ads in a
+  // turn, surfacing six toasts would bury the rest of the UI. One toast
+  // offering to "reactivate what you just paused on Meta" covers the
+  // batch; Claude resolves the set from recent conversation context.
+  const byPlatform = new Map();
+  for (const k of _undoQueue) {
+    if (!byPlatform.has(k.platformKey)) byPlatform.set(k.platformKey, k);
+  }
+  _undoQueue = [];
+  for (const k of byPlatform.values()) {
+    showUndoToast({
+      title: `Paused ${k.platformLabel} ad${k.adRef ? '' : 's'}`,
+      detail: k.adRef ? k.adRef : 'Tap Undo to reactivate.',
+      undoPrompt: `Reactivate the ${k.platformLabel} ad${k.adRef ? ` (${k.adRef})` : 's'} you just paused. Use the activate action on ${k.platformKey}.`,
+    });
+  }
+}
+
 // ── Input Handling ──────────────────────────────────────────
 // ── Ticking Timer ───────────────────────────────────────────
 let tickerInterval = null;
@@ -4282,6 +4398,9 @@ function sendMessage() {
   }
 
   checkFrustration(text);
+  // First real turn — clear the starter chips so they don't clutter the
+  // thread once the conversation has begun.
+  try { dismissStarterChips(); } catch {}
   // New turn cancels any in-flight TTS so the wizard never talks over itself.
   stopSpeaking();
   _userMessageCount = (_userMessageCount || 0) + 1;

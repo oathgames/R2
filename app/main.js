@@ -3936,6 +3936,50 @@ ipcMain.handle('copy-image', (_, filePath) => {
   } catch { return { success: false }; }
 });
 
+// Copy a PNG data URL straight into the OS clipboard as an image via
+// Electron's native clipboard API. This is the reliable path for the
+// share card — the browser ClipboardItem API is blocked in many
+// renderer contexts (e.g. when the window isn't focused, on file://
+// origins, behind certain permission policies) and silently fails. The
+// share card must always land as an image, never text, because "text
+// copied!" looks broken next to a big friendly "Share" button.
+ipcMain.handle('copy-image-data-url', (_, dataUrl) => {
+  try {
+    if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
+      return { success: false, reason: 'bad-data-url' };
+    }
+    const { nativeImage, clipboard } = require('electron');
+    const img = nativeImage.createFromDataURL(dataUrl);
+    if (img.isEmpty()) return { success: false, reason: 'empty-image' };
+    clipboard.writeImage(img);
+    return { success: true };
+  } catch (err) {
+    return { success: false, reason: String(err && err.message || err) };
+  }
+});
+
+// Last-resort fallback: drop the PNG onto disk in the user's Downloads
+// folder and reveal it. Still an image — users can drag it straight
+// from the shell to any social/chat app. Never falls through to text.
+ipcMain.handle('save-image-data-url', async (_, dataUrl, filename) => {
+  try {
+    if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) {
+      return { success: false, reason: 'bad-data-url' };
+    }
+    const safeName = String(filename || 'merlin-share.png').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'merlin-share.png';
+    const b64 = dataUrl.slice('data:image/png;base64,'.length);
+    const buf = Buffer.from(b64, 'base64');
+    if (!buf.length || buf.length > 16 * 1024 * 1024) return { success: false, reason: 'bad-buffer' };
+    const downloads = app.getPath('downloads');
+    const out = path.join(downloads, safeName);
+    await fs.promises.writeFile(out, buf);
+    try { shell.showItemInFolder(out); } catch {}
+    return { success: true, path: out };
+  } catch (err) {
+    return { success: false, reason: String(err && err.message || err) };
+  }
+});
+
 ipcMain.handle('open-folder', (_, folderPath) => {
   if (!folderPath || typeof folderPath !== 'string') return;
   const fullPath = path.resolve(appRoot, folderPath);
