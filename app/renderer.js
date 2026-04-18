@@ -1984,22 +1984,25 @@ function updateVertical(vertical) {
   currentVerticalProfile = profile;
 
   if (tag) {
-    // Show the canonical label when we recognized the vertical, otherwise
-    // display the raw string so mis-detected verticals still render
-    // something instead of a blank chip. The chip itself is clickable —
-    // see `vertical-tag` click handler below for the picker.
+    // Read-only status pill: confirms what Merlin inferred at onboarding so
+    // the user knows the tailoring is in effect. No click affordance — the
+    // vertical follows the active brand. To re-classify, edit brand.md or
+    // re-run /merlin setup for that brand.
     if (profile.key) {
       tag.textContent = profile.label;
-      tag.title = `Vertical: ${profile.label}\u00a0\u00a0·\u00a0\u00a0click to change`;
+      tag.title = `Category: ${profile.label} (set during setup)`;
+      tag.style.display = '';
     } else if (vertical) {
       tag.textContent = vertical;
-      tag.title = 'Vertical unrecognized — click to pick one';
+      tag.title = 'Category: unrecognized — re-run /merlin to re-classify';
+      tag.style.display = '';
     } else {
-      tag.textContent = '+ set vertical';
-      tag.title = 'Click to pick your business category';
+      // Hide the chip entirely until onboarding writes a vertical.
+      tag.textContent = '';
+      tag.title = '';
+      tag.style.display = 'none';
     }
-    // Make the tag obviously interactive.
-    tag.style.cursor = 'pointer';
+    tag.style.cursor = 'default';
   }
 
   // Tile filter: only hide tiles when we recognize the vertical. Unknown
@@ -2013,105 +2016,6 @@ function updateVertical(vertical) {
     tiles.forEach(t => { t.style.display = ''; });
   }
 }
-
-// ── Vertical picker popover ────────────────────────────────
-// Clicking the vertical tag in the header opens a chip list. One click
-// persists to config via saveConfigField and updates the UI immediately.
-// Phase 1: we only persist to merlin-config.json (per-brand). The
-// setup flow still writes the vertical to brand.md on first run; this
-// picker is the "I picked wrong, let me fix it" path.
-function openVerticalPicker(anchorEl) {
-  // Remove any existing picker (tag was re-clicked).
-  document.querySelectorAll('.vertical-picker-popover').forEach(p => p.remove());
-
-  const popover = document.createElement('div');
-  popover.className = 'vertical-picker-popover';
-  popover.setAttribute('role', 'listbox');
-  popover.setAttribute('aria-label', 'Pick your business category');
-  Object.assign(popover.style, {
-    position: 'absolute',
-    zIndex: '9999',
-    background: 'var(--bg-elevated, #1e1e1e)',
-    border: '1px solid var(--border, #333)',
-    borderRadius: '8px',
-    boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-    padding: '8px',
-    minWidth: '220px',
-    maxWidth: '280px',
-    fontSize: '13px',
-  });
-
-  const heading = document.createElement('div');
-  heading.textContent = 'What kind of business?';
-  Object.assign(heading.style, { padding: '4px 6px 8px', fontWeight: '600', opacity: '0.85' });
-  popover.appendChild(heading);
-
-  const active = currentVerticalProfile.key;
-  Object.values(VERTICAL_PROFILES).forEach(p => {
-    const chip = document.createElement('div');
-    chip.className = 'vertical-picker-chip';
-    chip.setAttribute('role', 'option');
-    chip.setAttribute('aria-selected', p.key === active ? 'true' : 'false');
-    chip.textContent = p.label;
-    Object.assign(chip.style, {
-      padding: '6px 10px',
-      margin: '2px 0',
-      borderRadius: '6px',
-      cursor: 'pointer',
-      background: p.key === active ? 'var(--accent-soft, rgba(100,140,255,0.15))' : 'transparent',
-    });
-    chip.addEventListener('mouseenter', () => {
-      if (p.key !== active) chip.style.background = 'var(--hover-bg, rgba(255,255,255,0.06))';
-    });
-    chip.addEventListener('mouseleave', () => {
-      if (p.key !== active) chip.style.background = 'transparent';
-    });
-    chip.addEventListener('click', async () => {
-      popover.remove();
-      const select = document.getElementById('brand-select');
-      const brand = select?.value && select.value !== '__add__' ? select.value : null;
-      if (!brand) return;
-      try {
-        await merlin.saveConfigField('vertical', p.key, brand);
-        updateVertical(p.key);
-      } catch (err) {
-        console.warn('[vertical-picker] save failed', err);
-      }
-    });
-    popover.appendChild(chip);
-  });
-
-  // Position the popover under the tag.
-  const rect = anchorEl.getBoundingClientRect();
-  popover.style.top = `${rect.bottom + window.scrollY + 4}px`;
-  popover.style.left = `${rect.left + window.scrollX}px`;
-  document.body.appendChild(popover);
-
-  // Dismiss on outside click / Escape.
-  const dismiss = (e) => {
-    if (e.type === 'keydown' && e.key !== 'Escape') return;
-    if (e.type === 'click' && (popover.contains(e.target) || anchorEl.contains(e.target))) return;
-    popover.remove();
-    document.removeEventListener('click', dismiss, true);
-    document.removeEventListener('keydown', dismiss, true);
-  };
-  // Defer binding so the opening click doesn't immediately close it.
-  setTimeout(() => {
-    document.addEventListener('click', dismiss, true);
-    document.addEventListener('keydown', dismiss, true);
-  }, 0);
-}
-
-// Wire the picker to the vertical tag. Guard with optional-chaining —
-// the element may not exist in every layout variant.
-(function wireVerticalPicker() {
-  const tag = document.getElementById('vertical-tag');
-  if (!tag) return;
-  tag.addEventListener('click', (e) => {
-    e.stopPropagation();
-    openVerticalPicker(tag);
-  });
-})();
 
 document.getElementById('brand-select').addEventListener('change', (e) => {
   // Handle "+ New Brand" option
