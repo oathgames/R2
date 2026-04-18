@@ -44,3 +44,5 @@ jobs:
         run: node app/oauth-persist.test.js
       - name: sentence splitter
         run: node app/sentence-splitter.test.js
+      - name: update-runner terminal-visibility lockdown
+        run: node app/update-runner.test.js

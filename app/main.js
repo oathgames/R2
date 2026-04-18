@@ -7140,22 +7140,43 @@ async function installUpdateFromLatestRelease() {
       assetName = a.name;
       runner = (filePath) => {
         const { spawn } = require('child_process');
-        // REGRESSION GUARD (2026-04-18): the previous batch had no exit, no
-        // logging, and a single `start "" appExe` with no retry. Symptoms a
-        // real user hit on v1.7.0 → v1.8.0:
-        //   1. A blank minimized cmd window stayed open forever because the
-        //      batch had no `exit` statement — if ANY line hung (AV scan, NSIS
-        //      uninstaller prompt, disk flush) the window was undismissable.
-        //   2. Install step would fail silently because `start "" appExe`
-        //      fires immediately after NSIS returns, but on slow disks /
-        //      Defender-attention paths the new Merlin.exe isn't finished
-        //      writing yet — start launches, process exits non-zero, no retry.
-        //   3. Zero visibility: batch output went to the void, so we can't
-        //      tell the difference between "installer succeeded and launched"
-        //      vs "installer silent-failed and we asked Windows to start a
-        //      file that doesn't exist yet".
-        // Fix: exit /b at the end, log to %TEMP%\merlin-update.log, retry the
-        // relaunch up to 5× with a 2s backoff so AV/disk-flush racers resolve.
+        // REGRESSION GUARD (2026-04-18 terminal-visibility): an earlier fix
+        // today that added retry/logging left a minimized cmd window on
+        // screen and — worse — let Merlin.exe inherit stdio from that
+        // window, so the user saw a full terminal full of `[workspace-sync]`
+        // / `[WS+HTTP] Server listening on port …` / `[setup-probe]` /
+        // `[auth]` / `[update]` log lines right after clicking Install.
+        // Three compounding causes:
+        //   1. `cmd.exe /c start /min "" batPath` — the outer cmd was hidden
+        //      via windowsHide, but `start /min` then created a NEW, visible
+        //      (minimized) console window for the batch. Minimized ≠ hidden.
+        //      The batch's cwd inherits from the spawning Electron process
+        //      (the install dir), so the title read "C:\…\Programs\Merlin>".
+        //   2. `start "" "${appExe}"` inside that visible console — for GUI
+        //      subsystem apps `start` does NOT allocate a new console, so
+        //      the child inherits the parent cmd's console and stdio. Every
+        //      `console.log` from main.js streamed into the minimized
+        //      window, which any click surfaced as a full terminal.
+        //   3. `timeout /t 2 /nobreak` requires a console and exits
+        //      immediately with an input-redirection error when the cmd has
+        //      CREATE_NO_WINDOW — so the retry loop's 2s backoff would have
+        //      become a busy spin on disk, defeating the AV/disk-flush grace
+        //      window this loop exists for. `ping -n 3 127.0.0.1 >nul`
+        //      works in any console or no-console context.
+        // Fix (all three must hold, see update-runner.test.js):
+        //   A. Spawn the batch directly via `cmd.exe /c batPath` — never
+        //      wrap it in `start /min` or any `start` invocation that creates
+        //      a new window. `windowsHide: true` + `stdio: 'ignore'` +
+        //      `detached: true` keeps the batch's cmd fully hidden.
+        //   B. Redirect Merlin's stdio to nul on the launch line
+        //      (`start "" "${appExe}" >nul 2>&1`) so even if a future edit
+        //      reintroduces a visible cmd, the child inherits nul handles.
+        //   C. Use `ping -n N 127.0.0.1 >nul` for every sleep — never
+        //      `timeout`. Silent in no-console context.
+        // Retry/logging semantics from the earlier guard still hold:
+        //   - exit /b at the end so the cmd window always closes.
+        //   - All output redirected to %TEMP%\merlin-update.log.
+        //   - Relaunch retries up to 5× with ~2s backoff on appExe presence.
         const installDir = path.dirname(app.getPath('exe'));
         const appExe = path.join(installDir, 'Merlin.exe');
         const logPath = path.join(os.tmpdir(), 'merlin-update.log');
@@ -7169,11 +7190,11 @@ async function installUpdateFromLatestRelease() {
           `if exist "${appExe}" goto launch_now`,
           'set /a RELAUNCH_TRIES+=1',
           'if %RELAUNCH_TRIES% geq 5 goto launch_failed',
-          'timeout /t 2 /nobreak >nul',
+          'ping -n 3 127.0.0.1 >nul 2>&1',
           'goto retry_launch',
           ':launch_now',
           `echo [%DATE% %TIME%] launching "${appExe}" (tries=%RELAUNCH_TRIES%) >> "${logPath}"`,
-          `start "" "${appExe}"`,
+          `start "" "${appExe}" >nul 2>&1`,
           'goto cleanup',
           ':launch_failed',
           `echo [%DATE% %TIME%] ERROR: appExe not found after 5 retries: "${appExe}" >> "${logPath}"`,
@@ -7182,7 +7203,7 @@ async function installUpdateFromLatestRelease() {
         ].join('\r\n') + '\r\n';
         const batPath = path.join(os.tmpdir(), 'merlin-update.bat');
         fs.writeFileSync(batPath, script);
-        const child = spawn('cmd.exe', ['/c', 'start', '/min', '', batPath], {
+        const child = spawn('cmd.exe', ['/c', batPath], {
           detached: true,
           stdio: 'ignore',
           windowsHide: true,
@@ -8033,11 +8054,15 @@ async function downloadAndApplyUpdate() {
           console.log(`[update] asar staged (${(asarData.length / 1024 / 1024).toFixed(1)} MB) → ${stagedPath}`);
           const swapScript = path.join(appInstall, 'update-swap.cmd');
           const exePath = process.execPath;
+          // See REGRESSION GUARD in installUpdateFromLatestRelease (runner):
+          // `ping` instead of `timeout` so the 2s wait survives a cmd with
+          // CREATE_NO_WINDOW, and `>nul 2>&1` on start "" so Merlin inherits
+          // nul stdio instead of the spawning cmd's console.
           fs.writeFileSync(swapScript, [
             '@echo off',
-            `timeout /t 2 /nobreak >nul`,
+            `ping -n 3 127.0.0.1 >nul 2>&1`,
             `move /Y "${stagedPath}" "${asarPath}"`,
-            `start "" "${exePath}"`,
+            `start "" "${exePath}" >nul 2>&1`,
             `del "%~f0"`,
           ].join('\r\n'));
           console.log('[update] swap script written:', swapScript);
@@ -8146,11 +8171,14 @@ app.whenReady().then(async () => {
         // inline so the safety net still works on its own.
         if (!fs.existsSync(swapScript)) {
           try {
+            // Same shape as the main swap script — see REGRESSION GUARD
+            // in installUpdateFromLatestRelease for the rationale behind
+            // `ping` over `timeout` and `>nul 2>&1` on the start line.
             fs.writeFileSync(swapScript, [
               '@echo off',
-              `timeout /t 2 /nobreak >nul`,
+              `ping -n 3 127.0.0.1 >nul 2>&1`,
               `move /Y "${stagedAsar}" "${asarPath}"`,
-              `start "" "${exePath}"`,
+              `start "" "${exePath}" >nul 2>&1`,
               `del "%~f0"`,
             ].join('\r\n'));
           } catch (e) {
