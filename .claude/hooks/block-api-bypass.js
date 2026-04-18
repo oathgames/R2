@@ -140,6 +140,12 @@ const PROTECTED_PATH_PATTERNS = [
   /\.merlin-ratelimit(\.|$)/i,
   /\.merlin-audit(\.|$)/i,
   /\.merlin-reddit-cache(\.|$)/i,
+  // Desktop relay credentials — encrypted via safeStorage but contains the
+  // session + desktop token that authenticate to the Cloudflare relay.
+  // Exfiltration would let an attacker impersonate the desktop and receive
+  // every message the PWA sends. Apply the same (\.|$) atomic-write guard
+  // as the other blobs.
+  /\.merlin-relay-creds(\.|$)/i,
   /\.rate-state(\.|$)/i,
   /\.rate-secret(\.|$)/i,
   // REGRESSION GUARD (2026-04-14, adversary loop 2):
@@ -166,7 +172,7 @@ const PROTECTED_PATH_PATTERNS = [
   // through this hook (the settings.json inline regex catches Read/Edit
   // but not Bash). Leaking these files reveals the IPC surface, auth
   // handshake, and redaction patterns.
-  /[/\\]app[/\\](main|renderer|preload|ws-server|mcp-server|mcp-tools|mcp-redact|tts-worker)\.js$/i,
+  /[/\\]app[/\\](main|renderer|preload|ws-server|relay-client|mcp-server|mcp-tools|mcp-redact|tts-worker)\.js$/i,
   // Claude Code's own OAuth credentials file. Combined with the broad
   // `Bash(cp *)` allow-list, an unprotected path would let an adversary
   // cp it elsewhere and then Read it.

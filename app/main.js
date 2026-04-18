@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const wsServer = require('./ws-server');
+const relayClient = require('./relay-client');
 const { generateQRDataUri } = require('./qr');
 
 // Register merlin:// as a privileged scheme BEFORE app ready. Without this,
@@ -1215,7 +1216,12 @@ async function createWindow() {
 
   // Start WebSocket server for PWA mobile clients
   await wsServer.startServer();
-  wsServer.setHandlers({
+
+  // Same handler set used for both local LAN WS and outbound relay. One
+  // source of truth for how desktop-side acts on messages coming FROM a
+  // phone — preserves the guarantee that a compromise-at-the-relay never
+  // lets the phone do something LAN can't do (or vice versa).
+  const mobileHandlers = {
     onSendMessage: (text) => {
       if (typeof text !== 'string' || text.length > 50000) return; // validate input
       const content = injectActiveBrand(text);
@@ -1238,7 +1244,18 @@ async function createWindow() {
       const resolve = pendingApprovals.get(toolUseID);
       if (resolve) { resolve.fn(answers); pendingApprovals.delete(toolUseID); }
     },
-  });
+  };
+  wsServer.setHandlers(mobileHandlers);
+  relayClient.setHandlers(mobileHandlers);
+
+  // Fan LAN broadcasts out to the relay so roaming phones see the same stream.
+  wsServer.setRelayForward(relayClient.forward);
+
+  // Reconnect to the relay if we have stored creds from a prior session.
+  // First-time setup (minting a fresh session + QR) happens lazily via the
+  // get-mobile-qr IPC — no need to initiate pairing just because the app
+  // started.
+  relayClient.start().catch(() => { /* offline boot — PWA-over-internet stays dormant */ });
 }
 
 // Store a pending approval with auto-expiry timeout
@@ -5836,11 +5853,40 @@ ipcMain.handle('win-maximize', () => { if (win) { win.isMaximized() ? win.unmaxi
 ipcMain.handle('win-close', () => { if (win) win.close(); });
 
 ipcMain.handle('get-mobile-qr', async () => {
-  const info = wsServer.getConnectionInfo();
-  const protocol = info.secure ? 'https' : 'http';
-  const pwaUrl = `${protocol}://${info.host}:${info.port}`;
-  const qrDataUri = await generateQRDataUri(`${pwaUrl}#${info.token}`);
-  return { qrDataUri, pwaUrl, ...info };
+  // Preferred: relay pairing URL — works over cellular, survives NAT, and
+  // is the only mode where approvals + push notifications reach a phone
+  // that's away from home WiFi. Fall back to the LAN QR only if the relay
+  // is unreachable (offline, pinned DNS, cert error).
+  try {
+    const pair = await relayClient.initPairing();
+    const qrDataUri = await generateQRDataUri(pair.pairUrl);
+    return {
+      qrDataUri,
+      pwaUrl: pair.pairUrl,
+      mode: 'relay',
+      sessionId: pair.sessionId,
+      expiresInSec: pair.expiresInSec,
+    };
+  } catch (e) {
+    const info = wsServer.getConnectionInfo();
+    const protocol = info.secure ? 'https' : 'http';
+    const pwaUrl = `${protocol}://${info.host}:${info.port}`;
+    const qrDataUri = await generateQRDataUri(`${pwaUrl}#${info.token}`);
+    return {
+      qrDataUri,
+      pwaUrl,
+      mode: 'lan',
+      relayError: String(e?.message || e).slice(0, 64),
+      ...info,
+    };
+  }
+});
+
+ipcMain.handle('get-relay-state', () => relayClient.getState());
+ipcMain.handle('rotate-relay-pairing', async () => {
+  const pair = await relayClient.rotatePairing();
+  const qrDataUri = await generateQRDataUri(pair.pairUrl);
+  return { qrDataUri, pwaUrl: pair.pairUrl, sessionId: pair.sessionId, expiresInSec: pair.expiresInSec };
 });
 
 ipcMain.handle('save-pasted-media', (_, dataUrl, filename) => {
