@@ -3961,17 +3961,36 @@ ipcMain.handle('refresh-perf', async (_, brandName, days) => {
   });
 });
 
-ipcMain.handle('get-perf-updated', (_, brandName) => {
+ipcMain.handle('get-perf-updated', async (_, brandName) => {
   try {
     const resultsDir = brandName ? path.join(appRoot, 'results', brandName) : path.join(appRoot, 'results');
-    return fs.readFileSync(path.join(resultsDir, '.perf-updated'), 'utf8').trim();
+    const raw = await fs.promises.readFile(path.join(resultsDir, '.perf-updated'), 'utf8');
+    return raw.trim();
   } catch { return null; }
 });
 
 // ── Perf bar cache (keyed by brand+days, mtime-invalidated) ──
 const perfCache = {};
 
-function computePerfSummary(days, brandName) {
+// Parsed dashboard_*.json cache. Key: absolute path. Value: { mtimeMs, size,
+// data }. Invalidated when stat() returns a different mtime or size — size is
+// a defensive second signal because some filesystems (SMB, USB) have coarse
+// mtime resolution. This cache is shared across computePerfSummary (perf bar)
+// and get-agency-report (reports overlay), so a single brand's dashboard is
+// parsed at most once across the two call paths.
+const dashboardFileCache = new Map();
+async function readDashboardJson(fullPath) {
+  let st;
+  try { st = await fs.promises.stat(fullPath); } catch { return null; }
+  const hit = dashboardFileCache.get(fullPath);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.data;
+  let data = null;
+  try { data = JSON.parse(await fs.promises.readFile(fullPath, 'utf8')); } catch {}
+  dashboardFileCache.set(fullPath, { mtimeMs: st.mtimeMs, size: st.size, data });
+  return data;
+}
+
+async function computePerfSummary(days, brandName) {
   // REGRESSION GUARD (2026-04-15, codex per-brand revenue audit — finding #1):
   // The perf bar MUST only surface dashboard files whose `period_days`
   // matches the period the UI is asking for. Previously this function took
@@ -3987,7 +4006,7 @@ function computePerfSummary(days, brandName) {
   const resultsDir = brandName ? path.join(appRoot, 'results', brandName) : path.join(appRoot, 'results');
   const allFiles = [];
   try {
-    for (const f of fs.readdirSync(resultsDir)) {
+    for (const f of await fs.promises.readdir(resultsDir)) {
       if (f.startsWith('dashboard_') && f.endsWith('.json')) {
         allFiles.push({ name: f, path: path.join(resultsDir, f) });
       }
@@ -3997,22 +4016,23 @@ function computePerfSummary(days, brandName) {
 
   allFiles.sort((a, b) => a.name.localeCompare(b.name));
 
-  // Parse each file (from newest to oldest) and keep only those whose
-  // recorded period_days matches the caller's request. Legacy files
-  // written before the binary started persisting period_days get an
-  // implicit match (`undefined === undefined`) and are skipped since we
-  // can't prove they came from the right window. The binary has been
-  // writing period_days since v0.1 of the dashboard action, so only very
-  // old results directories will hit this fallback.
+  // Parse each file in parallel and keep only those whose recorded
+  // period_days matches the caller's request. Legacy files written before
+  // the binary started persisting period_days get an implicit match
+  // (`undefined === undefined`) and are skipped since we can't prove they
+  // came from the right window. The binary has been writing period_days
+  // since v0.1 of the dashboard action, so only very old results
+  // directories will hit this fallback. readDashboardJson caches on
+  // (path, mtime, size) so steady-state perf bar polls re-parse nothing.
+  const parsedList = await Promise.all(allFiles.map(f => readDashboardJson(f.path)));
   const files = [];
   const parsedCache = new Map();
-  for (const f of allFiles) {
-    let parsed = null;
-    try { parsed = JSON.parse(fs.readFileSync(f.path, 'utf8')); } catch {}
+  for (let i = 0; i < allFiles.length; i++) {
+    const parsed = parsedList[i];
     if (!parsed) continue;
-    parsedCache.set(f.name, parsed);
+    parsedCache.set(allFiles[i].name, parsed);
     const filePeriod = typeof parsed.period_days === 'number' ? parsed.period_days : null;
-    if (filePeriod === days) files.push(f);
+    if (filePeriod === days) files.push(allFiles[i]);
   }
   if (files.length === 0) return null;
 
@@ -4070,7 +4090,7 @@ function computePerfSummary(days, brandName) {
   };
 }
 
-ipcMain.handle('get-perf-summary', (_, requestedDays, brandName) => {
+ipcMain.handle('get-perf-summary', async (_, requestedDays, brandName) => {
   const days = requestedDays || 7;
   const key = brandName || '_global';
 
@@ -4079,13 +4099,13 @@ ipcMain.handle('get-perf-summary', (_, requestedDays, brandName) => {
     const cached = perfCache[key][days];
     const resultsDir = brandName ? path.join(appRoot, 'results', brandName) : path.join(appRoot, 'results');
     try {
-      const mtime = fs.statSync(resultsDir).mtimeMs;
+      const mtime = (await fs.promises.stat(resultsDir)).mtimeMs;
       if (mtime <= cached.fetchedAt) return cached.data;
     } catch {}
   }
 
   try {
-    const result = computePerfSummary(days, brandName);
+    const result = await computePerfSummary(days, brandName);
     if (!perfCache[key]) perfCache[key] = {};
     perfCache[key][days] = { data: result, fetchedAt: Date.now() };
     return result;
@@ -4105,7 +4125,7 @@ ipcMain.handle('get-perf-summary', (_, requestedDays, brandName) => {
 //
 // DO NOT collapse this back into get-perf-summary. The perf bar is
 // single-brand and its cache shape would fight with multi-brand aggregation.
-ipcMain.handle('get-agency-report', (_, requestedDays, brandNames) => {
+ipcMain.handle('get-agency-report', async (_, requestedDays, brandNames) => {
   const days = requestedDays || 7;
   // Input validation — preload validates the array as an object/array shape,
   // but the main process re-validates each entry as defense-in-depth.
@@ -4114,31 +4134,15 @@ ipcMain.handle('get-agency-report', (_, requestedDays, brandNames) => {
     ? brandNames.filter(b => typeof b === 'string' && BRAND_RE.test(b)).slice(0, 200)
     : [];
 
-  const perBrand = brands.map(brandName => {
+  // Fan out per-brand summaries in parallel. computePerfSummary already
+  // surfaces `newCustomers` (from the latest matching dashboard file), and
+  // readDashboardJson caches parsed files by (path, mtime, size) so repeated
+  // report runs over the same period are essentially free.
+  const perBrand = await Promise.all(brands.map(async brandName => {
     let data = null;
     try {
-      const summary = computePerfSummary(days, brandName);
+      const summary = await computePerfSummary(days, brandName);
       if (summary) {
-        // computePerfSummary already filters to files whose period_days
-        // matches `days`, so the per-brand numbers are truly scoped to the
-        // requested window. We additionally pull new_customers directly
-        // from the underlying dashboard file since the perf bar doesn't
-        // surface that field.
-        let newCustomers = 0;
-        try {
-          const resultsDir = path.join(appRoot, 'results', brandName);
-          const files = fs.readdirSync(resultsDir)
-            .filter(f => f.startsWith('dashboard_') && f.endsWith('.json'))
-            .sort();
-          for (let i = files.length - 1; i >= 0; i--) {
-            const parsed = JSON.parse(fs.readFileSync(path.join(resultsDir, files[i]), 'utf8'));
-            if (parsed.period_days === days) {
-              newCustomers = parsed.new_customers || 0;
-              break;
-            }
-          }
-        } catch {}
-
         const roas = summary.spend > 0 ? summary.revenue / summary.spend : 0;
         const generatedMs = summary.generatedAt ? Date.parse(summary.generatedAt) : 0;
         const ageHours = generatedMs ? (Date.now() - generatedMs) / 3600000 : null;
@@ -4147,14 +4151,14 @@ ipcMain.handle('get-agency-report', (_, requestedDays, brandNames) => {
           spend: summary.spend || 0,
           mer: summary.mer || 0,
           roas,
-          newCustomers,
+          newCustomers: summary.newCustomers || 0,
           generatedAt: summary.generatedAt || null,
           stale: ageHours !== null && ageHours > 48,
         };
       }
     } catch {}
     return { name: brandName, hasData: !!data, data };
-  });
+  }));
 
   // Aggregate across brands with data. Sum money/customer fields; compute
   // blended MER from the totals (never average per-brand MERs — that's
