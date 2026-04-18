@@ -61,6 +61,10 @@
     { "utterance": "set a revenue target of $50k this month", "expectedSkill": "merlin-setup" },
     { "utterance": "do something with my ads", "expectedSkill": "clarify-intent" },
     { "utterance": "help", "expectedSkill": "clarify-intent" },
-    { "utterance": "what now", "expectedSkill": "clarify-intent" }
+    { "utterance": "what now", "expectedSkill": "clarify-intent" },
+    { "utterance": "make a better version of this ad", "expectedSkill": "merlin-tournament" },
+    { "utterance": "beat my current best Meta creative", "expectedSkill": "merlin-tournament" },
+    { "utterance": "tournament my pink-set ad against new variants", "expectedSkill": "merlin-tournament" },
+    { "utterance": "run rival challengers to my winning hook", "expectedSkill": "merlin-tournament" }
   ]
 }

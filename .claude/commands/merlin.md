@@ -21,6 +21,7 @@ Active skills:
 - **merlin-seo** — SEO audit/keywords/rankings/gaps/alt-text + blog generation with internal linking.
 - **merlin-social** — Discord, Klaviyo email, Reddit organic, Threads, competitor ad intel, Slack.
 - **merlin-setup** — first-run onboarding, platform OAuth, scheduled tasks (daily/optimize/digest/memory).
+- **merlin-tournament** — adversarial creative iteration: critic → blind author → blind 3-judge Borda, with k=2 incumbent-wins-twice stop. Use when the user wants to *beat* an existing winner, not write fresh.
 - **clarify-intent** — fallback routing when the request is ambiguous.
 
 ## Fuzzy intent inference
@@ -37,6 +38,7 @@ Users speak loosely. Match intent, not keywords. These **aren't** routing rules 
 | "the email thing", "flows", "Klaviyo" | `merlin-social` |
 | "connect my X", "hook up Y", "plug in Z" | `merlin-setup` |
 | "kill it", "stop the ads", "pause everything" | `merlin-ads` (kill) |
+| "make a better version of this", "beat my best ad", "iterate this hook", "rival variants" | `merlin-tournament` (anchored to an existing creative) |
 | "do something" / request unparseable | `clarify-intent` |
 
 Never default to content creation for vague requests. When in doubt → `clarify-intent`.
