@@ -203,6 +203,12 @@ const PROTECTED_COMMAND_PATTERNS = [
   // Protect framework files from mutation via cp/mv/rm
   /\.claude[/\\]hooks[/\\]/i,
   /\.claude[/\\]commands[/\\]/i,
+  // REGRESSION GUARD (2026-04-18): .claude/skills/ ships routing SKILL.md
+  // files that the Claude SDK loads at startup. A rogue write to a SKILL's
+  // description field could re-route user intent (e.g. swap analytics for
+  // ad-spend). Bash parity with the inline Read|Edit|Write hook — mutating
+  // via `cp`/`mv`/`rm` must be blocked the same way as direct edits.
+  /\.claude[/\\]skills[/\\]/i,
   /\.claude[/\\]settings\.json\b/i,
   // REGRESSION GUARD (2026-04-16): Bash parity with the settings.json
   // inline Read-hook blocklist. Blocks `cat app/ws-server.js`,

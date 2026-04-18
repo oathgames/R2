@@ -1,0 +1,90 @@
+name: Skills Lint
+
+on:
+  push:
+    paths:
+      - '.claude/skills/**'
+      - '.claude/commands/merlin.md'
+      - 'test/validate-skills.js'
+      - 'test/routing-corpus.json'
+      - 'test/run-routing-corpus.js'
+      - 'version.json'
+      - '.github/workflows/skills-lint.yml'
+  pull_request:
+    paths:
+      - '.claude/skills/**'
+      - '.claude/commands/merlin.md'
+      - 'test/validate-skills.js'
+      - 'test/routing-corpus.json'
+      - 'test/run-routing-corpus.js'
+      - 'version.json'
+      - '.github/workflows/skills-lint.yml'
+  # Monthly audit — scheduled, produces a draft PR with telemetry summary
+  # if description/byte-budget drift is detected against aggregated wisdom.
+  schedule:
+    - cron: '0 9 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    name: Validate skill manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run skill validator
+        run: node test/validate-skills.js
+      - name: Verify routing corpus parses + every corpus skill exists
+        run: node test/run-routing-corpus.js
+      - name: Confirm version.json ships every SKILL in `updatable`
+        run: node test/validate-skills.js --check-updatable
+
+  audit:
+    name: Monthly audit (scheduled only)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Pull aggregated routing telemetry from wisdom-api
+        # Telemetry is anonymized counts of (skill, intent_match, fallback_used)
+        # per skill. Endpoint fails closed if no data available (returns []).
+        run: |
+          curl -sS -H "Authorization: Bearer ${{ secrets.WISDOM_READ_TOKEN }}" \
+            "https://api.merlingotme.com/audit/routing-telemetry?days=30" \
+            -o test/.telemetry.json || echo "[]" > test/.telemetry.json
+      - name: Compile audit report
+        id: audit
+        run: node test/validate-skills.js --audit-report > test/.audit-report.md
+      - name: Open draft PR if drift detected
+        # Only open if the report contains actionable findings. The audit script
+        # exits 0 with empty-marker output when nothing needs attention.
+        run: |
+          if grep -q "^## Drift detected" test/.audit-report.md; then
+            BRANCH="audit/skills-$(date +%Y%m)"
+            git config user.name "merlin-audit-bot"
+            git config user.email "audit@merlingotme.com"
+            git checkout -b "$BRANCH"
+            git commit --allow-empty -m "Monthly skill audit — manual review required"
+            git push origin "$BRANCH"
+            gh pr create \
+              --draft \
+              --title "Monthly skill audit — $(date +%Y-%m)" \
+              --body-file test/.audit-report.md \
+              --label "audit,skills,manual-review"
+          else
+            echo "No drift detected — nothing to PR."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

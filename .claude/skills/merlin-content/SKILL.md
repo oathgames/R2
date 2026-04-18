@@ -1,0 +1,274 @@
+---
+name: merlin-content
+description: Use when the user wants to make, generate, create, shoot, write, or brief an ad, image, video, voiceover, blog body, email body, landing headline, social post, or any creative asset. Covers the 7-lock Universal Creative Brief, ad-type modules (UGC, Hero, Talking-Head, SaaS, Gameplay, Split-Screen, Transformation), the negative anchor library, continuity locks, realism gradient, the 6 technical anchors for video, the prompt template, the Copy Quality Gate (7-expert panel + AI detector weighted 1.5× + banned-vocab list), the Content Scoring viral formula, and HeyGen one-shot Video Agent routing.
+owner: ryan
+bytes_justification: 20KB — the creative brief (7 locks × 7 ad-type modules × negative-anchor library × realism gradient × video technical anchors × copy quality gate × content scoring) forms one linked reasoning chain. Splitting by asset type would duplicate the shared brief/scoring sections and break cross-references (e.g. UGC brief references the realism gradient which references continuity locks). Hard-capped at 25KB.
+---
+
+# Content Production — Images, Video, Copy
+
+**Customers buy what they see in the ad. If the ad doesn't match the product, it's deceptive — non-negotiable.**
+
+## Image Prompts (`mcp__merlin__content({action: "image"})`)
+
+Before writing ANY image prompt:
+1. **Read every reference photo** in `assets/brands/<brand>/products/<product>/references/` (use the Read tool).
+2. **Describe ONLY what you see** — not what `brand.md` says, not what you imagine.
+3. The app validates your description against reference images and rejects mismatches.
+
+Pass the raw product description to the image action; the app's prompt pipeline layers camera settings, scene anchoring, and negative constraints automatically. Available models: `banana-pro-edit` (default), `banana-pro`, `banana-edit`, `imagen-ultra`, `ideogram`, `flux`. Omit `imageModel` unless the user explicitly requests one.
+
+**Model substitution is a hard failure.** Seedance ≠ Kling, Veo ≠ anything else, image-to-video ≠ text-to-video, edit ≠ base. If the requested model fails/rate-limits/isn't mapped — STOP, surface the binary error, ask. Silent retries on a different model is a bug.
+
+**Fal known aliases (pass as-is, NEVER WebFetch to verify):** `banana`, `banana-edit`, `banana-pro`, `banana-pro-edit`, `flux`, `ideogram`, `recraft`, `seedream`, `imagen`, `imagen-ultra`, `seedance-2`, `veo-3`, `kling`. Full `fal-ai/vendor/model` slugs also accepted. Only WebFetch if a name is neither an alias nor a full slug.
+
+## Universal Creative Brief — the 7 locks (required for every image/video prompt)
+
+Every S-tier prompt is a constraint pyramid — top-down specificity beats top-down creativity. Any prompt that ships without all 7 gets rejected at QA. Output order matters — models weight the opening heavier than the middle.
+
+1. **Shell lock** — one opener line declaring: generation mode (`Pure text generation` vs `Image-to-video from reference`), aspect/format (`Vertical 9:16`, `Square 1:1`, `Landscape 16:9`), duration (`15-second seamless`), stylistic family (`handheld phone-camera UGC vlog`, `hero product cinematic`, `screen-recording SaaS demo`). No ambiguity. This line alone filters 80% of model drift.
+2. **Subject lock** — who/what appears, with specific physical/SKU anchors, followed by the literal phrase **"same [subject] throughout — only [allowed variable] changes"**. People: age range + skin tone + hair + build. Products: SKU name + color + material + packaging. Prevents face morphing and product swapping across beats.
+3. **Beat blocking** — timestamped sections (`0–4s`, `5–9s`, `10–14s`, `15s`). Each beat specifies all of: setting, lighting, wardrobe/packaging state, camera framing, camera motion, subject action, subject emotion, voiceover (with emotion tag), ambient audio. Skip none.
+4. **Evolution spec** (transformation ads only) — explicit `Stage 1 / Stage 2 / Stage 3` paragraph stating what visibly changes and by how much. Concrete visible deltas ("redness faint → reduced → gone"), not abstractions.
+5. **Camera grammar** — per-beat angle + motion + lens feel. UGC: "handheld selfie, slightly shaky, phone-camera lens." Hero: "locked tripod, slow dolly-in, 50mm-equivalent." SaaS: "static screen capture, cursor motion only."
+6. **Audio map** — per-beat ambient layer (`tap dripping faintly`, `fabric rustle`, `keyboard clicks`), plus explicit music directive: `No background music` OR `soft lo-fi bed at -18dB`. Silence about music produces stock-library slop.
+7. **Negative anchor list** — final block titled `No:` listing exact failure modes (see Negative Anchor Library). Model compliance with a list is dramatically higher than with prose prohibitions.
+
+**Style summary line** — after the 7 locks, add one comma-delimited adjective stack (`vertical 9:16, raw handheld vlog, natural light only, phone-camera feel, real skin texture, warm tones, 4K`). This is the model's "final pass" reference.
+
+**Freeze-frame close-out** — for video, last 1s MUST be an explicit final-frame spec: what's in frame, lighting, focus, subject expression. Prevents trailing off into blur.
+
+## Ad-Type Modules (pick ONE; compose with the 7 locks)
+
+Each module = realism register + camera family + audio family + canonical negative anchors. Merlin picks the module from `product.md` + user intent, then fills in the 7 locks.
+
+**UGC / Authenticity** (skincare, supplements, apparel, DTC staples)
+- Realism register: **raw, unfiltered, real skin texture**. Tokens per beat: `pores visible`, `no filter`, `real skin texture`, `phone-camera feel`.
+- Camera: handheld, selfie angle, slight shake, FaceTime tilt, 1–2 ft subject distance.
+- Audio: ambient-only or quiet room tone, voiceover `naturally, casually, not scripted-sounding`, emotion tag before every line (`tired, honest`, `surprised, quieter`, `warm, confident`).
+- Wardrobe progression: same person, outfit shifts across beats to imply time.
+- Banned: studio lighting, ring lights, color grading, bokeh, glam makeup, posed smiles, cinematic moves.
+
+**Hero Product / Cinematic** (luxury, tech, packaged goods, premium beverages)
+- Realism register: **controlled, heightened, tactile**. Product reads like reference photo at 2× gloss.
+- Camera: locked tripod or motion-controlled slider, slow dolly-in, macro pulls on texture, 50/85mm feel.
+- Audio: designed soundscape — soft foley for material, optional cinematic bed at -20dB, no voiceover unless premium narrator.
+- Lighting: three-point or single-key with negative fill, specular highlights on product edges.
+- Banned: handheld shake, phone-camera aesthetic, lens flare presets, vlog language.
+
+**Talking-Head / Testimonial** (SaaS, course, service, B2B)
+- Realism register: **face-forward, eye-contact, natural speech pacing**. Route to HeyGen (`heygen` or `heygen-agent`) when avatar required — **never try to generate talking faces via Veo/Seedance** (face morphing + lip desync).
+- Camera: medium-close, eye-level, static or very slow dolly.
+- Audio: primary voice at -6dB, room-tone floor, no music unless branded bed.
+- Script: EXACT dialogue spoken (40–50 words, 3s hook). Emotion tag before each line.
+- Banned: jump cuts mid-sentence, cinematic color grade, background activity competing with face.
+
+**SaaS / UI Demo** (product walkthroughs, feature launches, app stores)
+- Realism register: **crisp screen capture, cursor grammar, UI reveals**. Screen IS the subject.
+- Camera: static canvas OR zoom-to-region OR picture-in-picture with presenter in corner.
+- Audio: voiceover-led, optional keyboard clicks at -24dB, light motion-graphics stingers at scene changes.
+- Beats: problem frame → open product → perform action → show result → CTA. 3–4s each.
+- Banned: fake UI mocks (always use real screenshots user supplies), auto-generated logos, imagined button labels.
+
+**Gameplay / Reaction** (games, interactive apps, entertainment)
+- Realism register: **split-attention — real gameplay + real reaction face**. Split-screen or PiP.
+- Camera: gameplay = in-engine capture (static), reaction = webcam-handheld with visible excitement.
+- Audio: game audio + authentic reaction voiceover (gasps, "no way," "wait"), music ONLY if diegetic.
+- Banned: staged reactions, fake gameplay mockups, generic game music overlay.
+
+**Split-Screen / Before-After** (fitness, skincare, finance glow-ups, tool comparisons)
+- Realism register: **visually matched compositions** — same angle, same framing, same lighting across both sides. The contrast is the entire creative.
+- Camera: locked framing on both panels, zero motion mismatch.
+- Audio: voiceover narrating the delta, ambient matched or absent.
+- Banned: filters that fake the "after," different crops between panels, music telegraphing the reveal.
+
+**Transformation Story** (UGC or hero, multi-day or multi-beat journey)
+- Must include Evolution spec (lock #4). State 3 visible deltas in one paragraph before beats.
+- Use wardrobe/setting change to cue time — never rely on text overlays unless approved.
+- Close on the payoff beat, not a summary.
+
+## Negative Anchor Library (paste verbatim per module)
+
+- **UGC:** `studio lighting, ring lights, text overlays, cinematic camera moves, artificial bokeh, color grading filters, heavy post-processing, glam makeup, posed smiles, stock music`
+- **Hero Product:** `handheld shake, phone-camera look, vlog aesthetic, casual framing, text overlays, lens-flare presets, dirty/cluttered backgrounds`
+- **Talking-Head:** `jump cuts mid-sentence, background motion competing with face, cinematic color grade, uncanny avatar artifacts, hand morphing`
+- **SaaS / UI Demo:** `fabricated UI elements, imagined button labels, generic stock logos, fake data that looks real, motion blur on text`
+- **Gameplay / Reaction:** `staged reactions, fake gameplay footage, generic music overlay, cuts that hide gameplay moments`
+- **Split-Screen:** `different crops between panels, filters on one side only, mismatched lighting, music telegraphing the reveal`
+- **Universal (always append):** `distorted hands, morphing faces, inconsistent product color, floating limbs, extra fingers, text artifacts`
+
+## Continuity Locks (multi-beat, multi-shot, batch)
+
+When a prompt spans multiple beats OR a batch generates 3+ variations:
+
+1. **Subject identity anchor** — single sentence describing person/product appears in shell AND top of every beat. Copy-paste, don't paraphrase.
+2. **Wardrobe/packaging delta rule** — state exactly what's ALLOWED to change (outfit, setting, lighting) and what MUST stay fixed (face, skin tone, SKU, label). Models interpret silence as permission.
+3. **Lighting arc** — beats span time-of-day (morning → day → golden hour) → spec each lighting explicitly. Never let the model interpolate.
+4. **Reference image leash** (image-to-video / edit modes) — name the reference file and say `maintain exact product identity from reference: color, proportions, label copy, material finish`.
+
+## Realism Gradient — pick ONE register per creative
+
+| Register | Use for | Key tokens |
+|---|---|---|
+| **Raw UGC** | DTC staples, social-proof, relatable verticals | `handheld, phone-camera, real skin texture, no filter, natural light only` |
+| **Polished UGC** | Premium DTC, wellness, apparel at mid-price | `natural light, slight stabilization, clean but not glossy, real textures` |
+| **Hero Product** | Luxury, tech, premium packaged | `locked camera, controlled key light, macro texture, specular highlights` |
+| **Cinematic Narrative** | Brand films, 30-60s anthems | `motion-controlled moves, designed lighting, shallow DOF intentional, color-graded` |
+| **Screen-Native** | SaaS, apps, digital products | `UI-first, cursor grammar, graphic stingers, voiceover-led` |
+
+**Never mix registers inside a single creative.** Raw UGC with cinematic dolly moves reads as fake and tanks CTR. Pick one, commit.
+
+## Video Prompts — 6 Required Anchors (anti-artifact technical floor)
+
+These apply UNDERNEATH the 7 locks and 1 module — they protect against model failure modes regardless of creative type. Every `productHook` or video description MUST include all 6:
+
+1. **Camera motion** — exact: "slow smooth dolly-in," "static tripod," "gentle pan right." Never unspecified.
+2. **Facial consistency** — "consistent facial features" + specific expression ("shy smile," "confident gaze"). Prevents face morphing.
+3. **Hand anatomy** — "anatomically correct hands with fluid, stable movement" + specific gesture. Hands = #1 failure mode.
+4. **Texture lock** — "fixed [fabric/material] textures, stable rendering." Name the specific material.
+5. **Hair physics** — "gentle hair movement" or "minimal hair movement." Default = wild/unrealistic.
+6. **Lighting + finish** — "warm golden hour lighting" (or specific) + "high-definition details, clean professional finish."
+
+## Prompt Template (copy-fill for every video brief)
+
+```
+[Shell lock] {mode}. {aspect}. {duration}. {style family}.
+
+[Subject lock] {specific physical/SKU description}. Same {subject} throughout — only {allowed variable} changes.
+
+[Evolution spec — transformation only] Stage 1: {state}. Stage 2: {state}. Stage 3: {state}.
+
+[Beat 1, 0–Xs — LABEL]
+Setting: {where}. Lighting: {source + quality}. Wardrobe/packaging: {specifics}.
+Camera: {angle + motion + lens feel}.
+Action: {what subject does}.
+Emotion: {facial/body state}.
+Voiceover — {Speaker} ({emotion tag}): "{exact line}"
+Audio: {ambient layer}.
+
+[Beat 2, X–Ys — LABEL] (same structure)
+
+[Beat N, closing — LABEL + freeze frame] (same structure)
+Final frame: {subject + framing + light + focus}.
+
+[6 technical anchors]
+Camera motion: {...}. Facial consistency: consistent features, {expression}. Hands: anatomically correct, {gesture}. Texture: fixed {material}. Hair: {motion spec}. Lighting + finish: {...}.
+
+[Continuity locks]
+Character: {anchor sentence}. Allowed to change: {list}. Fixed: {list}.
+
+[Style summary]
+{comma-delimited adjective stack}.
+
+[Audio directive]
+Music: {none | spec}. Voiceover: {delivery direction}.
+
+[No:]
+{negative anchors from module library + universal set}
+```
+
+Write prompts in this EXACT order — locks first, creative flourish after.
+
+## Video Actions (`mcp__merlin__video`)
+
+| Action | Key params | When |
+|---|---|---|
+| `generate` | `mode` (product-showcase / talking-head / ugc), `script`, `productHook`, `duration`, `voiceStyle`, `referencesDir` | Full pipeline with QA, multi-format exports |
+| `heygen-agent` | `prompt` (1–10,000 chars), optional `avatarId`/`voiceId`/`styleId`/`orientation`/`incognitoMode`/`callbackUrl` | User gives a natural-language idea; agent picks avatar/voice/style |
+
+**How to pick between video paths:**
+- **`heygen-agent`** — one-shot prompt → video. Agent picks everything. Fastest, lowest control.
+- **`heygen`** (mode on `generate`) — Avatar IV with specific script + talking-head photo. More control.
+- **`fal` / `veo` / `seedance`** — non-avatar video (product showcase, kinetic, generative). Use image-to-video with locked reference frame for transformations >15s.
+
+HeyGen output → `results/video/YYYY-MM/<brand>/ad_<runID>/video.mp4`. Requires `heygenApiKey`.
+
+## Voice (`mcp__merlin__voice`)
+
+`clone` (`voiceSampleDir`, `voiceName`) · `list` · `delete` (`voiceId`) · `list-avatars` (HeyGen).
+
+## Copy Quality Gate
+
+Before shipping any written output — ad copy, email body, blog post, landing headline, social post, thread — score it 0–100 against a 7-expert panel. Target ≥90. Max 3 revision rounds, then ship best version with candid notes on remaining gaps.
+
+**The 7 experts** (score each 0–100, then average):
+1. Direct-response copywriter — does it sell?
+2. Brand voice guardian — does it sound like this brand?
+3. Conversion analyst — is the CTA single, specific, frictionless?
+4. SEO strategist — keyword + intent match (skip for ad copy).
+5. Skeptical founder — would the CEO approve this going out?
+6. Audience persona match — does the target reader recognize themselves?
+7. **AI-writing detector — weighted 1.5×.** AI-sounding copy is an automatic ship blocker regardless of other scores.
+
+**Banned vocabulary** (−5 per instance, reject if ≥3 present): delve, tapestry, leverage, seamless, transformative, ecosystem, synergy, elevate, unlock, empower, journey (figurative), navigate (figurative), realm, landscape (figurative), harness, foster (figurative), testament, pivotal, paramount, crucial, bespoke (unless literally tailored), robust, comprehensive, holistic, meticulously, in today's fast-paced world, at the end of the day.
+
+**Top humanizer patterns to reject:**
+1. **Negation-definition**: "This isn't just X. It's Y." → rewrite as direct claim.
+2. **Significance inflation**: "It's important to note that…" / "It's worth mentioning…" → cut.
+3. **Tricolon clichés**: "faster, cheaper, better" → replace with one specific number.
+4. **Em-dash decoration** when a comma or period would work.
+5. **Hedged conclusions**: "ultimately," "in essence," "at the end of the day."
+6. **Generic openers**: "In the ever-evolving world of…" → delete entire opener.
+
+**Discipline:** scores must be honest. No padding to hit 90. Show every round's score in output — iteration transparency is the value, not a clean final number. After 3 rounds, ship best with one-line note on what still isn't perfect.
+
+## Content Scoring (viral score)
+
+For every generated blog, X/LinkedIn thread, short-form video script, social post, or newsletter section:
+
+**Viral score = (Novelty × 0.4) + (Controversy × 0.3) + (Utility × 0.3)**, each factor 0–100.
+
+- **Novelty** — is the angle fresh, or recycled take #47? Score harshly — most content is derivative.
+- **Controversy** — is there a position someone could reasonably disagree with? Neutral = 0.
+- **Utility** — can the reader do something concretely different tomorrow? Specifics raise the score.
+
+**Thresholds:** ≥80 → publish priority · 60–79 → calendar filler · 40–59 → use sparingly · <40 → cut.
+
+**Atomization** — every long-form source (blog, podcast, case study, call transcript, customer interview) produces 15–20 downstream assets: 3–5 short-form clips with hooks + timestamps · 2–3 X/LinkedIn threads (5–10 posts each, ≤280 chars per X post) · 1 LinkedIn article (800–1,200 words, story-driven) · 1 newsletter section with TL;DR + pull quotes · 3–5 quote cards (≤20 words each) · 1 SEO blog outline · 1 Shorts/TikTok script with hooks + B-roll cues.
+
+**Dedup rule:** reject any asset with >70% semantic overlap vs. another asset in the same batch or vs. anything published in the last 30 days. Check `results/` and memory's Run Log before generating.
+
+## Production Truth
+
+- fal.ai cannot produce pixel-perfect logos or text — only use for lifestyle/hero imagery.
+- Always use real logos (downloaded to `logo/logo.png`), real product photos (Shopify CDN), real brand colors (exact hex from `brand.md`).
+- Brand colors come from website CSS custom properties (`--color-button`, `--color-foreground`, etc.) extracted at onboarding.
+- Character consistency beyond ~8s is fragile in text-to-video — for transformations >15s, prefer image-to-video with a locked reference frame, or split into multiple clips stitched in post.
+- HeyGen is the ONLY reliable path for spoken talking-head with lip-sync. Veo/Seedance for spoken human faces = face morphing + lip desync.
+- Batch variation rule: when generating N variations, vary ONE dimension at a time (hook OR format OR setting) — never all three. Single-variable testing reads cleanly in the Promotion Gate.
+
+## Hook archetypes
+
+Every creative uses one: **curiosity-gap, pattern-interrupt, problem-agitation, POV, social-proof-frontload, skit, before-after, direct-address, voiceover-demo, testimonial-open.** Tag in `metadata.json`. QA rejects hooks <6/10 on attention pull.
+
+## Content Action Reference (`mcp__merlin__content`)
+
+| Action | Key params |
+|---|---|
+| `image` | `imagePrompt`, `imageFormat` (`both` / portrait / square), `referencesDir`, `skipSlack` (default true) |
+| `batch` | `batchCount`, `mode`, `script`, `skipSlack` |
+| `archive` | `archiveDays` |
+| `blog-post` | `blogTitle`, `blogBody`, `blogTags`, `blogImage` (see `merlin-seo`) |
+| `blog-list` | (none) |
+| `competitor-scan` | `blogBody` (comma list of competitor names), `imageCount` (see `merlin-social`) |
+
+## Images / Video Display
+
+Include full file path on its own line (e.g. `results/img_20260403/image_1.jpg`). No backticks, no code blocks. App auto-renders `.jpg/.png/.webp/.mp4` inline.
+
+## Routing hints
+
+- "make / generate / create / shoot a video" → `video({action: "generate"})` or `heygen-agent`
+- "make / generate an image / ad / photo" → `content({action: "image"})`
+- "quick HeyGen video" / "one-shot video from a prompt" → `heygen-agent`
+- "clone my voice" → `voice({action: "clone"})`
+- "score this copy" / "is this AI-sounding" / "rewrite this" → Copy Quality Gate inline
+- "viral score" / "will this land" → Content Scoring
+- "batch 3 variations" → `content({action: "batch"})`
+
+## Cross-references
+
+- Promotion Gate (stat-test winners before scaling) → `merlin-ads`
+- Blog publishing pipeline → `merlin-seo`
+- Competitor ad scan (Meta Ad Library hook extraction) → `merlin-social`
+- Dashboard / wisdom citations → `merlin-analytics`
