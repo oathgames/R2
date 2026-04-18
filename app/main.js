@@ -6214,6 +6214,126 @@ function getAppliedAttribution() {
   return null;
 }
 
+// First-launch auto-claim of a referral code stashed by the landing-page
+// /download/?ref=CODE handler under this machine's click-IP hash. Without
+// this, the only path for a referred user to credit their friend is to
+// manually paste the code in the TOS dialog or Settings → Share Merlin
+// panel — a recipe for conversion loss. See stashPendingRefByIP and
+// handleClaimPendingRef in autocmo-core/landing/worker-payments.js.
+//
+// Gated by two sentinels:
+//   1. `.merlin-attribution` — if already applied (user pasted manually,
+//      or a previous claim succeeded), bail.
+//   2. `.merlin-ref-claim-attempted` — one-shot. Never retry across
+//      launches. The KV entry is 24h TTL and deleted on first claim, so
+//      retrying would just burn rate-limit budget for no benefit.
+//
+// Runs best-effort, network-failure-tolerant. Emits `referral-auto-applied`
+// to the renderer on success so the Share Merlin panel can toast the user.
+async function tryAutoClaimPendingReferral() {
+  const sentinelFile = path.join(appRoot, '.merlin-ref-claim-attempted');
+  if (fs.existsSync(sentinelFile)) return;
+  if (getAppliedAttribution()) {
+    try { fs.writeFileSync(sentinelFile, String(Date.now())); } catch {}
+    return;
+  }
+
+  const machineId = getMachineId();
+  if (!machineId || machineId.length < 16) return;
+
+  // Mark the attempt sentinel BEFORE the network call. A crash mid-request
+  // should not cause us to loop every launch hammering the Worker; the
+  // user can still paste the code manually in Settings as a fallback.
+  try { fs.writeFileSync(sentinelFile, String(Date.now())); } catch {}
+
+  let result;
+  try {
+    const https = require('https');
+    const payload = JSON.stringify({ machineId });
+    const raw = await new Promise((resolve, reject) => {
+      const req = https.request('https://merlingotme.com/api/claim-pending-ref', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+        timeout: 8000,
+      }, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+      req.write(payload);
+      req.end();
+    });
+    if (raw.status !== 200) return;
+    try { result = JSON.parse(raw.body.toString()); } catch { return; }
+  } catch { return; }
+
+  const code = String(result?.code || '').toLowerCase();
+  if (!/^[0-9a-f]{8}$/.test(code)) return;
+  // Redundant with the server-side check, but cheaper and clearer.
+  if (code === machineId.slice(0, 8)) return;
+
+  // Register the referral via the same endpoint the manual "Apply" button
+  // calls. Keeps self-referral, duplicate, and referrer-not-found handling
+  // in one place (handleRegisterReferral).
+  try {
+    const https = require('https');
+    const payload = JSON.stringify({ referrer: code, referred: machineId });
+    const raw = await new Promise((resolve, reject) => {
+      const req = https.request('https://merlingotme.com/api/register-referral', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+        timeout: 8000,
+      }, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+      req.write(payload);
+      req.end();
+    });
+    let reg = {};
+    try { reg = JSON.parse(raw.body.toString()); } catch {}
+    if (raw.status !== 200 || !reg.ok) return;
+
+    try {
+      fs.writeFileSync(
+        path.join(appRoot, '.merlin-attribution'),
+        JSON.stringify({ type: 'referral', code, appliedAt: Date.now(), auto: true }),
+      );
+    } catch {}
+
+    // Refresh the local bonus cache so the trial-days counter reflects
+    // the new bonus immediately — same pattern as the manual path.
+    try {
+      const check = await httpsGet(`https://merlingotme.com/api/check-referral?id=${machineId}`);
+      const data = JSON.parse(check.toString());
+      if (Number.isFinite(data.trialExtensionDays) && data.trialExtensionDays >= 0) {
+        fs.writeFileSync(path.join(appRoot, '.merlin-referral-bonus'), String(data.trialExtensionDays));
+      }
+    } catch {}
+
+    // Notify the renderer so the Share Merlin panel can show a toast.
+    // The window may not be ready yet on very fast first launches — the
+    // renderer also polls getReferralInfo() on open, so a missed toast
+    // still surfaces the applied state.
+    try {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('referral-auto-applied', { code, bonus: reg.bonus || 0 });
+      }
+    } catch {}
+  } catch {}
+}
+
 const SUBSCRIPTION_OFFLINE_GRACE_MS = 72 * 60 * 60 * 1000;
 
 function normalizeEmailHint(value) {
@@ -7850,6 +7970,11 @@ app.whenReady().then(async () => {
   // if prewarm fails the on-demand speak-text handler surfaces the real
   // error when the user actually invokes voice.
   setTimeout(() => { ensureTtsReady().catch(() => {}); }, 1500);
+  // First-launch auto-claim of a pending referral (stashed under the
+  // user's download-click IP by the landing page). One-shot + gated by
+  // a sentinel file — see tryAutoClaimPendingReferral for gating logic.
+  // Delayed to let the renderer load first so the success toast lands.
+  setTimeout(() => { tryAutoClaimPendingReferral().catch(() => {}); }, 3000);
   // ── Deferred-update safety net (Windows only) ───────────────
   //
   // Auto-update stages `app.asar.update` and writes `update-swap.cmd`, then

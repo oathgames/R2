@@ -3501,6 +3501,36 @@ async function loadReferralInfo() {
   }
 }
 
+// First-launch auto-apply toast: main.js calls /api/claim-pending-ref on
+// boot and fires this event if a pending referral was stashed by the
+// landing page. Surfaces a dismissible toast so the user sees their
+// friend got credit without ever having to type a code.
+let _refAutoToastTimer = null;
+merlin.onReferralAutoApplied(({ code, bonus }) => {
+  let toast = document.getElementById('referral-auto-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'referral-auto-toast';
+    toast.style.cssText = 'position:fixed;bottom:20px;right:20px;max-width:360px;padding:12px 16px;background:rgba(20,20,24,0.96);border:1px solid rgba(52,211,153,0.4);border-radius:12px;color:#e4e4e7;font-size:12px;line-height:1.4;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,0.5);backdrop-filter:blur(12px);opacity:0;transform:translateY(10px);transition:all .3s ease';
+    toast.innerHTML = '<div style="font-weight:600;color:#34d399;margin-bottom:4px">✦ Referral applied</div><div id="referral-auto-toast-body" style="color:rgba(228,228,231,0.8)"></div>';
+    document.body.appendChild(toast);
+  }
+  const safeCode = String(code || '').replace(/[^0-9a-f]/gi, '').slice(0, 8);
+  const bonusDays = Math.max(0, Math.min(21, Number(bonus) || 0));
+  const bonusLabel = bonusDays > 0 ? ` Your friend now has +${bonusDays} trial day${bonusDays !== 1 ? 's' : ''}.` : '';
+  document.getElementById('referral-auto-toast-body').textContent =
+    `Code ${safeCode} from your invite link was applied automatically.${bonusLabel}`;
+  requestAnimationFrame(() => { toast.style.opacity = '1'; toast.style.transform = 'translateY(0)'; });
+  if (_refAutoToastTimer) clearTimeout(_refAutoToastTimer);
+  _refAutoToastTimer = setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(10px)';
+  }, 8000);
+  // Refresh the Share Merlin panel so its state reflects the applied code
+  // without waiting for the user to reopen it.
+  try { loadReferralInfo(); } catch {}
+});
+
 document.getElementById('referral-copy').addEventListener('click', () => {
   const linkInput = document.getElementById('referral-link');
   const btn = document.getElementById('referral-copy');

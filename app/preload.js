@@ -156,6 +156,11 @@ contextBridge.exposeInMainWorld('merlin', {
   // Referral
   getReferralInfo: () => ipcRenderer.invoke('get-referral-info'),
   applyReferralCode: (code) => ipcRenderer.invoke('apply-referral-code', assertStr(code, 100)),
+  onReferralAutoApplied: (cb) => {
+    const handler = (_e, payload) => cb(payload || {});
+    ipcRenderer.on('referral-auto-applied', handler);
+    return () => ipcRenderer.removeListener('referral-auto-applied', handler);
+  },
 
   // Spellbook
   checkClaudeRunning: () => ipcRenderer.invoke('check-claude-running'),
