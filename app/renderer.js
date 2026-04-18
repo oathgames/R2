@@ -2571,7 +2571,16 @@ async function renderWisdom(w) {
     .map(([name, v]) => ({ [nameKey]: name, ...wisdomNormalizeRow(v) }))
     .sort((a, b) => (b.roas || 0) - (a.roas || 0));
 
-  const topHooks = objToSortedArray(hooksObj, 'hook').slice(0, 4);
+  // "external" is the Go-side fallback label when inferHookFromName can't
+  // parse a hook out of an ad name (see autocmo-core/wisdom.go). It's not a
+  // real hook style — it just means "uncategorized externally-created ad" —
+  // so it's meaningless at the top of a ranked list. Same story for any
+  // empty / "unknown" buckets. Filter them out before ranking; the sample
+  // still lives in the server-side aggregate for downstream consumers.
+  const MEANINGLESS_HOOKS = new Set(['external', 'unknown', '', 'other', 'uncategorized']);
+  const topHooks = objToSortedArray(hooksObj, 'hook')
+    .filter(h => !MEANINGLESS_HOOKS.has(String(h.hook || '').toLowerCase()))
+    .slice(0, 4);
   const formatList = objToSortedArray(formatsObj, 'name').slice(0, 4);
   const allModels = objToSortedArray(modelsObj, 'model');
   const imageModels = allModels.filter(m => !wisdomIsVideoModel(m.model)).slice(0, 3);
@@ -2711,31 +2720,35 @@ async function renderWisdom(w) {
     }
   } catch {}
 
+  // Layout: benchmark + callouts are full-width banners. Then two 3-card rows:
+  //   Row 1: Top Hooks · Top Platforms · Best Formats   (what's winning)
+  //   Row 2: Image Models · Video Models · Best Timing   (how/when)
+  // Keeping Image + Video adjacent makes the "pick a model" comparison obvious.
   grid.innerHTML = `
     ${benchmarkHtml}
     ${intelHtml}
     ${seasonalHtml}
-    <div>
+    <div class="wisdom-card">
       <div class="wisdom-card-title">Top Hooks <span class="wisdom-card-unit">avg ROAS</span></div>
       ${rankRows(hookItems, i => i.val, 'color-hooks', hookItems.length ? Math.max(...hookItems.map(i => i.val)) : 1)}
     </div>
-    <div>
+    <div class="wisdom-card">
       <div class="wisdom-card-title">Top Platforms <span class="wisdom-card-unit">${platformHasRoas ? 'avg ROAS' : 'avg CTR'}</span></div>
       ${rankRows(platItems, i => i.val, 'color-platforms', platItems.length ? Math.max(...platItems.map(i => i.val)) : 1)}
     </div>
-    <div>
+    <div class="wisdom-card">
       <div class="wisdom-card-title">Best Formats <span class="wisdom-card-unit">avg ROAS</span></div>
       ${rankRows(fmtItems, i => i.val, 'color-formats', fmtItems.length ? Math.max(...fmtItems.map(i => i.val)) : 1)}
     </div>
-    <div>
+    <div class="wisdom-card">
       <div class="wisdom-card-title">Image Models <span class="wisdom-card-unit">avg ROAS</span></div>
       ${rankRows(imgItems, i => i.val, 'color-img', imgItems.length ? Math.max(...imgItems.map(i => i.val)) : 1)}
     </div>
-    <div>
+    <div class="wisdom-card">
       <div class="wisdom-card-title">Video Models <span class="wisdom-card-unit">avg ROAS</span></div>
       ${rankRows(vidItems, i => i.val, 'color-vid', vidItems.length ? Math.max(...vidItems.map(i => i.val)) : 1)}
     </div>
-    <div>
+    <div class="wisdom-card">
       <div class="wisdom-card-title">Best Timing</div>
       <div class="wisdom-timing-label">BEST DAYS</div>
       <div class="wisdom-timing-value">${escapeHtml(bestDays || (sample > 0 ? '—' : 'Collecting…'))}</div>
@@ -6360,45 +6373,17 @@ document.getElementById('archive-expand').addEventListener('click', (e) => {
   if (!refreshBtn) return;
   refreshBtn.style.display = 'none';
 
-  // Ephemeral status pill for refresh progress/results. Injected next to the
-  // button so it's visible without competing with chat toasts. Before this,
-  // the refresh click gave zero feedback during a 10-30s platform sweep and
-  // no confirmation that anything changed afterwards.
-  const statusPill = document.createElement('span');
-  statusPill.className = 'archive-refresh-status';
-  statusPill.style.cssText = 'margin-left:8px;font-size:11px;color:var(--text-dim);display:none;align-items:center;gap:4px;';
-  refreshBtn.parentNode.insertBefore(statusPill, refreshBtn.nextSibling);
-
-  let statusTimer = null;
-  const showStatus = (text, autoHideMs) => {
-    if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
-    statusPill.textContent = text || '';
-    statusPill.style.display = text ? 'inline-flex' : 'none';
-    if (autoHideMs && text) {
-      statusTimer = setTimeout(() => { statusPill.textContent = ''; statusPill.style.display = 'none'; statusTimer = null; }, autoHideMs);
-    }
-  };
-
-  if (merlin.onLiveAdsRefreshProgress) {
-    merlin.onLiveAdsRefreshProgress((data) => {
-      if (!data || typeof data !== 'object') return;
-      if (!refreshBtn.classList.contains('refreshing')) return;
-      const platform = (data.platform || '').toString().replace(/[<>]/g, '').slice(0, 30);
-      const done = Number(data.done) || 0;
-      const total = Number(data.total) || 0;
-      if (platform && total) showStatus(`Checking ${platform}… (${done}/${total})`);
-      else if (platform) showStatus(`Checking ${platform}…`);
-    });
-  }
+  // Progress feedback is conveyed entirely via the spinner + refresh button
+  // aria-busy state. Inline status text was wrapping character-per-line in the
+  // narrow (340px) Archive panel — spinner alone is cleaner. Failures surface
+  // through the chat toast below.
 
   refreshBtn.addEventListener('click', async (e) => {
     e.preventDefault();
     if (refreshBtn.classList.contains('refreshing')) return;
     refreshBtn.classList.add('refreshing');
     refreshBtn.setAttribute('aria-busy', 'true');
-    showStatus('Refreshing…');
     const brand = document.getElementById('brand-select')?.value || '';
-    const startedAt = Date.now();
     let ok = false;
     try {
       await merlin.refreshLiveAds(brand || null);
@@ -6408,8 +6393,9 @@ document.getElementById('archive-expand').addEventListener('click', (e) => {
     }
     refreshBtn.classList.remove('refreshing');
     refreshBtn.removeAttribute('aria-busy');
-    const secs = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-    showStatus(ok ? `✓ Refreshed in ${secs}s` : '⚠ Refresh failed — check connections', 3500);
+    if (!ok && typeof showCopyToast === 'function') {
+      showCopyToast('Refresh failed — check connections');
+    }
     loadArchive();
   });
   if (merlin.onLiveAdsChanged) {
