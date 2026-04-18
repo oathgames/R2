@@ -41,6 +41,11 @@ const BANNED_HOSTS = [
   // user's browser and the BFF at merlingotme.com handles the token exchange —
   // Claude never needs to touch connect.stripe.com directly.
   'connect.stripe.com',
+  // Foreplay — competitor ad intelligence. Routed through the binary so every
+  // credit-burning call passes PreflightCheck + shows up in the audit log.
+  // Direct curl/WebFetch would bypass the user's credit budget telemetry and
+  // could leak the Bearer API key via shell history.
+  'public.api.foreplay.co',
 ];
 
 // Shopify Admin API is blocked but OAuth authorize URL stays allowed (user-facing).

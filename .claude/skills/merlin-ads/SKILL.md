@@ -195,6 +195,24 @@ Connector OAuth via `platform_login({platform: "etsy"})`. Same listing/insights 
 
 Connect + campaign ops. **Budget validation runs on the final scaled value** — if the code scales budget (e.g. 3× for LinkedIn scaling), `validateDailyBudget(cfg, scaledBudget, "linkedin")` must run on the scaled number. This is a regression guard — see `linkedin.go`.
 
+### Competitor ad research (`mcp__merlin__competitor_spy`) — Foreplay global discovery
+
+Foreplay indexes 100M+ Meta/TikTok/LinkedIn ads worldwide. **Covers the US and all other regions** — fills the gap where Meta Ads Library previews are EU-only. **Always use the global-discovery flow, never Spyder.** Spyder requires pre-subscribing to each brand in the Foreplay UI; it is deliberately unsupported here.
+
+**Canonical discovery flow:**
+1. User names a competitor (domain, brand, or page) → `competitor_spy({action: "brands-by-domain", url: "competitor.com"})` to resolve brand IDs.
+2. Pick the right brand ID → `competitor_spy({action: "ads-by-brand", foreplayBrandIds: "id1,id2"})` to pull their ads. Filter with `foreplayFormat` (video/image/carousel), `foreplayLive: "true"` for currently-running only, `foreplayOrder: "longest_running"` for proven winners.
+3. Paginate via `foreplayCursor` (opaque — pass the previous response's `metadata.cursor` back).
+4. User wants the actual media → `competitor_spy({action: "download-ad", adId: "..."})` saves the video/image to `results/competitor-ads/<ad_id>.<ext>`.
+5. Reverse-lookup reuse → `competitor_spy({action: "ad-duplicates", adId: "..."})` shows every brand running the same creative (useful for spotting agency-built templates).
+6. `competitor_spy({action: "usage"})` shows remaining API credits (0.01 credits per ad returned).
+
+**Shortcut:** if the user already has a Facebook page ID, skip step 1 and call `competitor_spy({action: "ads-by-page", foreplayPageId: "..."})` directly.
+
+**Research → Create pipeline:** before generating creatives for a new vertical, pull the top 20 longest-running ads from 3–5 competitors, feed the headlines + hooks + landing URLs into the creative brief for `merlin-content`. This grounds new creative in what's actually working in the vertical right now, not what was working 6 months ago.
+
+**Cost:** BYOK — user's `foreplayApiKey` in merlin-config.json. Show credit usage before running large pulls (`limit > 50`).
+
 ## Rate limits
 
 **Every outbound call to a rate-limited platform routes through `PreflightCheck` + `RecordSuccess`/`RecordRateLimitHit`.** A direct HTTP call to `graph.facebook.com`, `business-api.tiktok.com`, `googleads.googleapis.com`, `api.klaviyo.com`, `ads-api.reddit.com`, `openapi.etsy.com`, or an Amazon Ads host is blocked by the user-side hook. Always route through `mcp__merlin__*` tools.
@@ -207,6 +225,8 @@ Connect + campaign ops. **Budget validation runs on the final scaled value** —
 - "catalog" / "products on facebook" → `meta_ads({action: "catalog"})`
 - "insights" / "performance" on a specific platform → platform's `insights` (prefer `dashboard` for aggregate — see `merlin-analytics`)
 - "set up" + platform → platform's `setup` action after OAuth
+- "spy on" / "what ads is X running" / "competitor ads" / "download their ad" / "swipe file" → `competitor_spy` with the global-discovery flow (brands-by-domain → ads-by-brand → download-ad). NEVER suggest subscribing to brands in Foreplay Spyder — the agent does not use Spyder.
+- "check my ad credits" / "how much Foreplay quota left" → `competitor_spy({action: "usage"})`
 
 ## What this skill does NOT cover
 

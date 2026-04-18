@@ -123,6 +123,11 @@ const BRAND_OPTIONAL_ACTIONS = new Set([
   'linkedin-login', 'pinterest-login', 'snapchat-login', 'twitter-login',
   // Landing page audit takes a raw URL, no brand context needed
   'landing-audit',
+  // Foreplay competitor ad spying — keyed on the competitor's domain/brand/ad,
+  // never on the user's own brand. Output goes to <outputDir>/competitor-ads/
+  // which is brand-agnostic by design (one research library across brands).
+  'foreplay-brands-by-domain', 'foreplay-ads-by-brand', 'foreplay-ads-by-page',
+  'foreplay-ad-duplicates', 'foreplay-download-ad', 'foreplay-usage',
 ]);
 
 // Normalize `brand` input — empty string, undefined, and null all mean
@@ -690,6 +695,61 @@ function buildTools(tool, z, ctx) {
     async (args) => {
       const action = args.action;
       const result = await runBinary(ctx, action, args, { timeout: 30000 });
+      return { content: [{ type: 'text', text: result.text }], isError: result.error };
+    }
+  ));
+
+  // ── competitor_spy ───────────────────────────────────────
+  // Foreplay competitor ad intelligence. Routes EXCLUSIVELY through global
+  // discovery endpoints (getBrandsByDomain, getAdsByBrandId, getAdsByPageId,
+  // ad/duplicates, ad/{id}, usage). The Spyder family of endpoints is never
+  // called — they require the user to manually subscribe to each brand in
+  // the Foreplay UI, which defeats the whole "agentic ad research" promise.
+  // See foreplay.go header for the rationale + foreplay_test.go for the
+  // static-source guard locking in this contract.
+  tools.push(tool(
+    'competitor_spy',
+    'Research competitor ads via Foreplay global discovery — NEVER requires pre-subscribing to a brand. Flow: brands-by-domain (competitor.com → brand IDs) → ads-by-brand (all their ads) → download-ad (save media). ads-by-page works on raw Facebook page IDs. ad-duplicates reverse-looks up every brand reusing one creative. usage shows remaining API credits. Does NOT use Foreplay Spyder endpoints — those require manual brand subscription and are intentionally unsupported.',
+    {
+      action: z.enum([
+        'brands-by-domain',
+        'ads-by-brand',
+        'ads-by-page',
+        'ad-duplicates',
+        'download-ad',
+        'usage',
+      ]).describe('brands-by-domain → resolve competitor domain to brand IDs. ads-by-brand → pull ads for one or more brand IDs. ads-by-page → pull ads for a raw Facebook page ID. ad-duplicates → find every brand reusing this creative. download-ad → save the ad\'s video/image to results/competitor-ads/. usage → check remaining API credits.'),
+      // brands-by-domain
+      url: z.string().optional().describe('Competitor root domain for brands-by-domain (e.g. "acme.com", not "www.acme.com/products"). Alternatively pass foreplayDomain.'),
+      foreplayDomain: z.string().optional().describe('Same as url — alternative field name for brands-by-domain.'),
+      // ads-by-brand
+      foreplayBrandIds: z.string().optional().describe('CSV of Foreplay brand IDs for ads-by-brand (e.g. "brand_abc,brand_def"). Get IDs from brands-by-domain first.'),
+      // ads-by-page
+      foreplayPageId: z.string().optional().describe('Numeric Facebook page ID for ads-by-page (e.g. "123456789"). Use when you already know the page ID — skips the domain lookup.'),
+      // ad-duplicates / download-ad
+      adId: z.string().optional().describe('Foreplay ad_id for ad-duplicates or download-ad. Get it from ads-by-brand or ads-by-page output.'),
+      // Shared filters
+      foreplayFormat: z.enum(['video', 'image', 'carousel', 'dco', 'dpa', 'multi_images', 'multi_videos']).optional().describe('Filter ads by creative format.'),
+      foreplayOrder: z.enum(['newest', 'oldest', 'longest_running', 'most_relevant']).optional().describe('Sort order for ad results (default: newest).'),
+      foreplayLive: z.enum(['true', 'false']).optional().describe('Filter by live status: "true" = only running ads, "false" = only retired. Omit for both.'),
+      foreplayCursor: z.string().optional().describe('Opaque pagination cursor from the previous response\'s metadata.cursor. Omit for page 1.'),
+      limit: z.number().optional().describe('Max results per page (1-250 for ads, 1-10 for brands). Default: 25 ads, 5 brands.'),
+    },
+    async (args) => {
+      // Map short action to binary action name.
+      const actionMap = {
+        'brands-by-domain': 'foreplay-brands-by-domain',
+        'ads-by-brand':     'foreplay-ads-by-brand',
+        'ads-by-page':      'foreplay-ads-by-page',
+        'ad-duplicates':    'foreplay-ad-duplicates',
+        'download-ad':      'foreplay-download-ad',
+        'usage':            'foreplay-usage',
+      };
+      const binaryAction = actionMap[args.action];
+      if (!binaryAction) {
+        return { content: [{ type: 'text', text: `Unknown competitor_spy action: ${args.action}` }], isError: true };
+      }
+      const result = await runBinary(ctx, binaryAction, args);
       return { content: [{ type: 'text', text: result.text }], isError: result.error };
     }
   ));
