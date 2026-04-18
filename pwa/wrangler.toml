@@ -6,3 +6,10 @@ compatibility_flags = ["nodejs_compat"]
 [[rules]]
 type = "Text"
 globs = ["**/*.html", "**/*.js", "**/*.css", "**/*.json"]
+
+# Route: pwa.merlingotme.com — the roaming PWA origin. The Worker pins CSP
+# connect-src to relay.merlingotme.com so we can't accidentally exfiltrate
+# user data to a third party.
+# routes = [
+#   { pattern = "pwa.merlingotme.com/*", zone_name = "merlingotme.com" }
+# ]

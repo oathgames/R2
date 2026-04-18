@@ -1,0 +1,327 @@
+// relay-client.js — outbound WebSocket dialer to merlin-relay.
+//
+// Bridges the desktop Electron app to the relay Worker so the PWA (phone)
+// can reach Merlin while roaming. NO PORTS EXPOSED ON THIS MACHINE — the
+// connection is outbound-only and NAT-friendly.
+//
+// Security:
+//   - Session credentials (sessionId + desktopToken) are persisted encrypted
+//     via Electron safeStorage. If safeStorage is unavailable the module
+//     stays in-memory only and the user re-pairs next launch.
+//   - The token is NEVER logged — even at verbose log level.
+//   - Outbound WSS only (TLS); plain ws:// is refused.
+//   - Auto-reconnect uses bounded exponential backoff capped at 60s so we
+//     don't flood the relay during extended outages.
+
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const WebSocket = require('ws');
+const { app, safeStorage } = require('electron');
+
+const RELAY_BASE = process.env.MERLIN_RELAY_BASE || 'https://relay.merlingotme.com';
+const CREDS_FILENAME = '.merlin-relay-creds';
+const RECONNECT_MIN_MS = 1500;
+const RECONNECT_MAX_MS = 60_000;
+const MAX_MSG_BYTES = 128 * 1024;
+
+let ws = null;
+let creds = null;            // { sessionId, desktopToken }  in-memory, NEVER logged
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let stopping = false;
+let connected = false;
+
+// Handlers injected from main.js (same shape as ws-server.setHandlers).
+let onSendMessage = null;
+let onApproveTool = null;
+let onDenyTool = null;
+let onAnswerQuestion = null;
+
+// ── Credential persistence ──────────────────────────────────────────
+function getCredsPath() {
+  try {
+    return path.join(app.getPath('userData'), CREDS_FILENAME);
+  } catch {
+    return null;
+  }
+}
+
+function loadCreds() {
+  const p = getCredsPath();
+  if (!p || !fs.existsSync(p)) return null;
+  try {
+    const raw = fs.readFileSync(p);
+    // File format: 1 byte marker (0x01 = safeStorage-encrypted, 0x00 = plain
+    // JSON) then the blob. We avoid a plain-JSON-by-default path entirely —
+    // if safeStorage isn't available we simply don't persist.
+    if (raw.length < 2) return null;
+    const marker = raw[0];
+    const body = raw.slice(1);
+    if (marker !== 0x01) return null;
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    const json = safeStorage.decryptString(body);
+    const parsed = JSON.parse(json);
+    if (typeof parsed?.sessionId !== 'string' || typeof parsed?.desktopToken !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveCreds(next) {
+  const p = getCredsPath();
+  if (!p) return false;
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  try {
+    const enc = safeStorage.encryptString(JSON.stringify(next));
+    const out = Buffer.concat([Buffer.from([0x01]), enc]);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, out, { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearCreds() {
+  creds = null;
+  const p = getCredsPath();
+  if (p && fs.existsSync(p)) {
+    try { fs.unlinkSync(p); } catch {}
+  }
+}
+
+// ── Connection lifecycle ────────────────────────────────────────────
+function logSafe(...args) {
+  // Redact anything that looks like a 43-char base64url token. The desktop
+  // token and any pwa tokens we happen to see in payloads should never
+  // land in logs.
+  try {
+    const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+    const redacted = msg.replace(/[A-Za-z0-9_-]{40,64}/g, '[REDACTED]');
+    console.log('[relay]', redacted);
+  } catch { /* never throw from a logger */ }
+}
+
+function scheduleReconnect() {
+  if (stopping || reconnectTimer) return;
+  reconnectAttempts++;
+  const delay = Math.min(
+    RECONNECT_MAX_MS,
+    RECONNECT_MIN_MS * Math.pow(2, Math.min(reconnectAttempts, 6)) + Math.floor(Math.random() * 500),
+  );
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, delay);
+}
+
+function connect() {
+  if (stopping) return;
+  if (!creds || !creds.sessionId || !creds.desktopToken) return;
+  if (!RELAY_BASE.startsWith('https://')) {
+    logSafe('refusing relay base URL without TLS');
+    return;
+  }
+  const wsBase = RELAY_BASE.replace(/^https:/, 'wss:');
+  const url = `${wsBase}/ws/desktop?session=${encodeURIComponent(creds.sessionId)}&t=${encodeURIComponent(creds.desktopToken)}`;
+
+  try {
+    ws = new WebSocket(url, {
+      maxPayload: MAX_MSG_BYTES,
+      handshakeTimeout: 15_000,
+      // Electron bundles CA roots; verify TLS (default). Disable keep-alive
+      // ping by default — the runtime sends WS pings automatically.
+    });
+  } catch (e) {
+    logSafe('ws construction failed');
+    scheduleReconnect();
+    return;
+  }
+
+  ws.on('open', () => {
+    connected = true;
+    reconnectAttempts = 0;
+    logSafe('connected');
+  });
+
+  ws.on('message', (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw.toString('utf8')); } catch { return; }
+    if (!msg || typeof msg.type !== 'string') return;
+
+    switch (msg.type) {
+      case 'auth-ok':
+        return; // Sent by DO on connect — informational.
+      case 'send-message':
+        if (typeof msg.text !== 'string' || msg.text.length > 50_000) return;
+        if (onSendMessage) onSendMessage(msg.text);
+        return;
+      case 'approve-tool':
+        if (typeof msg.toolUseID !== 'string' || msg.toolUseID.length > 64) return;
+        if (onApproveTool) onApproveTool(msg.toolUseID);
+        return;
+      case 'deny-tool':
+        if (typeof msg.toolUseID !== 'string' || msg.toolUseID.length > 64) return;
+        if (onDenyTool) onDenyTool(msg.toolUseID);
+        return;
+      case 'answer-question':
+        if (typeof msg.toolUseID !== 'string' || msg.toolUseID.length > 64) return;
+        if (!msg.answers || typeof msg.answers !== 'object') return;
+        if (onAnswerQuestion) onAnswerQuestion(msg.toolUseID, msg.answers);
+        return;
+      default:
+        return; // drop unknown types
+    }
+  });
+
+  ws.on('close', (code) => {
+    connected = false;
+    ws = null;
+    // 1008 (auth) / 4401 (custom) = creds are permanently bad. Bail out and
+    // let the user re-pair.
+    if (code === 1008 || code === 4401) {
+      logSafe('auth rejected — clearing creds and stopping');
+      clearCreds();
+      stopping = true;
+      return;
+    }
+    scheduleReconnect();
+  });
+
+  ws.on('error', () => {
+    // Logged via the close event; avoid duplicate noise. Never log the URL —
+    // it contains the token.
+  });
+}
+
+function forward(type, payload) {
+  if (!connected || !ws || ws.readyState !== WebSocket.OPEN) return false;
+  // Only forward types the DO accepts from desktop. Prevents a renderer bug
+  // from emitting PWA-origin envelopes into the relay.
+  const DESKTOP_TYPES = new Set(['sdk-message', 'approval-request', 'ask-user-question', 'sdk-error', 'user-message']);
+  if (!DESKTOP_TYPES.has(type)) return false;
+  try {
+    const frame = JSON.stringify({ type, payload });
+    if (frame.length > MAX_MSG_BYTES) return false;
+    ws.send(frame);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── Pairing ─────────────────────────────────────────────────────────
+async function initPairing() {
+  // If we already have valid creds we re-use them: this means the existing
+  // paired phone(s) stay paired. The user explicitly has to call
+  // `rotatePairing()` to force-rotate.
+  if (creds) {
+    // Still need a fresh pair code for the new phone.
+    return mintPairCode();
+  }
+  const resp = await httpPostJson('/pair/init', {});
+  if (!resp || !resp.sessionId || !resp.desktopToken || !resp.pairUrl) {
+    throw new Error('pair_init_failed');
+  }
+  creds = { sessionId: resp.sessionId, desktopToken: resp.desktopToken };
+  saveCreds(creds);
+  stopping = false;
+  reconnectAttempts = 0;
+  connect();
+  return { sessionId: resp.sessionId, pairCode: resp.pairCode, pairUrl: resp.pairUrl, expiresInSec: resp.expiresInSec };
+}
+
+// Mint an additional pair code for an already-known session so the user
+// can pair a second device without rotating the desktop token.
+async function mintPairCode() {
+  if (!creds) throw new Error('no_session');
+  // The relay doesn't (yet) expose a "mint additional pair code" endpoint —
+  // /pair/init is "create new session." For v1, pairing N>1 devices requires
+  // the user to request an init-level new session (which invalidates prior
+  // phones). Flagging this as a follow-up; the primary roaming use case is
+  // a single phone per install.
+  throw new Error('multi_device_pairing_pending');
+}
+
+async function rotatePairing() {
+  clearCreds();
+  stopping = false;
+  return initPairing();
+}
+
+function getState() {
+  return {
+    paired: !!creds,
+    connected,
+    sessionId: creds?.sessionId || null,  // NEVER returns desktopToken
+  };
+}
+
+// ── HTTP helper (for /pair/init) ────────────────────────────────────
+async function httpPostJson(pathStr, body) {
+  const url = `${RELAY_BASE}${pathStr}`;
+  if (!url.startsWith('https://')) throw new Error('tls_required');
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let err = {};
+    try { err = await res.json(); } catch {}
+    throw new Error(err.error || `http_${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Lifecycle ───────────────────────────────────────────────────────
+async function start() {
+  stopping = false;
+  creds = loadCreds();
+  if (creds) {
+    reconnectAttempts = 0;
+    connect();
+  }
+}
+
+function stop() {
+  stopping = true;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (ws) {
+    try { ws.close(1000, 'shutdown'); } catch {}
+    ws = null;
+  }
+  connected = false;
+}
+
+function setHandlers(h) {
+  onSendMessage    = h.onSendMessage || null;
+  onApproveTool    = h.onApproveTool || null;
+  onDenyTool       = h.onDenyTool    || null;
+  onAnswerQuestion = h.onAnswerQuestion || null;
+}
+
+// Revoke a specific paired device.
+async function revokeDevice(deviceId) {
+  if (!creds) throw new Error('no_session');
+  await httpPostJson('/session/revoke-device', {
+    sessionId: creds.sessionId,
+    desktopToken: creds.desktopToken,
+    deviceId,
+  });
+}
+
+module.exports = {
+  start,
+  stop,
+  setHandlers,
+  forward,
+  initPairing,
+  rotatePairing,
+  revokeDevice,
+  getState,
+  // Test hooks — not documented in the public API.
+  _setCredsForTest(c) { creds = c ? { ...c } : null; },
+};

@@ -34,6 +34,13 @@ let onApproveTool = null;
 let onDenyTool = null;
 let onAnswerQuestion = null;
 
+// Optional outbound mirror — set by relay-client.js to fan every LAN
+// broadcast out to the merlin-relay Worker so roaming PWAs see the same
+// stream. Returning false from this hook means "not connected right now";
+// LAN delivery is independent.
+let relayForward = null;
+function setRelayForward(fn) { relayForward = (typeof fn === 'function') ? fn : null; }
+
 function getCertDir() {
   // Prefer the per-user Electron userData dir so the private key never lands
   // in a world-readable /tmp. Fall back to tmpdir only if userData is not
@@ -178,8 +185,12 @@ async function start() {
   setupConnectionHandler();
 }
 
-// Broadcast to all authenticated PWA clients
+// Broadcast to all authenticated PWA clients AND (if configured) out to the
+// relay Worker so roaming phones see the same stream.
 function broadcast(type, payload) {
+  if (relayForward) {
+    try { relayForward(type, payload); } catch { /* relay errors never break LAN */ }
+  }
   if (authenticatedClients.size === 0) return;
   const msg = JSON.stringify({ type, payload });
   for (const client of authenticatedClients) {
@@ -232,4 +243,5 @@ module.exports = {
     onDenyTool = handlers.onDenyTool;
     onAnswerQuestion = handlers.onAnswerQuestion;
   },
+  setRelayForward,
 };
