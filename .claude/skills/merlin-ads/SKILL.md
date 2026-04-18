@@ -53,6 +53,8 @@ Below threshold → verdict is "keep running, insufficient data" — never "lose
 
 Merlin's internal verdicts (KILL / WINNER / MASSIVE WINNER) already bake in spend/CPA heuristics. The promotion gate is the statistical ceiling — if a verdict says WINNER but the gate hasn't cleared, report both: *"flagged as winner by spend thresholds, but not yet statistically significant (p=0.14) — keep running before scaling."*
 
+**Challengers to a confirmed winner → `merlin-tournament`.** Critic → blind author → 3-judge Borda with k=2 stop. Don't ask for "10 variations" here — that drifts. Winner returns to `meta-push`.
+
 ## Meta Ads Autonomous Loop
 
 When Meta is configured:
