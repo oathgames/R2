@@ -53,6 +53,7 @@
       "Bash(*rm*.merlin-ratelimit*)",
       "Bash(*rm*.merlin-vault*)",
       "Bash(*rm*.merlin-audit*)",
+      "Bash(*rm*.merlin-entitlement-cache*)",
       "Bash(*rm*merlin-config*)",
       "Bash(*del*.merlin-*)",
       "Bash(*Remove-Item*.merlin-*)",

@@ -144,6 +144,12 @@ const PROTECTED_PATH_PATTERNS = [
   /\.merlin-vault(\.|$)/i,
   /\.merlin-ratelimit(\.|$)/i,
   /\.merlin-audit(\.|$)/i,
+  // Signed entitlement preflight cache (AES-GCM encrypted envelope over an
+  // Ed25519-signed payload). Tampering is detected at load time by sig
+  // verification, but unrestricted delete access would let a rogue tool
+  // force a fresh network round-trip every invocation and degrade user
+  // experience. `(\.|$)` covers the `.tmp` atomic-write sibling per Rule 7.
+  /\.merlin-entitlement-cache(\.|$)/i,
   // Per-brand conversation history (role + text per bubble). Exfiltration
   // would leak every marketing decision, customer complaint, revenue
   // figure, and strategy discussion across every brand. Atomic-write
