@@ -243,7 +243,7 @@ async function init() {
       const ver = typeof info === 'object' ? info.version : info;
       vLabel.textContent = 'v' + ver;
       const bullets = (typeof info === 'object' && info.whatsNew && info.whatsNew.length)
-        ? info.whatsNew.map(b => '• ' + b).join('\n')
+        ? info.whatsNew.slice(0, 3).map(b => '• ' + b).join('\n')
         : '• Up to date';
       vLabel.dataset.tip = '✦ What\'s New\n' + bullets + '\n\nClick to check for updates';
     }).catch(() => {});
@@ -329,16 +329,19 @@ async function init() {
       merlin.dismissBriefing(); // Mark as seen so it doesn't repeat
       currentBubble = null;
       textBuffer = '';
-      if (!hasPriorThread) {
-        const wb2 = addClaudeBubble();
-        wb2.classList.remove('streaming');
-        wb2.innerHTML = `Welcome back — loading ${escapeHtml(brandName)}...`;
-        currentBubble = null;
-        textBuffer = '';
-      }
+      // No "Welcome back — loading…" filler bubble: the SDK preflight reply
+      // ("✦ {brand} is ready — N products loaded") streams in on its own and
+      // stands as the actual welcome. A second placeholder sparkle here was
+      // pure duplication.
     } else if (!hasPriorThread) {
-      welcomeBubble.innerHTML = `Welcome back — loading ${escapeHtml(brandName)}...`;
-      renderStarterChips(welcomeBubble, 'returning');
+      // Reuse welcomeBubble as the streaming target for the SDK preflight
+      // reply. Wiring `currentBubble` here makes content_block_start's
+      // `if (!currentBubble) addClaudeBubble()` skip the new-bubble path,
+      // so the reply replaces "Welcome." in place — one sparkle total,
+      // no stray empty bubble above the ready message.
+      welcomeBubble.classList.add('streaming');
+      currentBubble = welcomeBubble;
+      textBuffer = '';
     } else {
       // Prior thread will paint; drop the empty welcome bubble so the chat
       // doesn't start with a stray "..." above the restored history.
@@ -2837,12 +2840,9 @@ function drawStatsShareCard() {
   ctx.textAlign = 'center';
   const cx = W / 2;
 
-  let y = cardY + 90;
-  ctx.fillStyle = '#a78bfa';
-  ctx.font = '600 26px -apple-system, Segoe UI, system-ui, sans-serif';
-  ctx.fillText('\u2726  MERLIN GOT ME', cx, y);
-
-  y += 75;
+  // Brand name leads — the old "MERLIN GOT ME" eyebrow was redundant
+  // alongside the ✦ Merlin footer wordmark and made the card feel busy.
+  let y = cardY + 130;
   ctx.fillStyle = '#ffffff';
   ctx.font = '800 56px -apple-system, Segoe UI, system-ui, sans-serif';
   ctx.fillText(brand, cx, y);
@@ -2939,7 +2939,7 @@ function drawStatsShareCard() {
   const footerY = cardY + cardH - 60;
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
   ctx.font = '600 20px -apple-system, Segoe UI, system-ui, sans-serif';
-  ctx.fillText('\u2726 merlingotme.com', cx, footerY);
+  ctx.fillText('\u2726 Merlin', cx, footerY);
 
   return canvas;
 }
