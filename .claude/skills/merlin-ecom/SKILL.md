@@ -1,6 +1,6 @@
 ---
 name: merlin-ecom
-description: Use when the user asks about Shopify products, orders, inventory, store analytics, Stripe revenue, MRR, ARR, churn, active subscribers, subscription cohorts, revenue source preference, or any e-commerce backend question. Handles Shopify product import, order batching, Stripe OAuth (read-only, never write), revenue aggregation with USD normalization, and the Shopify-vs-Stripe topline disambiguation when both are connected.
+description: Use when the user asks about Shopify products, orders, inventory, store analytics, Stripe revenue, MRR, ARR, churn, active subscribers, subscription cohorts, revenue source preference, Google Merchant Center, Google Shopping feed, product disapprovals, or any e-commerce backend question. Handles Shopify product import, order batching, Stripe OAuth (read-only, never write), revenue aggregation with USD normalization, Shopify-vs-Stripe topline disambiguation, and Google Merchant Center product feed sync + disapproval diagnostics for Google Shopping ads.
 owner: ryan
 ---
 
@@ -68,6 +68,35 @@ When `stripe-subscriptions` or a subscription connector is active, surface these
 - NRR <90% → gross churn is eating growth. Diagnose retention before recommending more acquisition spend.
 - Quick ratio <1.5 → subs leak faster than they fill. Stop the leak before pouring more in.
 - Monthly churn >7% DTC / >2% B2B → product-retention issue, not a marketing issue. Recommend onboarding / engagement work before ad scale.
+
+## Google Merchant Center (`mcp__merlin__google_ads` — merchant-* actions)
+
+Piggy-backs on the existing Google OAuth connection. One `google-login` grants Google Ads + Search Console + Merchant Center; Merchant Center ID is auto-discovered and persisted as `googleMerchantId`. Agencies with multi-client (MCA) access can switch accounts with `merchant-setup`.
+
+| Action | Key params | Purpose |
+|---|---|---|
+| `merchant-status` | `brand` | Connection check, approved/disapproved/pending counts, top 5 disapproval reasons |
+| `merchant-setup` | `brand` | Lists accessible Merchant Center accounts; picks one when multiple are available |
+| `merchant-sync-shopify` | `brand` | Maps active Shopify products → Merchant Center product inputs; upserts via `productInputs:insert`. Skips draft products and items missing title/price/image |
+| `merchant-insights` | `brand`, `batchCount` (days, default 30) | Per-product performance (clicks, impressions, CTR) from the Merchant reports API |
+
+**Rate limit:** separate `google_merchant` bucket (60/min, 1.5K/hr, 20K/day) so a catalog sync doesn't starve Google Ads calls on the same account. 500ms inter-call spacing enforced by `NextSlotNano`.
+
+**Disapprovals are the #1 reason Shopping ads stop serving.** When a user asks "why aren't my Shopping ads running" or "why did my Google Ads spend drop," run `merchant-status` first — if `Disapproved` > 0, the item-level issues list names the fix (missing GTIN, image too small, prohibited content, etc.). Google Ads insights won't surface this.
+
+**Shopify-sync caveats:**
+- Only `status=active` Shopify products are synced. Drafts + archived are skipped.
+- Products missing title, price, or primary image are skipped (Merchant Center rejects them).
+- `compareAtPrice` is mapped to `salePrice` so discounts surface in Shopping.
+- Availability is derived from `inventory_quantity` (>0 → `in_stock`, otherwise `out_of_stock`).
+- Initial approval takes 3-24h. Run `merchant-status` later to see the review outcome.
+- Upserts are keyed by `offerId = shopify-{productID}` — re-running the sync is safe and updates existing entries.
+
+**What this does NOT do (yet):**
+- Product feed management for non-Shopify stores (WooCommerce, custom carts). Those users can sync manually via the Merchant Center dashboard until we add a second source.
+- Local inventory / store listings. Online channel only (`channel: ONLINE`).
+- Promotions (sale badges, coupons). Use Google Ads promotions instead.
+- Write operations against Google Ads assets generated from Merchant feed — `merlin-ads` owns Google Ads campaign management; this skill only manages the product feed those campaigns read from.
 
 ## Revenue source routing
 
