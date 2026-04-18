@@ -1,7 +1,8 @@
 ---
 name: merlin-social
-description: Use when the user wants Discord notifications, Slack posts, email marketing (Klaviyo audit, campaign creation, cold outbound), Reddit organic prospecting/drafting/posting, Threads posts, competitor ad intelligence via Meta Ad Library, or any non-paid social/community channel. Covers the 6 essential DTC email flows (welcome, cart, browse, post-purchase, win-back, sunset), first-touch/linear/time-decay attribution models, Reddit's 7-layer compliance preflight, and the weekly competitor ad scan with hook extraction.
+description: Use when the user wants Discord notifications, Slack posts, email marketing (Klaviyo audit, campaign creation, cold outbound, flows, deliverability, RFM segmentation), SMS marketing (Postscript/Attentive/Klaviyo SMS, TCPA compliance, A2P 10DLC, flows, campaign cadence), Reddit organic prospecting/drafting/posting, Threads posts, competitor ad intelligence via Meta Ad Library, or any non-paid social/community channel. Covers the 6 essential DTC email flows with revenue-mix benchmarks, post-Apple-MPP engagement benchmarks (click rate as real signal), RFM segmentation, deliverability basics (SPF/DKIM/DMARC, Google/Yahoo 2024 requirements), subject + preheader rules, SMS compliance (TCPA quiet hours, 10DLC, STOP keywords) + essential SMS flows + campaign cadence, first-touch/linear/time-decay attribution models, Reddit's 7-layer compliance preflight, and the weekly competitor ad scan with hook extraction.
 owner: ryan
+bytes_justification: 16KB — owned channels (email + SMS + Reddit organic + competitor intel) share attribution models, compliance requirements, and deliverability/cadence reasoning. Splitting email and SMS into separate skills would duplicate the RFM segmentation, attribution, and benchmark tables; SMS flows mirror email flows by design so they belong side-by-side. Hard-capped at 20KB.
 ---
 
 # Owned & Earned Channels
@@ -36,22 +37,61 @@ If Klaviyo isn't connected, tell the user to click the Klaviyo tile or paste an 
 
 Never mix models in the same report. "Is welcome series working?" → time-decay. "Is email worth investing in?" → first-touch.
 
-### Essential DTC email flows
+### Essential DTC email flows (+ revenue mix benchmarks)
 
-1. **Welcome Series** (3 emails / 5 days): Welcome + brand story → bestsellers showcase → social proof + first-purchase discount
-2. **Abandoned Cart** (3 emails): Reminder (1hr) → social proof (24hr) → urgency/discount (48hr)
-3. **Browse Abandonment** (2 emails): "Still looking?" (4hr) → related products (24hr)
-4. **Post-Purchase** (3 emails): Thank you + order details → how to use/style → review request (14 days)
-5. **Win-back** (3 emails): "We miss you" (60 days) → bestsellers update (75 days) → final discount (90 days)
-6. **Sunset** (2 emails): "Still interested?" (90 days no opens) → final chance before suppression (120 days)
+Healthy flow revenue mix (% of total email revenue, Klaviyo aggregated DTC data):
 
-### Cold outbound benchmarks
+| # | Flow | Structure | Share of flow rev |
+|---|---|---|---|
+| 1 | **Welcome Series** | 3 emails / 5 days: welcome + brand story → bestsellers → social proof + first-purchase offer | 5–10% |
+| 2 | **Abandoned Cart** | 3 emails: reminder (1hr) → social proof (24hr) → urgency/discount (48hr) | 15–25% ← largest flow |
+| 3 | **Browse Abandonment** | 2 emails: "Still looking?" (4hr) → related products (24hr) | 3–5% |
+| 4 | **Post-Purchase** | 3 emails: thank you → how to use → review request (14d) | 5–10% |
+| 5 | **Win-back** | 3 emails: "We miss you" (60d) → bestsellers (75d) → final discount (90d) | 3–5% |
+| 6 | **Sunset** | 2 emails: "Still interested?" (90d no opens) → final chance (120d) | <1% — purpose is deliverability, not revenue |
 
-- **40%+ open rate** — below this, subject line or sender reputation is broken
-- **3%+ reply rate** — below this, body copy or CTA is off
-- **1%+ positive reply rate** — below this, ICP or offer is wrong
+Campaigns (one-to-many sends) should contribute 40–55% of email revenue; flows 45–55%. Over-reliance on campaigns means automated money is being left on the table.
 
-Warm list (existing subscribers): 35% open / 2% click / <0.5% unsubscribe. Diagnose in that order — opens → envelope, clicks → body, unsubs → list hygiene or send frequency.
+### Engagement benchmarks (post-Apple MPP — click rate is the real signal)
+
+**Warm list:** 25–35% open / 2–3% click / <0.3% unsubscribe. Since Apple Mail Privacy Protection, opens auto-inflate — **use click rate as the real engagement signal.**
+
+**Cold outbound (B2B):** 50%+ open / 3%+ reply / 1%+ positive reply. Diagnostic order: opens → subject + sender + preheader; replies → body + CTA; positive replies → ICP + offer.
+
+**Diagnostic order (warm list):** opens → envelope (subject + sender + preheader); clicks → body + CTA; unsubs → list hygiene or send frequency.
+
+### List segmentation — RFM (Recency, Frequency, Monetary)
+
+Segment before every send. Blasting every campaign to the full list is the fastest way to tank deliverability.
+
+- **Engaged-30** — opened OR clicked in last 30 days → primary campaign segment
+- **Engaged-90** — engaged in last 90 days → secondary segment, lower frequency
+- **VIP** — top 10% lifetime spend → exclusive previews, early access, higher frequency OK
+- **At-risk** — engaged 91–180 days ago → move to win-back flow
+- **Dormant / Sunset** — no engagement 180+ days → suppress from campaigns, sunset flow only
+- **Recent purchasers (90 days)** — suppress from new-customer acquisition offers (avoid promo resentment)
+
+### Send cadence
+
+- **Newly subscribed (0–14 days):** welcome flow only; no campaigns.
+- **Engaged list:** 2–4 campaigns per week; drop to 1 during poor engagement windows.
+- **Re-engagement:** 1 campaign every 2 weeks until they engage or hit sunset threshold.
+- **Never send twice in 24h** without a compelling reason.
+
+### Deliverability (non-negotiable basics)
+
+- **Authentication:** SPF, DKIM, and **DMARC with `p=quarantine` minimum** (Google/Yahoo require DMARC since Feb 2024 for bulk senders). Verify via MXToolbox / Google Postmaster Tools monthly.
+- **Dedicated sending subdomain:** send from `mail.brand.com`, not `brand.com` — protects the root if reputation dips.
+- **Warm-up new IPs/domains:** first 30 days, send only to Engaged-30, ramp volume 25% daily.
+- **List hygiene:** remove hard bounces immediately; remove 3× soft bounces; never buy lists.
+- **Complaint rate target:** <0.1%. At 0.3% Gmail throttles; at 0.5% you're flagged.
+- **Google Postmaster Tools:** register and monitor weekly — Gmail is ~45% of US inbox.
+
+### Subject line + preheader (free real estate)
+
+- **Subject line:** 30–50 chars (mobile-first). Question / specific number / curiosity gap beats clever pun. A/B test at least one element per send if list >10k.
+- **Preheader:** 40–100 chars; never auto-pulled from body. Complements the subject, doesn't repeat it.
+- **Sender name:** first-name-from-brand ("Ryan at Merlin") beats corporate ("Merlin Team") on warm lists. Keep consistent.
 
 ### Email template rules
 
@@ -59,6 +99,48 @@ Warm list (existing subscribers): 35% open / 2% click / <0.5% unsubscribe. Diagn
 - Use the real logo PNG (`logo/logo.png`), never AI-generated text.
 - Use real product photos from Shopify CDN, never AI-generated product shots.
 - Brand colors are exact hex codes from `brand.md` → Brand Colors section.
+- **Dark-mode preview** — test in both light and dark Gmail; transparent-background logos fail on dark backgrounds.
+- **Plain-text alternative** — every HTML email needs a plain-text MIME part; missing one drops inbox placement.
+
+## SMS Marketing
+
+SMS drives 10–20% of revenue for DTC brands with SMS live (Postscript / Attentive / Klaviyo SMS published data). Zero SMS is a real revenue gap. Connect via Klaviyo SMS (if Klaviyo is the ESP) or recommend Postscript / Attentive as specialty platforms.
+
+### Compliance (TCPA US + CTIA carriers) — blocking requirements
+
+- **Express written consent** before the first message. Collect via: checkout checkbox (separate from email opt-in, NEVER pre-checked), SMS keyword opt-in (`TEXT SHOP TO 12345`), pop-up with TCPA disclosure.
+- **Disclosure text at opt-in** must include: brand name, "consent not required for purchase," message frequency ("4 msgs/mo"), "Msg & data rates may apply," "Reply STOP to unsubscribe / HELP for help," link to terms + privacy.
+- **STOP / UNSUBSCRIBE / CANCEL / END / QUIT / OPT OUT** must all work — handled automatically by Postscript/Attentive/Klaviyo. Honor within 24h.
+- **Quiet hours:** send only 8am–9pm in the recipient's local timezone. Schedules must be TZ-aware.
+- **A2P 10DLC registration** required since 2023 for US SMS. Unregistered brands get throttled or blocked. Handled by the SMS platform but must be completed during setup.
+- **Toll-free numbers** require verification and have stricter content rules; short codes (5–6 digits) have highest throughput, highest cost.
+
+### Essential SMS flows (mirror email, not duplicate)
+
+| # | Flow | Structure | Share of SMS flow rev |
+|---|---|---|---|
+| 1 | **Welcome** | 2 msgs / 3 days: welcome + offer → reminder if unused | 10–15% |
+| 2 | **Abandoned Cart** | 2 msgs: 30min reminder → 24hr urgency | 30–40% ← largest |
+| 3 | **Browse Abandonment** | 1 msg: 2hr "Still looking?" | 5–10% |
+| 4 | **Post-Purchase** | 2 msgs: shipping update → review request 14d | 5–10% |
+| 5 | **Back-in-stock** | 1 msg on restock | 5–10% |
+| 6 | **Win-back** | 1 msg at 60d + 1 at 90d | 3–5% |
+
+### SMS campaigns
+
+- **Frequency:** 4–8 campaigns per month max. SMS is high-intimacy; over-sending nukes the list.
+- **Length:** stay under 160 chars (1 segment) when possible — each segment costs. Hook, first name, 1 link, 1 CTA.
+- **MMS** (with image) lifts CTR 25–50% but costs 3–4× per segment. Reserve for launches and hero campaigns.
+- **Link handling:** always use the platform's branded short-link (`short.brandname.co`) — bit.ly is flagged as carrier spam.
+- **Send timing:** 10am–12pm and 3pm–6pm local TZ perform best for DTC. Avoid Mondays (inbox pile-up) and Friday evenings.
+- **Personalization:** first name + product name + order detail. Generic SMS ("Shop now!") underperforms personalized 2–3×.
+
+### SMS-specific metrics
+
+- **CTR** healthy: 5–15% (vs email's 1–3%) — SMS intent is much higher.
+- **Unsubscribe per send:** <2% healthy; >3% = message is off (segment, offer, or frequency).
+- **Revenue per recipient:** $0.50–$2.00 per send for DTC.
+- **Click-to-conversion** should beat email — if it doesn't, the landing page isn't mobile-ready (see `merlin-analytics`).
 
 ## Klaviyo (`mcp__merlin__klaviyo`)
 

@@ -1,16 +1,33 @@
 ---
 name: merlin-analytics
-description: Use when the user asks about performance, how their ads/store/business are doing, ROAS, CPA, ROI, MER, spend, aggregate revenue, dashboard, weekly numbers, wisdom insights, landing page audits, or conversion optimization. Covers the cross-platform dashboard (unified MER/ROAS across every connected platform), the wisdom engine (anonymized collective insights), the marketing calendar (launch cadence + seasonal gaps), and the 8-dimension landing page Conversion Rubric. Pulls exact numbers from `mcp__merlin__dashboard` — never estimates or derives metrics.
+description: Use when the user asks about performance, how their ads/store/business are doing, ROAS, MER, CAC, LTV, contribution margin, payback period, CPA, ROI, spend, aggregate revenue, dashboard, weekly numbers, wisdom insights, landing page audits, incrementality/holdout testing, or conversion optimization. Covers the cross-platform dashboard (MER + contribution margin + LTV:CAC as the real north stars, platform ROAS reported directionally with attribution window), incrementality framework (geo holdouts, channel-level lift expectations), the wisdom engine (anonymized collective insights), the marketing calendar (launch cadence + seasonal gaps), and the 9-dimension landing page Conversion Rubric with current Core Web Vitals (LCP/INP/CLS). Pulls exact numbers from `mcp__merlin__dashboard` — never estimates or derives metrics.
 owner: ryan
 ---
 
 # Analytics & Performance
 
+## North-star metrics (report these, not platform ROAS alone)
+
+Post-iOS 14.5, platform-reported ROAS over-credits paid channels by 20–60% depending on vertical. Every senior DTC operator (Common Thread Collective, Chase Dimond, Taylor Holiday, Pilothouse) has published on this. Merlin reports the real metrics:
+
+| Metric | Formula | Healthy | Why |
+|---|---|---|---|
+| **MER** (Marketing Efficiency Ratio) | total revenue / total ad spend | ≥3.0 scaling / ≥4.0 sustainable | Blended truth; doesn't care which platform claimed the conversion |
+| **Contribution margin** | revenue − COGS − ad spend − fulfillment − processing fees | ≥20% of revenue | Only metric that says if the business actually makes money |
+| **LTV:CAC** | 12-month customer value / fully-loaded CAC | 3:1 healthy, 4–5:1 world-class | Unit economics bar. <2:1 = buying a business that loses money |
+| **CAC payback period** | CAC / (AOV × margin × repeat_rate) | ≤3 months DTC, ≤12 months subscription | How fast cash recycles; drives growth ceiling |
+| **nCAC** (new-customer CAC) | ad spend / new customers | benchmark vs blended CAC | Separates acquisition from returning-customer efficiency |
+| **Platform ROAS** | revenue / ad spend per platform | Directional only | Report **with attribution window** (e.g. "Meta 2.4× 7dc/1dv"). Never as truth on its own. |
+
+**Reporting rule:** every dashboard response leads with **MER** and **contribution margin**. Platform ROAS appears below, always with its attribution window stated. If a user asks "how are the ads doing" and the answer is only platform ROAS, the answer is incomplete.
+
+**Margin inputs:** pull `cfg.productMargin`, `cfg.cogsPercent`, `cfg.fulfillmentPerOrder`, `cfg.paymentProcessorPct` (default 2.9% + $0.30). If any are unset, flag as "estimated" in output and prompt the user to set them (see `merlin-setup`).
+
 ## Dashboard (`mcp__merlin__dashboard`)
 
 | Action | Key params | Returns |
 |---|---|---|
-| `dashboard` | `brand`, `batchCount` (days) | Unified cross-platform MER/ROAS, spend, revenue, top/bottom ads, recommendations |
+| `dashboard` | `brand`, `batchCount` (days) | MER + contribution margin + platform ROAS table + LTV:CAC + payback, top/bottom ads, recommendations |
 | `wisdom` | `brand` | Collective anonymized insights (hook CTR, format win-rate, timing patterns by vertical) |
 | `calendar` | `brand` | Launch history, average cadence, seasonal signals, upcoming gaps |
 
@@ -71,30 +88,54 @@ Derive `bestHookStyle` / `bestFormat` from memory.md `## What Works` (most frequ
 
 ## Conversion Rubric (Landing Pages)
 
-When running `landing-audit` or auditing any conversion page, score 8 dimensions 0–100, weighted:
+When running `landing-audit` or auditing any conversion page, score 9 dimensions 0–100, weighted:
 
 | Dimension | Weight | Check |
 |---|---|---|
-| Headline clarity | 15% | Stranger describes what it does in 5 seconds |
-| CTA visibility | 15% | Above-fold, high contrast, action verb, one primary CTA |
-| Social proof | 15% | Real names/logos/numbers — not "trusted by thousands" |
-| Urgency | 10% | Specific scarcity ("28 left," "ends Friday") — not "limited time" |
-| Trust signals | 10% | Guarantees, security badges, refund policy, real contact info |
-| Form friction | 15% | Field count ≤ what's strictly required to fulfill |
-| Mobile responsive | 10% | Tap targets ≥44px, no horizontal scroll, readable without zoom |
-| Page speed | 10% | LCP <2.5s, CLS <0.1, hero image <200KB |
+| Value proposition clarity | 15% | What, for whom, why different — 1 sentence above the fold, not buried in a paragraph |
+| Headline × visual match | 10% | Headline and hero image/video tell the same story in <5s |
+| CTA clarity | 20% | One primary CTA above the fold, high contrast, action verb, consistent across page. Secondary CTA never competes visually |
+| Social proof | 12% | Real names / logos / numbers / verified reviews — not "trusted by thousands" |
+| Trust signals | 8% | Guarantees, refund policy, security badges, real contact info, shipping/returns clarity |
+| Urgency / scarcity | 5% | Specific and true ("28 left," "ends Friday 11:59 ET") — never fabricated |
+| Form / checkout friction | 10% | Field count ≤ what's strictly required; guest checkout available; Shop Pay / Apple Pay / PayPal offered |
+| Mobile experience | 15% | Tap targets ≥44px, no horizontal scroll, readable without zoom, hero visible without scroll. 60–70% of DTC traffic is mobile — under-weighting this tanks the audit |
+| Page speed (Core Web Vitals) | 5% | **LCP <2.5s, INP <200ms, CLS <0.1** (INP replaced FID in March 2024). Hero image <200KB, lazy-load below fold |
 
-**Overall grade:** A (90+) / B (80–89) / C (70–79) / D (60–69) / F (<60). Grade below B → fix before adding traffic. **Never recommend scaling ad spend into a C/D/F page.**
+**Overall grade:** A (90+) / B (80–89) / C (70–79) / D (60–69) / F (<60). Grade below B → fix before adding traffic. **Never recommend scaling ad spend into a C/D/F page.** A 3× ROAS creative driving to a C page loses half its ROAS at the page — fix the page first, then scale ads.
 
 **Automatic enforcement.** The grade is cached to `.merlin-landing-audits.json` by `landing-audit`. `meta-budget` and `meta-duplicate` (scale-up paths) call `enforceLandingGrade` before changing spend — scores below 80 are refused unless the caller passes `force=true`. Unaudited URLs pass silently, so this is not a surprise block on new pages. The bands above are the exact cutoffs the binary enforces — don't paraphrase them elsewhere.
 
+## Incrementality (the check senior operators run and juniors skip)
+
+Platform-attributed ROAS over-reports because ad platforms count conversions that would have happened anyway (brand search, direct, existing email list). The only way to know paid media's true lift is to test it.
+
+**Geo holdout (simplest, cheapest):** pause all paid spend in 1–2 comparable DMAs for 2–4 weeks. Compare revenue trajectory vs control DMAs (population-normalized). The delta is **true incremental revenue**. Incremental MER = incremental revenue / ad spend in test DMAs.
+
+**Expected incrementality by channel** (observed across published DTC case studies — use as sanity check, not truth):
+- **Brand Search / retargeting:** often <20% incremental (most would have converted anyway)
+- **Prospecting on Meta/TikTok:** 50–80% incremental when campaigns are healthy
+- **PMax:** highly variable — run geo holdout to be sure (PMax cannibalizes brand unless excluded; see `merlin-ads`)
+- **Affiliate / influencer with discount codes:** check code reuse rates — often gamed by existing customers
+
+**When Merlin should flag incrementality concerns:**
+- Blended MER ≥4× but LTV:CAC <2:1 → platform ROAS is lying somewhere; recommend a 2-week geo holdout.
+- A campaign's platform ROAS is 2× higher than the blended MER → that campaign is likely over-claiming; candidate for scale-down, not scale-up.
+- Retargeting ROAS >10× → almost certainly non-incremental. Test by pausing retargeting for 2 weeks and watching total revenue.
+
+**Tooling context:** brands above ~$2M/yr should graduate to a dedicated incrementality / MMM platform (Haus, Northbeam, Prescient AI, Measured, Rockerbox). Merlin surfaces the need; the user picks the tool.
+
 ## Creative velocity check
 
-On `dashboard` runs, check weekly creative count vs. target: **1–3 new creatives per $10K/week spend**. Surface shortfall in the briefing.
+On `dashboard` runs, check weekly creative count vs. target: **1–3 new creatives per $10K/week spend**. Surface shortfall in the briefing. Velocity is the single biggest predictor of sustained ad account health (Motion's published data).
 
 ## Owned-channel target
 
-On `dashboard`, check email + SMS contribution. Under 20% of revenue → recommend flows in order: welcome → browse abandon → cart abandon → post-purchase → win-back (full rubric in `merlin-social`).
+On `dashboard`, check email + SMS contribution to revenue.
+
+- **Under 25%** → owned channels are under-invested. Recommend flows in order: welcome → browse abandon → cart abandon → post-purchase → win-back (full rubric in `merlin-social`). Klaviyo's own published benchmark for mature DTC is 25–30% of revenue from email + SMS combined.
+- **SMS specifically should contribute 10–20%** for DTC brands with SMS live (Postscript / Attentive / Klaviyo SMS data). Zero SMS = significant gap; recommend enabling.
+- **Over 40%** → owned is doing too much work because paid is underperforming. Look at paid acquisition health, not as a compliment to email.
 
 ## Routing hints
 

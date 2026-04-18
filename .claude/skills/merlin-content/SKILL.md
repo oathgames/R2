@@ -1,8 +1,8 @@
 ---
 name: merlin-content
-description: Use when the user wants to make, generate, create, shoot, write, or brief an ad, image, video, voiceover, blog body, email body, landing headline, social post, or any creative asset. Covers the 7-lock Universal Creative Brief, ad-type modules (UGC, Hero, Talking-Head, SaaS, Gameplay, Split-Screen, Transformation), the negative anchor library, continuity locks, realism gradient, the 6 technical anchors for video, the prompt template, the Copy Quality Gate (7-expert panel + AI detector weighted 1.5× + banned-vocab list), the Content Scoring viral formula, and HeyGen one-shot Video Agent routing.
+description: Use when the user wants to make, generate, create, shoot, write, or brief an ad, image, video, voiceover, blog body, email body, landing headline, social post, or any creative asset. Covers the 7-lock Universal Creative Brief, ad-type modules (UGC, Hero, Talking-Head, SaaS, Gameplay, Split-Screen, Transformation), the negative anchor library, continuity locks, realism gradient, the 6 technical anchors for video, the prompt template, offer construction (Hormozi Value Equation + Schwartz 5 awareness levels + PAS/AIDA/PASTOR/RMBC frameworks), creative performance metrics (hook rate, hold rate, thumbstop ratio, beat structure), the Copy Quality Gate (7-expert panel + AI detector weighted 1.5× + banned-vocab list), the Content Scoring viral formula, and HeyGen one-shot Video Agent routing.
 owner: ryan
-bytes_justification: 20KB — the creative brief (7 locks × 7 ad-type modules × negative-anchor library × realism gradient × video technical anchors × copy quality gate × content scoring) forms one linked reasoning chain. Splitting by asset type would duplicate the shared brief/scoring sections and break cross-references (e.g. UGC brief references the realism gradient which references continuity locks). Hard-capped at 25KB.
+bytes_justification: 26KB — the creative brief (7 locks × 7 ad-type modules × negative-anchor library × realism gradient × video technical anchors), offer construction (Value Equation + Schwartz awareness levels + 5 DR frameworks), creative performance metrics (hook/hold/thumbstop with beat structure), copy quality gate, and content scoring form one linked reasoning chain. Splitting by asset type would duplicate the shared brief/scoring sections and break cross-references (e.g. UGC brief references the realism gradient which references continuity locks; offer construction references hook archetypes which reference Copy Quality Gate). Hard-capped at 32KB.
 ---
 
 # Content Production — Images, Video, Copy
@@ -187,18 +187,73 @@ HeyGen output → `results/video/YYYY-MM/<brand>/ad_<runID>/video.mp4`. Requires
 
 `clone` (`voiceSampleDir`, `voiceName`) · `list` · `delete` (`voiceId`) · `list-avatars` (HeyGen).
 
+## Offer Construction (copy can't save a weak offer)
+
+Before writing a single line of copy, score the **offer**. Copy amplifies offers; it doesn't rescue them.
+
+### Hormozi Value Equation (score 0–100 per factor)
+
+`Value = (Dream Outcome × Perceived Likelihood of Success) / (Time Delay × Effort & Sacrifice)`
+
+- **Dream outcome** — what they actually want (not what the product does). "Clear skin" not "20% niacinamide serum."
+- **Perceived likelihood** — proof the outcome is real: testimonials with outcomes, before/afters, data, guarantees.
+- **Time delay** — how fast they feel it. Faster = higher perceived value. Name the timeline.
+- **Effort & sacrifice** — how much they must do / give up. Lower = higher perceived value.
+
+Strong offers lift the numerator AND shrink the denominator simultaneously. Stack: core product + risk reversal (money-back, try-before-you-buy) + real urgency + bonuses that complement, not dilute.
+
+### Eugene Schwartz — 5 Levels of Awareness (match copy to reader state)
+
+| Level | Reader knows | Copy leads with |
+|---|---|---|
+| **Unaware** | Has a problem but can't articulate it | Story / pattern interrupt; name the feeling |
+| **Problem-aware** | Names the problem, not solutions | Agitate problem, introduce category |
+| **Solution-aware** | Knows solutions exist, hasn't chosen | Comparisons, "why [your mechanism] wins" |
+| **Product-aware** | Knows your product, hasn't bought | Risk reversal, proof, specifics |
+| **Most-aware** | Knows and wants it | Offer, deadline, discount, CTA |
+
+**Cold Meta/TikTok traffic is Unaware / Problem-aware. Retargeting is Solution / Product-aware. Email list is Product / Most-aware.** Copy that leads with features to cold traffic fails because the reader has no frame. Copy that re-explains the problem to a warm list bores them.
+
+### Frameworks (pick one per piece — don't mix)
+
+- **PAS** (Problem-Agitate-Solve) — cold social, short-form video scripts, subject lines.
+- **AIDA** (Attention-Interest-Desire-Action) — long-form landing pages, cold email.
+- **PASTOR** (Problem-Amplify-Story-Transformation-Offer-Response) — sales pages, webinars.
+- **4-P's** (Picture-Promise-Proof-Push) — email campaigns, paid social long copy.
+- **Stefan Georgi RMBC** (Research-Mechanism-Brief-Copy) — VSLs, advertorials, long-form DR.
+
+## Creative Performance Metrics (the real scoreboard)
+
+Subjective quality scoring is directional. The actual measure is what the platform reports post-launch:
+
+| Metric | Formula | Healthy (DTC video) | Unhealthy |
+|---|---|---|---|
+| **Hook rate** (3-second view rate) | 3s views / impressions | ≥30% | <20% = first frame isn't stopping scrolls |
+| **Hold rate** | 15s views / 3s views | ≥50% | <30% = hook is baity; body doesn't deliver |
+| **Thumbstop ratio** | 3s views / impressions, compared across creatives | top 20% vs account avg | flag bottom 20% for replacement |
+| **CTR (link)** | link clicks / impressions | ≥1.5% Meta feed / ≥1.0% TikTok | <1.0% Meta feed = weak CTA or offer |
+| **Cost per thumb-stop** | spend / 3s views | <$0.02 | >$0.05 = bad creative at any CPM |
+
+**Beat structure for video hooks** (0–3s → 3–15s → 15–25s → final 2s):
+- **0–3s — hook.** Stop the scroll. Pattern interrupt, question, dramatic visual, or bold claim. No brand logos, no slow pans.
+- **3–15s — retention.** Deliver on the hook. Name the problem, show the mechanism, build tension. Hold rate is won or lost here.
+- **15–25s — proof / offer.** Testimonial, before/after, demo, specific result with numbers.
+- **Final 2s — CTA.** Single specific action. "Tap to shop" not "Learn more."
+
+**Feedback loop:** after each optimize run, write top performers' hook archetype, module, and retention curve to `memory.md ## What Works`. Every brief pulls from that section — creative testing compounds only if winners are encoded back into the brief generator.
+
 ## Copy Quality Gate
 
 Before shipping any written output — ad copy, email body, blog post, landing headline, social post, thread — score it 0–100 against a 7-expert panel. Target ≥90. Max 3 revision rounds, then ship best version with candid notes on remaining gaps.
 
 **The 7 experts** (score each 0–100, then average):
-1. Direct-response copywriter — does it sell?
+1. Direct-response copywriter — does it sell? Is the offer clear? (reference Value Equation above)
 2. Brand voice guardian — does it sound like this brand?
 3. Conversion analyst — is the CTA single, specific, frictionless?
 4. SEO strategist — keyword + intent match (skip for ad copy).
 5. Skeptical founder — would the CEO approve this going out?
-6. Audience persona match — does the target reader recognize themselves?
-7. **AI-writing detector — weighted 1.5×.** AI-sounding copy is an automatic ship blocker regardless of other scores.
+6. Audience persona match — does the target reader recognize themselves? Is the awareness level matched (Schwartz)?
+7. **AI-writing detector — weighted 1.5×.** **AI-confidence ≥40% = automatic ship blocker** regardless of other scores. If a dedicated detector isn't available, apply the heuristic checklist below — any ≥3 banned-vocab hits or ≥2 humanizer patterns = blocking.
 
 **Banned vocabulary** (−5 per instance, reject if ≥3 present): delve, tapestry, leverage, seamless, transformative, ecosystem, synergy, elevate, unlock, empower, journey (figurative), navigate (figurative), realm, landscape (figurative), harness, foster (figurative), testament, pivotal, paramount, crucial, bespoke (unless literally tailored), robust, comprehensive, holistic, meticulously, in today's fast-paced world, at the end of the day.
 
