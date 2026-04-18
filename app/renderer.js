@@ -1935,6 +1935,7 @@ const PLATFORM_DISPLAY_NAMES = {
   klaviyo: 'Klaviyo', pinterest: 'Pinterest', snapchat: 'Snapchat',
   twitter: 'X', slack: 'Slack', discord: 'Discord', stripe: 'Stripe',
   fal: 'fal.ai', elevenlabs: 'ElevenLabs', heygen: 'HeyGen', arcads: 'Arcads',
+  foreplay: 'Foreplay',
 };
 function platformDisplayName(platform) {
   if (!platform) return '';
@@ -3170,6 +3171,7 @@ const API_KEY_PLATFORMS = {
   elevenlabs: { key: 'elevenLabsApiKey', label: 'ElevenLabs', placeholder: 'xi_xxxx...', url: 'https://elevenlabs.io/app/settings/api-keys' },
   heygen:     { key: 'heygenApiKey', label: 'HeyGen', placeholder: 'your-api-key', url: 'https://app.heygen.com/settings?nav=API' },
   arcads:     { key: 'arcadsApiKey', label: 'Arcads', placeholder: 'your-api-key', url: 'https://app.arcads.ai/settings' },
+  foreplay:   { key: 'foreplayApiKey', label: 'Foreplay', placeholder: 'fp_xxxx...', url: 'https://app.foreplay.co/settings/api' },
 };
 
 // Shopify-specific helpers — extracted so the context-menu "Use my API key"
