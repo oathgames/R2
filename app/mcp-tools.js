@@ -128,6 +128,8 @@ const BRAND_OPTIONAL_ACTIONS = new Set([
   // which is brand-agnostic by design (one research library across brands).
   'foreplay-brands-by-domain', 'foreplay-ads-by-brand', 'foreplay-ads-by-page',
   'foreplay-ad-duplicates', 'foreplay-download-ad', 'foreplay-usage',
+  // Brand-guide validate is a pure JSON dry-run; write/read are brand-scoped.
+  'validate-brand-guide',
 ]);
 
 // Normalize `brand` input — empty string, undefined, and null all mean
@@ -785,6 +787,107 @@ function buildTools(tool, z, ctx) {
       } catch (e) {
         return { content: [{ type: 'text', text: `Connection error: ${redactOutput(e.message, '')}` }], isError: true };
       }
+    }
+  ));
+
+  // ── brand_scrape ─────────────────────────────────────────
+  //
+  // Capture a BrandSignal from a live URL using the in-process Electron
+  // BrowserWindow. Returns palette, typography, logo candidates, screenshots,
+  // JSON-LD schema, copy samples, and CSS tokens — the raw material Claude
+  // synthesizes into a brand-guide.json via the merlin-brand-guide skill.
+  //
+  // Default output OMITS screenshots (1-3MB base64 each) and raw HTML to keep
+  // Claude's context budget intact. Callers that need screenshots (e.g. for
+  // vision-based disambiguation) must pass includeScreenshots: true.
+  tools.push(tool(
+    'brand_scrape',
+    'Scrape a brand website to capture palette, typography, logo candidates, and copy samples. Used once during onboarding; the output feeds brand-guide synthesis. Screenshots are stripped by default.',
+    {
+      url: z.string().describe('Brand homepage URL (e.g. https://madchill.com)'),
+      includeScreenshots: z.boolean().optional().describe('Include base64 desktop+mobile PNGs (large — only set true when vision analysis is needed)'),
+      includeHtml: z.boolean().optional().describe('Include raw HTML of homepage + about page (very large — usually unnecessary)'),
+    },
+    async ({ url, includeScreenshots, includeHtml }) => {
+      if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+        return { content: [{ type: 'text', text: 'url must be an http(s) URL' }], isError: true };
+      }
+      let scrapeBrand;
+      try {
+        ({ scrapeBrand } = require('./brand-scraper'));
+      } catch (e) {
+        return { content: [{ type: 'text', text: `brand-scraper module failed to load: ${e.message}` }], isError: true };
+      }
+      try {
+        const signal = await scrapeBrand(url);
+        if (!includeScreenshots && signal.screenshots) {
+          signal.screenshots = {
+            desktop: '[elided — pass includeScreenshots:true to include ~1-3MB base64 PNG]',
+            mobile: '[elided — pass includeScreenshots:true to include ~1-3MB base64 PNG]',
+          };
+        }
+        if (!includeHtml) {
+          if (signal.homepage_html) signal.homepage_html = '[elided — pass includeHtml:true]';
+          if (signal.about_html) signal.about_html = '[elided — pass includeHtml:true]';
+        }
+        const text = JSON.stringify(signal, null, 2);
+        return { content: [{ type: 'text', text }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: `Scrape failed: ${redactOutput(e && e.message || String(e), '')}` }], isError: true };
+      }
+    }
+  ));
+
+  // ── brand_guide ──────────────────────────────────────────
+  //
+  // Validate, write, or read the brand-guide.json for a brand. The synthesis
+  // prompt (merlin-brand-guide skill) produces the JSON; this tool hardens it
+  // through the Go validator (WCAG math, forbidden-word scan, schema checks)
+  // and persists it atomically into assets/brands/<brand>/brand-guide.json.
+  //
+  // Claude flow:
+  //   1. scrape site via brand_scrape
+  //   2. synthesize guide per merlin-brand-guide skill
+  //   3. brand_guide({ action:"validate", brandGuide: <json> }) — catches slop
+  //   4. fix any violations, re-validate
+  //   5. brand_guide({ action:"write", brand, brandGuide: <json> }) — persists
+  tools.push(tool(
+    'brand_guide',
+    'Validate, write, or read a brand-guide.json. Validate runs WCAG contrast math + forbidden-word scan + schema checks without persisting. Write atomically persists a pre-validated guide. Read returns the persisted guide for review / downstream creative generation.',
+    {
+      action: z.enum(['validate', 'write', 'read']).describe('validate=dry-run checks only; write=persist to brand folder; read=return persisted guide'),
+      brand: z.string().optional().describe('Brand name — required for write and read'),
+      brandGuide: z.any().optional().describe('The brand guide JSON object (required for validate and write)'),
+    },
+    async (args) => {
+      const action = `${args.action}-brand-guide`;
+      if (action === 'validate-brand-guide' && !args.brandGuide) {
+        return { content: [{ type: 'text', text: 'brandGuide (the JSON object) is required for validate' }], isError: true };
+      }
+      if (action === 'write-brand-guide' && (!args.brand || !args.brandGuide)) {
+        return { content: [{ type: 'text', text: 'brand and brandGuide are both required for write' }], isError: true };
+      }
+      if (action === 'read-brand-guide' && !args.brand) {
+        return { content: [{ type: 'text', text: 'brand is required for read' }], isError: true };
+      }
+      // Binary Command struct takes brandGuide as json.RawMessage. The runBinary
+      // helper JSON.stringify's the whole Command, so we pass an object here —
+      // NOT a pre-stringified JSON blob (that would double-encode as a string).
+      // If the caller handed us a string, parse it first so we normalize shape.
+      const payload = { action, brand: args.brand };
+      if (args.brandGuide !== undefined) {
+        if (typeof args.brandGuide === 'string') {
+          try {
+            payload.brandGuide = JSON.parse(args.brandGuide);
+          } catch (e) {
+            return { content: [{ type: 'text', text: `brandGuide is not valid JSON: ${e.message}` }], isError: true };
+          }
+        } else {
+          payload.brandGuide = args.brandGuide;
+        }
+      }
+      const result = await runBinary(ctx, action, payload, { timeout: 30000 });
+      return { content: [{ type: 'text', text: result.text }], isError: result.error };
     }
   ));
 

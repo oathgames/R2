@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' merlin: data: blob: https:; font-src 'self' https://fonts.gstatic.com; connect-src 'self'">
+<title>Merlin — Brand Guide Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+:root{--review-max:1120px}
+body{overflow:auto}
+.bg-review{
+  min-height:100vh;
+  padding:24px 20px 120px;
+  background:var(--bg);
+}
+.review-wrap{max-width:var(--review-max);margin:0 auto}
+
+.review-hero{
+  display:flex;gap:20px;align-items:center;
+  padding:22px 24px;
+  background:linear-gradient(135deg,rgba(167,139,250,.14),rgba(52,211,153,.08));
+  border:1px solid var(--accent-border);
+  border-radius:var(--radius);
+  margin-bottom:24px;
+}
+.hero-logo{
+  width:72px;height:72px;border-radius:14px;
+  background:var(--surface);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;flex-shrink:0;
+}
+.hero-logo img{max-width:100%;max-height:100%;display:block}
+.hero-logo.empty::after{content:'✦';font-size:32px;color:var(--text-dim)}
+.hero-text{flex:1;min-width:0}
+.hero-eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:6px}
+.hero-brand-name{font-size:28px;font-weight:700;letter-spacing:-.02em;margin-bottom:4px;word-break:break-word}
+.hero-positioning{color:var(--text-muted);font-size:15px;line-height:1.45}
+.hero-meta{margin-top:10px;font-size:11px;color:var(--text-dim);display:flex;gap:12px;flex-wrap:wrap}
+.hero-meta span{display:inline-flex;align-items:center;gap:4px}
+
+.section{margin-bottom:28px}
+.section-head{
+  display:flex;align-items:baseline;justify-content:space-between;
+  margin-bottom:12px;gap:12px;
+}
+.section-title{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-dim);font-weight:600}
+.section-refine{
+  font-size:11px;color:var(--accent);background:none;border:none;
+  cursor:pointer;padding:4px 8px;border-radius:6px;
+}
+.section-refine:hover{background:var(--accent-bg)}
+
+.card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:18px 20px;
+}
+
+/* ── Palette ── */
+.palette-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+  gap:12px;
+}
+.swatch{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;overflow:hidden;
+  display:flex;flex-direction:column;
+}
+.swatch-chip{height:100px;position:relative}
+.swatch-chip .role-pill{
+  position:absolute;top:8px;left:8px;
+  background:rgba(0,0,0,.45);color:#fff;
+  font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  padding:3px 8px;border-radius:99px;backdrop-filter:blur(4px);
+}
+.swatch-body{padding:10px 12px}
+.swatch-hex{font-family:'SF Mono',Menlo,monospace;font-size:13px;font-weight:600}
+.swatch-label{font-size:11px;color:var(--text-muted);margin-top:2px}
+.swatch-meta{font-size:10px;color:var(--text-dim);margin-top:6px;display:flex;gap:8px;flex-wrap:wrap}
+.swatch-meta .pair{display:inline-flex;align-items:center;gap:4px;background:var(--bg-deep);padding:2px 6px;border-radius:6px}
+
+/* ── Typography ── */
+.type-list{display:flex;flex-direction:column;gap:14px}
+.type-row{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;padding:16px 20px;
+}
+.type-meta{
+  display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;
+  font-size:11px;color:var(--text-muted);margin-bottom:10px;
+}
+.type-meta .role{
+  background:var(--accent-bg);color:var(--accent);
+  padding:3px 8px;border-radius:99px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.08em;font-size:10px;
+}
+.type-meta code{font-family:'SF Mono',Menlo,monospace;font-size:11px;color:var(--text)}
+.type-specimen{line-height:1.15;letter-spacing:-.01em;color:var(--text)}
+.type-fallback{font-size:10px;color:var(--text-dim);margin-top:8px;font-family:'SF Mono',Menlo,monospace}
+
+/* ── Voice ── */
+.voice-cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:760px){.voice-cols{grid-template-columns:1fr}}
+.voice-col{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;padding:16px 18px;
+}
+.voice-col h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dim);font-weight:600;margin-bottom:10px}
+.voice-col.do h3{color:var(--success)}
+.voice-col.dont h3{color:#f87171}
+.voice-list{list-style:none;padding:0;display:flex;flex-direction:column;gap:8px}
+.voice-list li{
+  font-size:13px;color:var(--text);line-height:1.45;
+  padding-left:22px;position:relative;
+}
+.voice-col.do .voice-list li::before{content:'✓';position:absolute;left:0;top:0;color:var(--success);font-weight:700}
+.voice-col.dont .voice-list li::before{content:'✕';position:absolute;left:0;top:0;color:#f87171;font-weight:700}
+.voice-state{font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.55}
+.voice-state strong{color:var(--text);display:block;margin-bottom:4px;font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:600}
+.forbidden-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
+.chip{
+  font-family:'SF Mono',Menlo,monospace;font-size:10px;
+  background:rgba(239,68,68,.1);color:#f87171;
+  padding:3px 8px;border-radius:6px;border:1px solid rgba(239,68,68,.2);
+}
+
+/* ── Audience ── */
+.aud-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:760px){.aud-grid{grid-template-columns:1fr}}
+.aud-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px}
+.aud-label{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dim);font-weight:600;margin-bottom:6px}
+.aud-primary{font-size:15px;color:var(--text);font-weight:500;line-height:1.45}
+.aud-anti{font-size:13px;color:var(--text-muted);line-height:1.45}
+.aud-jtbd{list-style:none;padding:0;margin-top:8px;display:flex;flex-direction:column;gap:6px}
+.aud-jtbd li{font-size:12px;color:var(--text-muted);padding-left:14px;position:relative}
+.aud-jtbd li::before{content:'→';position:absolute;left:0;top:0;color:var(--accent)}
+
+/* ── Imagery ── */
+.img-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media (max-width:760px){.img-grid{grid-template-columns:1fr}}
+.img-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.img-box h4{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dim);font-weight:600;margin-bottom:8px}
+.img-box .use h4{color:var(--success)}
+.img-box.avoid h4{color:#f87171}
+.img-tokens{display:flex;flex-wrap:wrap;gap:5px}
+.img-tokens span{
+  font-size:11px;padding:3px 8px;border-radius:6px;
+  background:var(--bg-deep);color:var(--text-muted);
+  border:1px solid var(--border);
+}
+
+/* ── Ad defaults ── */
+.ad-cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+@media (max-width:760px){.ad-cols{grid-template-columns:1fr}}
+.ad-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.ad-box h4{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dim);font-weight:600;margin-bottom:10px}
+.ad-box.hooks h4{color:var(--accent)}
+.ad-box.cta h4{color:var(--success)}
+.ad-box.forbid h4{color:#f87171}
+.ad-list{list-style:none;padding:0;display:flex;flex-direction:column;gap:6px}
+.ad-list li{font-size:12px;color:var(--text);line-height:1.4;padding:5px 8px;background:var(--bg-deep);border-radius:6px}
+
+/* ── Email defaults ── */
+.email-preview{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;overflow:hidden;
+}
+.email-bar{font-size:10px;color:var(--text-dim);padding:8px 12px;background:var(--bg-deep);border-bottom:1px solid var(--border);font-family:'SF Mono',Menlo,monospace}
+.email-body{padding:24px;display:flex;flex-direction:column;gap:16px;align-items:center}
+.email-logo-spot{width:120px;height:40px;background:var(--bg-deep);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text-dim)}
+.email-headline{font-size:22px;font-weight:700;text-align:center;line-height:1.2}
+.email-cta{
+  padding:12px 28px;border-radius:6px;font-weight:600;font-size:13px;
+  letter-spacing:.02em;
+}
+.email-meta{font-size:11px;color:var(--text-dim);margin-top:8px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+
+/* ── Action bar ── */
+.action-bar{
+  position:fixed;left:0;right:0;bottom:0;
+  background:var(--bg-deep);border-top:1px solid var(--border);
+  padding:14px 24px;display:flex;justify-content:space-between;align-items:center;gap:12px;
+  z-index:50;
+}
+.action-left{font-size:12px;color:var(--text-muted)}
+.action-right{display:flex;gap:10px}
+.btn{
+  padding:10px 18px;border-radius:8px;font-size:13px;font-weight:600;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);
+  cursor:pointer;font-family:var(--font);transition:all .15s ease;
+}
+.btn:hover{background:var(--surface-hover)}
+.btn-primary{
+  background:var(--accent);border-color:var(--accent);color:#0b0b0d;
+}
+.btn-primary:hover{background:#b9a3fb}
+.btn-ghost{background:transparent;border-color:var(--border);color:var(--text-muted)}
+.btn-ghost:hover{color:var(--text);background:var(--surface)}
+
+/* ── Loading / Error ── */
+.state{
+  min-height:60vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:12px;color:var(--text-muted);text-align:center;padding:40px 20px;
+}
+.state .spinner{
+  width:32px;height:32px;border-radius:50%;
+  border:2px solid var(--border);border-top-color:var(--accent);
+  animation:spin 0.9s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.state h2{font-size:16px;font-weight:600;color:var(--text)}
+.state p{font-size:12px;max-width:380px;line-height:1.5}
+.state code{font-family:'SF Mono',Menlo,monospace;font-size:11px;background:var(--surface);padding:2px 6px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="bg-review">
+  <div class="review-wrap">
+    <div id="state" class="state">
+      <div class="spinner"></div>
+      <h2>Loading brand guide…</h2>
+      <p id="state-detail">Reading <code id="state-path">brand-guide.json</code></p>
+    </div>
+    <div id="content" hidden></div>
+  </div>
+</div>
+
+<div id="action-bar" class="action-bar" hidden>
+  <div class="action-left" id="gen-meta">Generated just now</div>
+  <div class="action-right">
+    <button class="btn btn-ghost" id="btn-refine">Refine</button>
+    <button class="btn" id="btn-edit-json">Edit JSON</button>
+    <button class="btn btn-primary" id="btn-approve">Looks great — use this</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+const qs = new URLSearchParams(location.search);
+const brand = qs.get('brand') || '';
+const previewMode = qs.get('preview') === '1';
+
+const stateEl = document.getElementById('state');
+const stateDetail = document.getElementById('state-detail');
+const statePath = document.getElementById('state-path');
+const contentEl = document.getElementById('content');
+const actionBar = document.getElementById('action-bar');
+const genMetaEl = document.getElementById('gen-meta');
+
+function showError(title, detail) {
+  stateEl.innerHTML = `
+    <div style="width:48px;height:48px;border-radius:50%;background:rgba(239,68,68,.1);color:#f87171;display:flex;align-items:center;justify-content:center;font-size:24px">!</div>
+    <h2>${escapeHtml(title)}</h2>
+    <p>${detail}</p>
+  `;
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function postToHost(type, payload) {
+  if (window.merlin && typeof window.merlin.send === 'function') {
+    window.merlin.send('brandGuide:' + type, payload);
+    return;
+  }
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({ source: 'merlin-brand-review', type, payload }, '*');
+    return;
+  }
+  console.log('[brand-review]', type, payload);
+}
+
+// WCAG helpers for contrast badges
+function hexRgb(h) {
+  h = String(h || '').replace('#','');
+  if (h.length === 3) h = h.split('').map(c=>c+c).join('');
+  if (h.length !== 6) return null;
+  return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+}
+function lumCh(v){v/=255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4)}
+function luminance(rgb){return 0.2126*lumCh(rgb[0])+0.7152*lumCh(rgb[1])+0.0722*lumCh(rgb[2])}
+function contrast(a,b){const L1=luminance(a),L2=luminance(b);const hi=Math.max(L1,L2),lo=Math.min(L1,L2);return (hi+0.05)/(lo+0.05)}
+function ratio(hexA, hexB){
+  const a=hexRgb(hexA), b=hexRgb(hexB);
+  if(!a||!b) return null;
+  return Math.round(contrast(a,b)*100)/100;
+}
+
+function loadGoogleFont(family, weights) {
+  if (!family) return;
+  const w = (weights && weights.length ? weights : [400,500,600,700]).slice().sort((a,b)=>a-b).join(';');
+  const href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family).replace(/%20/g,'+')}:wght@${w}&display=swap`;
+  if (document.querySelector(`link[data-font="${family}"]`)) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = href;
+  link.dataset.font = family;
+  document.head.appendChild(link);
+}
+
+function renderHero(g) {
+  const logoSrc = (g.logo && g.logo.source_url) || '';
+  return `
+    <div class="review-hero">
+      <div class="hero-logo ${logoSrc ? '' : 'empty'}">
+        ${logoSrc ? `<img src="${escapeHtml(logoSrc)}" alt="${escapeHtml(g.brand_name)} logo" onerror="this.parentElement.classList.add('empty');this.remove()">` : ''}
+      </div>
+      <div class="hero-text">
+        <div class="hero-eyebrow">Your brand guide</div>
+        <div class="hero-brand-name">${escapeHtml(g.brand_name || 'Unnamed brand')}</div>
+        <div class="hero-positioning">${escapeHtml(g.one_line_positioning || '')}</div>
+        <div class="hero-meta">
+          <span>✦ Generated by Claude ${escapeHtml((g.generation_meta && g.generation_meta.model) || '')}</span>
+          <span>•</span>
+          <span id="hero-timestamp"></span>
+          ${g.generation_meta && g.generation_meta.confidence != null ? `<span>•</span><span>Confidence ${Math.round(g.generation_meta.confidence*100)}%</span>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPalette(g) {
+  const palette = Array.isArray(g.palette) ? g.palette : [];
+  const surface = palette.find(p => p.role === 'surface');
+  const ink = palette.find(p => p.role === 'ink');
+
+  const swatches = palette.map(p => {
+    const onSurface = surface ? ratio(p.hex, surface.hex) : null;
+    const onInk = ink ? ratio(p.hex, ink.hex) : null;
+    const pairs = [];
+    if (onSurface != null && p.role !== 'surface') pairs.push(`on surface <strong>${onSurface}</strong>`);
+    if (onInk != null && p.role !== 'ink') pairs.push(`on ink <strong>${onInk}</strong>`);
+    const textColor = luminance(hexRgb(p.hex)||[0,0,0]) > 0.5 ? '#1a1a1c' : '#fff';
+    return `
+      <div class="swatch">
+        <div class="swatch-chip" style="background:${escapeHtml(p.hex)}">
+          <span class="role-pill" style="color:${textColor};background:rgba(${textColor==='#fff'?'0,0,0':'255,255,255'},.4)">${escapeHtml(p.role||'')}</span>
+        </div>
+        <div class="swatch-body">
+          <div class="swatch-hex">${escapeHtml(p.hex)}</div>
+          <div class="swatch-label">${escapeHtml(p.use || '')}</div>
+          ${pairs.length ? `<div class="swatch-meta">${pairs.map(x=>`<span class="pair">${x}</span>`).join('')}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="section">
+      <div class="section-head">
+        <div class="section-title">Palette</div>
+        <button class="section-refine" data-refine="palette">Refine</button>
+      </div>
+      <div class="palette-grid">${swatches}</div>
+    </div>
+  `;
+}
+
+function renderTypography(g) {
+  const types = Array.isArray(g.typography) ? g.typography : [];
+  types.forEach(t => loadGoogleFont(t.family, t.weights));
+
+  const sampleByRole = { display: 'Build something people talk about.', heading: 'Your ads, your brand, your way.', body: 'Merlin turns your product into a set of campaigns you can actually ship — today.' };
+
+  const rows = types.map(t => {
+    const weights = (t.weights || []).join(', ');
+    const sample = sampleByRole[t.role] || 'The quick brown fox jumps over the lazy dog.';
+    const family = t.family || 'Inter';
+    return `
+      <div class="type-row">
+        <div class="type-meta">
+          <span class="role">${escapeHtml(t.role || '')}</span>
+          <span><code>${escapeHtml(family)}</code></span>
+          <span>Weights: <code>${escapeHtml(weights)}</code></span>
+          ${t.letter_spacing != null ? `<span>Tracking <code>${escapeHtml(t.letter_spacing)}</code></span>` : ''}
+        </div>
+        <div class="type-specimen" style="font-family:'${escapeHtml(family)}',Inter,system-ui;font-weight:${t.role==='display'?800:t.role==='heading'?700:500};font-size:${t.role==='display'?42:t.role==='heading'?26:16}px">
+          ${escapeHtml(sample)}
+        </div>
+        ${t.fallback ? `<div class="type-fallback">fallback: ${escapeHtml(t.fallback)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="section">
+      <div class="section-head">
+        <div class="section-title">Typography</div>
+        <button class="section-refine" data-refine="typography">Refine</button>
+      </div>
+      <div class="type-list">${rows}</div>
+    </div>
+  `;
+}
+
+function renderVoice(g) {
+  const v = g.voice || {};
+  const rules = Array.isArray(v.rules) ? v.rules : [];
+  const forbidden = Array.isArray(v.forbidden_words_for_this_brand) ? v.forbidden_words_for_this_brand : [];
+
+  return `
+    <div class="section">
+      <div class="section-head">
+        <div class="section-title">Voice</div>
+        <button class="section-refine" data-refine="voice">Refine</button>
+      </div>
+      <div class="card">
+        ${v.current_state ? `<div class="voice-state"><strong>Where you are today</strong>${escapeHtml(v.current_state)}</div>` : ''}
+        ${v.north_star ? `<div class="voice-state"><strong>Where Merlin will take you</strong>${escapeHtml(v.north_star)}</div>` : ''}
+        <div class="voice-cols">
+          <div class="voice-col do">
+            <h3>Do</h3>
+            <ul class="voice-list">${rules.map(r=>`<li>${escapeHtml(r)}</li>`).join('')}</ul>
+          </div>
+          <div class="voice-col dont">
+            <h3>Don't</h3>
+            ${forbidden.length ? `<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Merlin will never use these words in your emails, ads, or copy.</p>` : '<p style="font-size:12px;color:var(--text-dim)">No brand-specific forbidden words captured.</p>'}
+            <div class="forbidden-chips">
+              ${forbidden.slice(0,40).map(w=>`<span class="chip">${escapeHtml(w)}</span>`).join('')}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAudience(g) {
+  const a = g.audience || {};
+  const jtbd = Array.isArray(a.jobs_to_be_done) ? a.jobs_to_be_done : [];
+  return `
+    <div class="section">
+      <div class="section-head">
+        <div class="section-title">Audience</div>
+        <button class="section-refine" data-refine="audience">Refine</button>
+      </div>
+      <div class="aud-grid">
+        <div class="aud-box">
+          <div class="aud-label">Who this is for</div>
+          <div class="aud-primary">${escapeHtml(a.primary || '')}</div>
+          ${jtbd.length ? `<ul class="aud-jtbd">${jtbd.map(j=>`<li>${escapeHtml(j)}</li>`).join('')}</ul>` : ''}
+        </div>
+        <div class="aud-box">
+          <div class="aud-label">Who this isn't for</div>
+          <div class="aud-anti">${escapeHtml(a.anti_persona || '')}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderImagery(g) {
+  const im = g.imagery || {};
+  const use = Array.isArray(im.use) ? im.use : [];
+  const avoid = Array.isArray(im.avoid) ? im.avoid : [];
+  const refs = Array.isArray(im.reference_urls) ? im.reference_urls : [];
+  return `
+    <div class="section">
+      <div class="section-head">
+        <div class="section-title">Imagery</div>
+        <button class="section-refine" data-refine="imagery">Refine</button>
+      </div>
+      <div class="img-grid">
+        <div class="img-box use">
+          <h4>Use</h4>
+          <div class="img-tokens">${use.map(x=>`<span>${escapeHtml(x)}</span>`).join('') || '<span style="color:var(--text-dim)">No directives captured</span>'}</div>
+        </div>
+        <div class="img-box avoid">
+          <h4>Avoid</h4>
+          <div class="img-tokens">${avoid.map(x=>`<span>${escapeHtml(x)}</span>`).join('') || '<span style="color:var(--text-dim)">No directives captured</span>'}</div>
+        </div>
+        <div class="img-box">
+          <h4>References</h4>
+          <div class="img-tokens">${refs.length ? refs.map(x=>`<span>${escapeHtml(x)}</span>`).join('') : '<span style="color:var(--text-dim)">None</span>'}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAds(g) {
+  const ad = g.ad_defaults || {};
+  const hooks = Array.isArray(ad.hook_patterns) ? ad.hook_patterns : [];
+  const ctas = Array.isArray(ad.cta_patterns) ? ad.cta_patterns : [];
+  const forbidHooks = Array.isArray(ad.forbidden_hook_patterns) ? ad.forbidden_hook_patterns : [];
+  return `
+    <div class="section">
+      <div class="section-head">
+        <div class="section-title">Ad defaults</div>
+        <button class="section-refine" data-refine="ad_defaults">Refine</button>
+      </div>
+      <div class="ad-cols">
+        <div class="ad-box hooks"><h4>Hook patterns</h4><ul class="ad-list">${hooks.map(h=>`<li>${escapeHtml(h)}</li>`).join('')}</ul></div>
+        <div class="ad-box cta"><h4>CTA patterns</h4><ul class="ad-list">${ctas.map(c=>`<li>${escapeHtml(c)}</li>`).join('')}</ul></div>
+        <div class="ad-box forbid"><h4>Forbidden hooks</h4><ul class="ad-list">${forbidHooks.map(f=>`<li>${escapeHtml(f)}</li>`).join('')}</ul></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderEmail(g) {
+  const em = g.email_defaults || {};
+  const palette = Array.isArray(g.palette) ? g.palette : [];
+  const cta = palette.find(p=>p.role==='cta') || palette.find(p=>p.role==='accent') || palette.find(p=>p.role==='primary');
+  const ctaBg = cta ? cta.hex : '#a78bfa';
+  const ctaText = cta ? (luminance(hexRgb(ctaBg)||[0,0,0]) > 0.5 ? '#0b0b0d' : '#fff') : '#0b0b0d';
+  const surface = palette.find(p=>p.role==='surface');
+  const ink = palette.find(p=>p.role==='ink');
+  const bg = surface ? surface.hex : '#ffffff';
+  const fg = ink ? ink.hex : '#111';
+
+  const body = g.typography && g.typography.find(t=>t.role==='body');
+  const heading = g.typography && g.typography.find(t=>t.role==='heading' || t.role==='display');
+  const bodyFam = (body && body.family) || 'Inter';
+  const headFam = (heading && heading.family) || bodyFam;
+
+  return `
+    <div class="section">
+      <div class="section-head">
+        <div class="section-title">Email defaults</div>
+        <button class="section-refine" data-refine="email_defaults">Refine</button>
+      </div>
+      <div class="email-preview">
+        <div class="email-bar">${em.container_width_px || 600}px container · ${escapeHtml(em.cta_button_radius || '0')} CTA radius · <code>${escapeHtml(em.link_color || '')}</code> link</div>
+        <div class="email-body" style="background:${escapeHtml(bg)};color:${escapeHtml(fg)}">
+          <div class="email-logo-spot" style="background:${escapeHtml(surface ? 'rgba(0,0,0,.04)' : 'var(--bg-deep)')}">LOGO.PNG</div>
+          <div class="email-headline" style="font-family:'${escapeHtml(headFam)}',Inter,system-ui">
+            ${escapeHtml(g.brand_name || '')} — ${escapeHtml(g.one_line_positioning || '').slice(0,60)}
+          </div>
+          <p style="font-family:'${escapeHtml(bodyFam)}',Inter,system-ui;font-size:14px;max-width:420px;text-align:center;line-height:1.5;color:${escapeHtml(fg)};opacity:.8">
+            Your subscribers see this exact palette, typography, and CTA shape in every Merlin-generated email.
+          </p>
+          <div class="email-cta" style="background:${escapeHtml(ctaBg)};color:${escapeHtml(ctaText)};border-radius:${escapeHtml(em.cta_button_radius || '6px')}">
+            ${escapeHtml((g.ad_defaults && g.ad_defaults.cta_patterns && g.ad_defaults.cta_patterns[0]) || 'Shop now')}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function render(guide) {
+  document.getElementById('state').hidden = true;
+  contentEl.hidden = false;
+  actionBar.hidden = false;
+  contentEl.innerHTML = [
+    renderHero(guide),
+    renderPalette(guide),
+    renderTypography(guide),
+    renderVoice(guide),
+    renderAudience(guide),
+    renderImagery(guide),
+    renderAds(guide),
+    renderEmail(guide),
+  ].join('');
+
+  // Timestamp
+  const ts = guide.generation_meta && guide.generation_meta.generated_at;
+  const d = ts ? new Date(ts) : new Date();
+  const ms = Date.now() - d.getTime();
+  const hero = document.getElementById('hero-timestamp');
+  if (hero) hero.textContent = ms < 60000 ? 'just now' : d.toLocaleString();
+
+  if (previewMode) {
+    document.getElementById('btn-approve').textContent = 'Close preview';
+  }
+
+  // Wire refine buttons
+  document.querySelectorAll('[data-refine]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const section = btn.getAttribute('data-refine');
+      postToHost('refine', { brand, section });
+    });
+  });
+
+  document.getElementById('btn-approve').addEventListener('click', () => {
+    postToHost('approve', { brand });
+  });
+  document.getElementById('btn-refine').addEventListener('click', () => {
+    postToHost('refine', { brand, section: null });
+  });
+  document.getElementById('btn-edit-json').addEventListener('click', () => {
+    postToHost('edit-json', { brand });
+  });
+}
+
+async function load() {
+  if (!brand) {
+    showError('Missing brand', 'Append <code>?brand=YOUR_BRAND</code> to the URL to preview a guide.');
+    return;
+  }
+  statePath.textContent = `assets/brands/${brand}/brand-guide.json`;
+
+  // Try the Merlin preload bridge first (secure Electron IPC); fall back to fetch
+  // for file-system URLs when the host exposes the file via the `merlin:` protocol.
+  let raw = null;
+  try {
+    if (window.merlin && typeof window.merlin.readBrandGuide === 'function') {
+      raw = await window.merlin.readBrandGuide(brand);
+    }
+  } catch (e) {
+    console.warn('[brand-review] readBrandGuide bridge failed:', e);
+  }
+  if (!raw) {
+    try {
+      const res = await fetch(`merlin://brands/${encodeURIComponent(brand)}/brand-guide.json`, { cache: 'no-store' });
+      if (res.ok) raw = await res.text();
+    } catch (_) {}
+  }
+  if (!raw) {
+    showError('Brand guide not found',
+      `No <code>brand-guide.json</code> for <code>${escapeHtml(brand)}</code>. ` +
+      `Run <code>/merlin-brand-guide</code> during onboarding to generate one.`);
+    return;
+  }
+
+  let guide;
+  try {
+    guide = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch (e) {
+    showError('Brand guide is not valid JSON', escapeHtml(e.message));
+    return;
+  }
+
+  if (!guide || !guide.brand_name) {
+    showError('Brand guide missing required fields', 'Expected at minimum <code>brand_name</code> and <code>palette</code>.');
+    return;
+  }
+
+  render(guide);
+}
+
+load();
+</script>
+</body>
+</html>

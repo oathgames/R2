@@ -4587,6 +4587,25 @@ ipcMain.handle('get-swipes', (_, brandName) => {
   } catch { return []; }
 });
 
+// ── Brand guide: read persisted JSON for the onboarding review card ────────
+// The review HTML (app/onboarding-brand-review.html) loads the guide via the
+// `merlin.readBrandGuide(brand)` preload bridge so the page doesn't depend on
+// any renderer-side filesystem access. Path is strictly scoped to
+// assets/brands/<brand>/brand-guide.json — brand name is pattern-validated in
+// preload.js (BRAND_RE) and revalidated here defense-in-depth.
+ipcMain.handle('read-brand-guide', (_, brandName) => {
+  if (!brandName || typeof brandName !== 'string' || !/^[a-z0-9_-]{1,100}$/i.test(brandName)) {
+    return null;
+  }
+  const guidePath = path.join(appRoot, 'assets', 'brands', brandName, 'brand-guide.json');
+  try {
+    if (!fs.existsSync(guidePath)) return null;
+    return fs.readFileSync(guidePath, 'utf8');
+  } catch {
+    return null;
+  }
+});
+
 // Archive scanner lives in its own module (app/archive-scanner.js) so it can
 // be unit-tested in isolation. See that file for the full discovery strategy.
 const archiveScanner = require('./archive-scanner');
