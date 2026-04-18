@@ -3808,6 +3808,24 @@ async function loadSpells() {
       '- Winners get budget doubled every 48h, max 20% daily increase\n' +
       '- Platform allocation: shift monthly toward highest blended ROAS\n' +
       'Report: killed (with reason), scaled, warnings, net budget change, platform allocation recommendation.' },
+    { spell: 'creative-refresh', cron: '0 15 * * 4', name: 'Creative Refresh', desc: 'Generate replacements for fatigued ads', prompt:
+      'Pull 14-day performance via dashboard. Read .merlin-wisdom.json for collective winning hooks and formats. ' +
+      'IDENTIFY WEAKNESSES (use insights data only — never guess trends):\n' +
+      '- Ads tagged FATIGUE or KILL in the Verdict field\n' +
+      '- Ads with CTR below 60% of the best-performing ad in the same account\n' +
+      '- Ads with frequency > 2.5\n' +
+      '- Hook styles underperforming the Wisdom collective avg by >30%\n' +
+      'Rank by spend (highest-spend fatigued ads first). Cap total at 10 new creatives per run to control generation cost. ' +
+      'SYNTHESIZE BRIEFS — 2 per selected weakness. Map cause → fix:\n' +
+      '- Low CTR → new hook (pick top-3 hook styles for this vertical from Wisdom)\n' +
+      '- Low ROAS → new angle or offer framing (lean on winners from this brand\'s own history in memory.md)\n' +
+      '- High frequency → same audience, new creative angle\n' +
+      'Each brief carries a one-line rationale naming the source ad and the metric that triggered it. ' +
+      'GENERATE: Call image for static-ad sources, fal for video-ad sources (match the source\'s format and aspect ratio). Respect qualityGate. ' +
+      'Save everything under results/refresh_YYYYMMDD_HHMMSS/ with an index.json listing each file → source ad → weakness → brief → rationale. ' +
+      'DO NOT PUBLISH. Daily Ads owns publishing — Creative Refresh only stocks the shelf for the user to review in the morning. ' +
+      'Show every generated creative inline. ' +
+      'End with: "✦ Refreshed [N] creatives · Top pick: [file] fixes [weakness] on [source ad] · Review in results/refresh_YYYYMMDD/ and activate Daily Ads or push manually to promote."' },
     { ...MORNING_BRIEFING_PRESET, desc: MORNING_BRIEFING_PRESET.desc },
     { spell: 'weekly-digest', cron: '0 9 * * 1', name: 'Weekly Digest', desc: 'Monday strategy + benchmarks', prompt:
       'Pull 7-day performance. Compare to previous week AND Wisdom collective benchmarks. ' +
