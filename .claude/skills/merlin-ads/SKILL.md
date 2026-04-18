@@ -1,7 +1,8 @@
 ---
 name: merlin-ads
-description: Use when the user wants to push, publish, pause, kill, scale, duplicate, activate, lookalike, retarget, or set up paid ads on Meta, TikTok, Google Ads, Amazon, or Reddit Ads. Also covers ad performance decisions (promotion gate with Mann-Whitney U statistical test, kill thresholds, scale rules, fatigue detection), budget caps (maxDailyAdBudget / maxMonthlyAdSpend enforcement), the daily Meta autonomous loop (merlin-daily generate → merlin-optimize triage → merlin-digest weekly), ad intelligence rules (70/15/10 budget split, hook archetypes, format diversity over volume, learning phase gate), and the complete action reference for every ad platform.
+description: Use when the user wants to push, publish, pause, kill, scale, duplicate, activate, lookalike, retarget, or set up paid ads on Meta, TikTok, Google Ads, Amazon, Reddit, LinkedIn, or Etsy. Also covers ad performance decisions (margin-derived target ROAS, Promotion Gate with Mann-Whitney U, kill thresholds, CBO vs ABO scale rules, frequency-based fatigue detection), budget caps, the daily Meta autonomous loop (merlin-daily → merlin-optimize → merlin-digest), ad intelligence rules (70/15/10 split, hook archetypes, format diversity, learning phase gate, attribution windows), and platform-specific playbooks (Meta ASC/CBO, TikTok Spark Ads, Google Ads brand/non-brand split + PMax hygiene).
 owner: ryan
+bytes_justification: 16KB — this skill is the strategic core of Merlin's paid media brain. It covers five ad platforms (Meta/TikTok/Google/Amazon/Reddit) plus margin-derived target ROAS, a statistical Promotion Gate, fatigue/frequency rules, CBO vs ABO scale logic, and platform-specific playbooks (Google brand-vs-non-brand, TikTok Spark Ads, etc.). Splitting by platform would duplicate the shared triage/Promotion Gate/margin sections and hide cross-platform reasoning (e.g. moving a Meta winner into TikTok Spark). Hard-capped at 20KB.
 ---
 
 # Paid Advertising — All Platforms
@@ -9,16 +10,30 @@ owner: ryan
 ## Universal rules (override Claude judgment on financial decisions)
 
 - **Don't kill early.** Never pause/kill an ad in its first 72 hours unless CPM is 3× vertical average. Learning phase needs data.
-- **Scale gradually.** Budget increases ≤20% of current daily, minimum 72 hours between increases. ROAS drops >15% after a budget increase → revert immediately.
+- **Scale by structure, not a blanket 20% rule.**
+  - **CBO / Advantage+** (algorithm-driven delivery): scale daily budget 20–50% when ROAS clears target by 25%+, or duplicate the ad set into a second CBO. Top DTC playbooks (Motion, Structured, Pilothouse) routinely double CBO budgets day-over-day on proven winners — the old "≤20%" rule applied to manual ABO and is outdated for CBO.
+  - **ABO / manual bid control:** stay ≤20% daily, ≥72h between increases. This is where Meta re-enters learning on budget jumps.
+  - **Revert rule (both):** ROAS drops >15% OR CPA rises >25% within 72h of a budget increase → revert to previous budget, don't average down.
 - **Learning phase gate (Meta).** Before launching, check `(daily_budget / target_CPA) × 7 ≥ 50`. If not met: *"This campaign can't exit Meta's learning phase at this budget. Increase to $X/day or lower your target CPA."*
 - **Budget split (new Meta setups).** 70% Advantage+ Shopping (ASC), 15% Retargeting, 10–15% Testing. **Don't A/B test creative inside ASC** — test in standard, move winners to ASC.
-- **Format diversity over volume.** When a creative hits 2× ROAS, generate 5 new creatives in 5 different *formats* (UGC, product demo, lifestyle static, split-screen, meme) — not 5 variations of the same format.
+- **Format diversity over volume.** When a creative hits `TARGET_ROAS`, generate 5 new creatives in 5 different *formats* (UGC, product demo, lifestyle static, split-screen, meme) — not 5 variations of the same format.
 - **Hook archetypes.** Every creative uses one: curiosity-gap, pattern-interrupt, problem-agitation, POV, social-proof-frontload, skit, before-after, direct-address, voiceover-demo, testimonial-open. Tag in `metadata.json`. QA rejects hooks <6/10 on attention pull.
 - **Don't over-segment.** Brands under $1M/mo: one campaign with broad targeting and 10–15 creatives beats ten campaigns at $50/day each. The creative IS the targeting.
 - **Don't test in ASC.** ASC optimizes delivery, not creative comparison. Always test in standard campaigns.
 - **Budget caps.** `maxDailyAdBudget` is enforced per-push by `validateDailyBudget`. `maxMonthlyAdSpend` is enforced at scale-time (`meta-budget`, `meta-duplicate` with a positive `dailyBudget`) by `enforceMonthlyCap` — it rejects when `dailyBudget × daysInMonth > cap` unless the caller passes `force=true`. Prorated by actual days in the current month (Feb = 28, Mar = 31).
 - **Landing-page grade gate.** `meta-budget` and `meta-duplicate` run `enforceLandingGrade` before changing spend. If `landing-audit` has cached a score below 80 (grade C or worse) for the destination URL, the call is refused. Unaudited URLs pass silently — the gate only blocks KNOWN-bad pages. Override with `force=true`. Run `landing-audit` first to unblock properly — see `merlin-analytics` for the rubric.
 - **`force=true` override.** Every safety gate (monthly cap, landing grade) accepts `force: true` on the command to bypass. The override is logged as a `warn` activity entry so the decision is auditable. Prefer fixing the underlying issue (lower budget, improve landing page) over forcing.
+- **Attribution window must be stated.** Meta ROAS defaults to 7-day click + 1-day view. Always report the window alongside the number. For cross-platform truth, use MER (see `merlin-analytics`) — platform ROAS over-credits post-iOS 14.5.
+
+## Target ROAS is margin-derived, not hardcoded
+
+Break-even ROAS = `1 / gross_margin`. A "winner" must clear **break-even × 1.5** to fund OpEx, returns, and growth. Resolution order:
+
+1. If `cfg.targetROAS` is set → use it verbatim.
+2. Else if `cfg.productMargin` is set (0.0–1.0) → `TARGET_ROAS = 1 / (margin × 0.67)` (≈33% post-ad contribution).
+3. Else → conservative default `TARGET_ROAS = 2.5` (assumes ~60% margin, typical DTC floor).
+
+**Never call something a "winner" at ROAS 1.5** unless gross margin is ≥80% (most SaaS, some high-margin beauty). Triage rules below reference `TARGET_ROAS` — never a literal number. A brand operator hitting 1.5× ROAS on a 40%-margin product is losing money on every sale.
 
 ## Promotion Gate (stat-test before declaring winners)
 
@@ -26,15 +41,15 @@ Apply whenever Merlin would call something a "winner" or "loser" and act on it �
 
 **Rule:** promote only if `p < 0.05` AND `lift ≥ 15%`. Both conditions. Either alone is noise.
 
-**Test:** Mann-Whitney U (non-parametric, works with small samples, no normality assumption). Bootstrap confidence interval for the lift with 1,000 resamples.
+**Test:** Mann-Whitney U (non-parametric, works with small samples, no normality assumption). Bootstrap confidence interval for the lift with 1,000 resamples. Mann-Whitney is the conservative frequentist floor — if the app later exposes Bayesian A/B (expected loss, HDI, per Optimizely / GrowthBook / Statsig), route through that instead; same lift threshold applies.
 
-**Minimum samples per variant:**
-- **High-volume** (Meta/Google main campaigns): 10 conversions per variant
-- **Low-volume** (email, retargeting, niche audiences): 30 conversions per variant
+**Minimum samples per variant (hard floor for declaring a winner):**
+- **High-volume** (Meta/Google main campaigns): **30 conversions per variant**. At n=10, lift detection is ~20% underpowered — acceptable only for directional read (`trending band` below), never for budget reallocation.
+- **Low-volume** (email, retargeting, niche audiences): **50 conversions per variant**, or extend the test window to 14 days.
 
 Below threshold → verdict is "keep running, insufficient data" — never "loser."
 
-**Trending band:** `p < 0.10` with ≥15% lift = watch, don't kill. Early read without false positives.
+**Trending band:** `p < 0.10` with ≥15% lift AND n ≥ 10 = watch, don't kill. Early read without false positives; report with a "directional" caveat.
 
 Merlin's internal verdicts (KILL / WINNER / MASSIVE WINNER) already bake in spend/CPA heuristics. The promotion gate is the statistical ceiling — if a verdict says WINNER but the gate hasn't cleared, report both: *"flagged as winner by spend thresholds, but not yet statistically significant (p=0.14) — keep running before scaling."*
 
@@ -74,30 +89,31 @@ Monday 9 AM (merlin-digest): weekly summary
 
 ### Meta platform gotchas
 
-- **Live mode required for ad creatives.** Campaigns, ad sets, image uploads work in dev mode — only ad creative creation is blocked. Error subcode `1885183` = app in dev mode. **No workaround exists** (page tokens, system user tokens all fail).
-- `metaFindCampaign` uses URL-encoded filtering to avoid duplicate campaign creation.
-- `is_adset_budget_sharing_enabled` required on ALL campaigns (Meta v22.0+).
-- CBO campaigns need `is_campaign_budget_optimization: true` + `daily_budget` at campaign level.
-- On partial failure (creative/ad fails after ad set created), the ad set is auto-cleaned up.
-- **Meta OAuth unavailable** — app is in App Review. Tell users to click the Meta tile in Connections and paste their token from `developers.facebook.com/tools/explorer`. Do NOT use `platform_login` for Meta.
+Full technical reference lives in CLAUDE.md → `### Meta Ads API`. Summary:
+- **Live mode required** for ad creative creation (subcode `1885183` = dev mode; no workaround).
+- `is_adset_budget_sharing_enabled` required on all campaigns v22.0+; CBO needs `is_campaign_budget_optimization: true` + campaign-level `daily_budget`.
+- **Meta OAuth unavailable** while app is in review — Connections tile asks user to paste a token from `developers.facebook.com/tools/explorer`. Do NOT use `platform_login` for Meta.
 
 ## Triage rules (merlin-optimize)
 
-Apply in order per ad. Daily budget derived from `cfg.dailyAdBudget` (default $20):
+Apply in order per ad. Budgets derive from `cfg.dailyAdBudget` (default $20); ROAS thresholds derive from `TARGET_ROAS` (see margin-derived section above, default 2.5):
 - `TESTING_BUDGET = DAILY_BUDGET × 0.60`
 - `SCALING_BUDGET = DAILY_BUDGET × 0.30`
 - `RETARGETING_BUDGET = DAILY_BUDGET × 0.10`
 - `PER_AD_TEST_BUDGET = max($5, TESTING_BUDGET / active_test_count)`
+- `BREAKEVEN_ROAS = 1 / gross_margin` (falls back to 1.67 at 60% margin if unset)
 
 | Rule | Condition | Action |
 |---|---|---|
 | 1 — Dead on arrival | spent ≥ 2× PER_AD_TEST_BUDGET AND purchases == 0 AND CTR < 1.0% | KILL |
-| 2 — Low performer | spent ≥ PER_AD_TEST_BUDGET AND ROAS < 0.5 AND days_running ≥ 2 | KILL |
-| 3 — Creative fatigue | days_running ≥ 5 AND CTR trend declining 30%+ from peak | KILL + queue replacement with DIFFERENT hook |
+| 2 — Below break-even | spent ≥ PER_AD_TEST_BUDGET AND ROAS < BREAKEVEN_ROAS × 0.6 AND days_running ≥ 2 | KILL |
+| 3 — Creative fatigue | days_running ≥ 5 AND (CTR declining 30%+ from peak OR frequency > 2.5 prospecting / > 4.0 retargeting) | KILL + queue replacement with DIFFERENT hook |
 | 4 — Promising | days_running < 3 AND CTR ≥ 1.0% | HOLD |
-| 5 — Winner | ROAS ≥ 1.5 AND days_running ≥ 2 AND spend ≥ PER_AD_TEST_BUDGET | SCALE (apply Promotion Gate before) |
-| 6 — Massive winner | ROAS ≥ 3.0 AND spend ≥ DAILY_BUDGET AND purchases ≥ 5 | SCALE + LOOKALIKE (once per ad) |
+| 5 — Winner | ROAS ≥ TARGET_ROAS AND days_running ≥ 2 AND spend ≥ PER_AD_TEST_BUDGET | SCALE (apply Promotion Gate before) |
+| 6 — Massive winner | ROAS ≥ TARGET_ROAS × 2 AND spend ≥ DAILY_BUDGET AND purchases ≥ 5 | SCALE + LOOKALIKE (once per ad) |
 | 7 — Retarget | Any WINNER exists AND retargeting has no active ads | Create retargeting ad with winner's creative |
+
+**Frequency cap (rule 3):** Meta's own data shows CPA rises materially past frequency 2.5 on cold prospecting. Retargeting tolerates higher frequency (up to ~4) because intent is already present, but past that, fatigue dominates.
 
 **Safety rules:**
 - **Aggregate kill cap:** never kill more than 50% of active ads in a single run.
@@ -125,6 +141,13 @@ Apply in order per ad. Daily budget derived from `cfg.dailyAdBudget` (default $2
 
 `push` (`adVideoPath`, `adHeadline`, `adBody`, `dailyBudget`) · `insights` · `kill` (`adId`) · `duplicate` (`adId`, `campaignId`) · `setup` · `lookalike` (`adId`)
 
+**TikTok-specific playbook:**
+- **Spark Ads** (boost organic posts with auth_code from the creator): these carry native engagement signal and typically beat cold creatives by 30–50% on CTR and CVR. Prefer Spark over standard dark posts whenever a creator partnership or organic post is available.
+- **Creator content over studio content.** TikTok's algorithm penalizes "TV ad" aesthetic. Native creator-style UGC (handheld, selfie angle, on-screen captions) outperforms polished production by wide margins. Route production through `merlin-content` → Raw UGC register, never Hero Product.
+- **Hook in 2 seconds.** TikTok hook window is tighter than Meta. First-frame retention and 3-second view rate are the primary early signals — watch these before CTR.
+- **TTCM (TikTok Creator Marketplace)** is the official channel for finding creators for Spark Ads. Reference in onboarding when user asks about "finding creators for TikTok."
+- **Smart+ (TikTok's Advantage+ equivalent):** the consolidated campaign type. Use for scaling winners; test creative in standard campaigns first (same logic as Meta ASC).
+
 ### Google Ads (`mcp__merlin__google_ads`)
 
 | Action | Key params |
@@ -136,6 +159,14 @@ Apply in order per ad. Daily budget derived from `cfg.dailyAdBudget` (default $2
 | `duplicate` | `campaignId` |
 
 **Connect:** `platform_login({platform: "google", brand})` — OAuth, token + customer ID saved automatically.
+
+**Google Ads playbook (critical — PMax alone is not a strategy):**
+- **Always split brand vs non-brand.** PMax cannibalizes brand searches and inflates its own ROAS with traffic that would have converted organically. Run a separate **Brand Search campaign** with exact-match on `[brand name]` + common misspellings, and **exclude branded terms from PMax** via account-level negative keywords. This is the single biggest correction for most DTC Google accounts.
+- **Negative keyword hygiene.** PMax and Search campaigns need negative lists: free/cheap/jobs/DIY/used/tutorial/download (unless brand sells these). Pull the search-terms report weekly and add non-intent queries to negatives. Ignoring this wastes 15–30% of spend on mid-funnel traffic.
+- **Search alongside PMax for high-intent queries.** PMax bids on all surfaces automatically but its reporting is opaque. Run **standard Search campaigns** for top 10 BOFU keywords (see `merlin-seo` funnel tags) with manual CPC or Target CPA — this gives you a control group and a reporting surface PMax doesn't provide.
+- **Shopping feed is the creative.** For PMax, product title / primary image / price / GTIN drive >70% of performance. A weak feed caps PMax regardless of budget. Audit the Shopify → Google Merchant feed before scaling: unique titles (brand + product + key attribute), clean backgrounds, GTINs populated, no policy disapprovals.
+- **Conversion imports.** Ensure Shopify purchases import to Google Ads via GA4 or direct conversion action — without this, Smart Bidding is blind. Tag `Purchase` as primary conversion; de-prioritize `Add to Cart` and `Begin Checkout` (use as observational, not optimization goals).
+- **Target CPA / Target ROAS:** start PMax on "Maximize Conversion Value" (no target) for the first 2 weeks of data collection, then set `Target ROAS = TARGET_ROAS × 0.9` once there are ≥30 conversions. Targets set too early starve learning.
 
 ### Amazon Ads (`mcp__merlin__amazon_ads`)
 

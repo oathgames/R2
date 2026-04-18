@@ -37,6 +37,38 @@ OAuth-only, **read-only scope pinned to `read_only`**. Merlin cannot charge, ref
 
 **FX:** amounts USD-normalized via Stripe's `/v1/exchange_rates/usd`, cached 1 hour. Historical drift ±1%.
 
+## DTC unit-economics benchmarks
+
+Merlin-ecom surfaces the raw numbers; `merlin-analytics` layers MER and contribution margin on top. The benchmarks below flag health, not composite scores.
+
+| Metric | Formula | Healthy | Unhealthy |
+|---|---|---|---|
+| **90-day repeat-purchase rate** | repeat customers (90d) / total customers (90d) | ≥25% DTC / ≥40% world-class | <15% — acquisition treadmill |
+| **AOV** (average order value) | revenue / orders | trend direction > absolute | declining 3+ consecutive months |
+| **ATC → purchase rate** | purchases / adds-to-cart | ≥30% healthy, ≥45% world-class | <20% = checkout friction |
+| **Refund rate** | refunded orders / total orders | <5% DTC physical / <2% digital | >8% = product-expectation mismatch |
+| **Bounce rate on PDP** | single-page sessions / total PDP sessions | <40% | >60% = ad/PDP mismatch |
+
+## Subscription-economics benchmarks
+
+When `stripe-subscriptions` or a subscription connector is active, surface these benchmarks:
+
+| Metric | Formula | Healthy (B2C) | Healthy (B2B SaaS) | Why |
+|---|---|---|---|---|
+| **MRR growth** | (new + expansion − churn − contraction) / start MRR | ≥5%/mo early | ≥8%/mo | Topline momentum |
+| **Net Revenue Retention (NRR)** | (start + expansion − churn − contraction) / start, 12mo cohort | ≥90% | ≥110% gold standard | The cleanest SaaS health metric |
+| **Gross Revenue Retention (GRR)** | (start − churn − contraction) / start | ≥80% | ≥90% | NRR isolated from expansion |
+| **Monthly churn** | churned subs / start-of-month subs | <5%/mo | <1%/mo | DTC subs tolerate higher churn; B2B does not |
+| **Annual revenue churn** | 1 − (1 − monthly_churn)^12 | <45% B2C | <10% B2B | 5%/mo compounds to 46%/yr |
+| **Quick Ratio** | (new + expansion) / (churned + contraction) | ≥2.0 | ≥4.0 | Efficiency of growth vs erosion |
+| **CAC payback (subs)** | CAC / (ARPU × gross margin) | ≤12 months | ≤18 months | Cash recycle speed |
+| **Expansion revenue share** | expansion MRR / total new MRR | ≥20% | ≥30% | Net-new vs upsell balance |
+
+**Flagging rules:**
+- NRR <90% → gross churn is eating growth. Diagnose retention before recommending more acquisition spend.
+- Quick ratio <1.5 → subs leak faster than they fill. Stop the leak before pouring more in.
+- Monthly churn >7% DTC / >2% B2B → product-retention issue, not a marketing issue. Recommend onboarding / engagement work before ad scale.
+
 ## Revenue source routing
 
 When BOTH Shopify AND Stripe are connected AND Stripe is the Shopify payment processor, orders double-count without intervention. The `RevenueSource` abstraction (`dashboard.go`) gives every connector a uniform `{Name, Kind, Revenue, NewCustomers, MRR, ARR, ActiveSubs, ChurnPct}` shape; `pickRevenueSource` resolves the topline using `cfg.RevenueSourcePreference`.
