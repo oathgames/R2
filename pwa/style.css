@@ -613,9 +613,9 @@ body{
 #voice-dot{
   width:8px;height:8px;
   border-radius:50%;
-  background:#ff453a;
+  background:linear-gradient(135deg,#a78bfa 0%,#34d399 100%);
   flex-shrink:0;
-  box-shadow:0 0 8px rgba(255,69,58,.6);
+  box-shadow:0 0 8px rgba(167,139,250,.55), 0 0 12px rgba(52,211,153,.35);
   animation:pulse 1s infinite;
 }
 #send-btn.recording{
