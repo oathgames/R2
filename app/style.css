@@ -48,10 +48,10 @@
   --bg-deep:#f3f1fa;
   --surface:#ffffff;
   --surface-hover:#f5f2fc;
-  --border:#e5e1f2;
-  --text:#1a1625;
-  --text-muted:#4a445e;
-  --text-dim:#8a84a0;
+  --border:#d8d2ea;
+  --text:#0f0b1d;
+  --text-muted:#2e2845;
+  --text-dim:#5f586f;
   --accent:#7c3aed;
   --accent-bg:rgba(124,58,237,.08);
   --accent-border:rgba(124,58,237,.22);
@@ -1035,19 +1035,18 @@ a:hover{text-decoration:underline}
 .activity-dot-info { background: #64748b; }
 .activity-time { color: var(--text-dim); font-size: 10px; margin-left: auto; white-space: nowrap; }
 
-/* Activity toolbar — search, filter chips, export/copy */
+/* Activity toolbar — search + export icon, single row */
 .activity-toolbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   padding: 10px 0 8px;
   border-bottom: 1px solid rgba(255,255,255,.04);
   margin-bottom: 6px;
   align-items: center;
 }
 .activity-search {
-  flex: 1 1 180px;
-  min-width: 140px;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 6px 10px;
   background: rgba(255,255,255,.04);
   border: 1px solid rgba(255,255,255,.08);
@@ -1056,34 +1055,24 @@ a:hover{text-decoration:underline}
   font-size: 11px;
 }
 .activity-search:focus { outline: none; border-color: rgba(167,139,250,.5); }
-.activity-filters { display: flex; gap: 4px; flex-wrap: wrap; }
-.activity-chip {
-  padding: 4px 9px;
-  font-size: 10px;
-  font-weight: 600;
-  background: transparent;
-  border: 1px solid rgba(255,255,255,.1);
-  color: var(--text-muted);
-  border-radius: 999px;
-  cursor: pointer;
-  transition: all .12s ease;
-}
-.activity-chip:hover { background: rgba(255,255,255,.04); color: var(--text); }
-.activity-chip.active { background: rgba(167,139,250,.15); border-color: rgba(167,139,250,.4); color: #c4b5fd; }
-.activity-actions { display: flex; gap: 4px; margin-left: auto; }
-.activity-action-btn {
-  padding: 4px 10px;
-  font-size: 10px;
-  font-weight: 600;
+.activity-icon-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  box-sizing: border-box;
   background: rgba(255,255,255,.04);
   border: 1px solid rgba(255,255,255,.1);
   color: var(--text-muted);
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   transition: all .12s ease;
 }
-.activity-action-btn:hover { background: rgba(255,255,255,.08); color: var(--text); }
-.activity-action-btn.flash { background: rgba(52,211,153,.15); color: #6ee7b7; border-color: rgba(52,211,153,.4); }
+.activity-icon-btn:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.activity-icon-btn.flash { background: rgba(52,211,153,.15); color: #6ee7b7; border-color: rgba(52,211,153,.4); }
 
 /* Raw JSON reveal under a clicked entry */
 .activity-raw {
@@ -1180,6 +1169,7 @@ body.platform-mac .titlebar-drag{
   display:inline-flex;
   align-items:center;
   justify-content:center;
+  gap:6px;
   box-sizing:border-box;
   background:linear-gradient(135deg,rgba(167,139,250,.12),rgba(52,211,153,.12));
   border:1px solid rgba(167,139,250,.2);
@@ -1191,8 +1181,9 @@ body.platform-mac .titlebar-drag{
   cursor:pointer;
   transition:all .2s;
   white-space:nowrap;
-  display:flex;align-items:center;
+  line-height:1;
 }
+.subscribe-header-btn > span{display:inline-flex;align-items:center;line-height:1}
 .subscribe-header-btn:hover{
   background:linear-gradient(135deg,rgba(167,139,250,.22),rgba(52,211,153,.22));
   border-color:rgba(167,139,250,.4);

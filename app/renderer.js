@@ -476,7 +476,10 @@ async function init() {
     } else {
       // Prior thread will paint; drop the empty welcome bubble so the chat
       // doesn't start with a stray "..." above the restored history.
-      welcomeBubble.remove();
+      // `welcomeBubble` is the inner .msg-bubble element; removing it alone
+      // left the wrapper's ✦ avatar orphaned above the first real message.
+      // Remove the whole `.msg` wrapper so the avatar goes with it.
+      (welcomeBubble.closest('.msg') || welcomeBubble).remove();
       currentBubble = null;
       textBuffer = '';
     }
@@ -2050,24 +2053,6 @@ merlin.onBypassAttempt(({ reason }) => {
 // ── Remote User Messages (from PWA) ─────────────────────────
 merlin.onRemoteUserMessage((text) => {
   addUserBubble('📱 ' + text);
-});
-
-// ── Mobile QR ───────────────────────────────────────────────
-document.getElementById('mobile-btn').addEventListener('click', async () => {
-  const { qrDataUri, pwaUrl } = await merlin.getMobileQR();
-  document.getElementById('qr-image').src = qrDataUri;
-  document.getElementById('qr-url').textContent = pwaUrl;
-  document.getElementById('qr-modal').classList.remove('hidden');
-});
-
-document.getElementById('qr-close').addEventListener('click', () => {
-  document.getElementById('qr-modal').classList.add('hidden');
-});
-
-document.getElementById('qr-modal').addEventListener('click', (e) => {
-  if (e.target.id === 'qr-modal') {
-    document.getElementById('qr-modal').classList.add('hidden');
-  }
 });
 
 // ── Magic Panel ─────────────────────────────────────────────
@@ -6363,7 +6348,7 @@ function showArchiveView() {
 // because the activity-btn click handler can fire before later `let`
 // declarations execute, and `let` is in the temporal dead zone until its
 // declaration line runs.
-let _activityState = { items: [], filter: 'all', query: '', full: false };
+let _activityState = { items: [], query: '', full: true };
 
 function showActivityView() {
   _archiveView = 'activity';
@@ -6420,42 +6405,14 @@ function renderActivityToolbar() {
   bar.className = 'activity-toolbar';
   bar.innerHTML = `
     <input id="activity-search" type="text" placeholder="Search activity..." class="activity-search" value="${escapeHtml(_activityState.query)}">
-    <div class="activity-filters">
-      <button class="activity-chip ${_activityState.filter==='all'?'active':''}" data-filter="all">All</button>
-      <button class="activity-chip ${_activityState.filter==='error'?'active':''}" data-filter="error">Errors</button>
-      <button class="activity-chip ${_activityState.filter==='auth'?'active':''}" data-filter="auth">Auth</button>
-      <button class="activity-chip ${_activityState.filter==='config'?'active':''}" data-filter="config">Config</button>
-      <button class="activity-chip ${_activityState.filter==='publish'?'active':''}" data-filter="publish">Ads</button>
-    </div>
-    <div class="activity-actions">
-      <button id="activity-loadall" class="activity-action-btn" title="${_activityState.full ? 'Loaded full log' : 'Load full log'}">${_activityState.full ? '✓ Full' : 'Full log'}</button>
-      <button id="activity-copy" class="activity-action-btn" title="Copy filtered entries">Copy</button>
-      <button id="activity-export" class="activity-action-btn" title="Export to JSON file">Export</button>
-    </div>
+    <button id="activity-export" class="activity-icon-btn" title="Export to JSON file" aria-label="Export to JSON file">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    </button>
   `;
   bar.querySelector('#activity-search').addEventListener('input', (e) => {
     _activityState.query = e.target.value.trim().toLowerCase();
     const body = document.getElementById('activity-feed-body');
     if (body) renderActivityBody(body);
-  });
-  bar.querySelectorAll('.activity-chip').forEach(btn => {
-    btn.addEventListener('click', () => {
-      _activityState.filter = btn.dataset.filter;
-      bar.querySelectorAll('.activity-chip').forEach(b => b.classList.toggle('active', b === btn));
-      const body = document.getElementById('activity-feed-body');
-      if (body) renderActivityBody(body);
-    });
-  });
-  bar.querySelector('#activity-loadall').addEventListener('click', async () => {
-    if (_activityState.full) return;
-    _activityState.full = true;
-    await loadActivityFeed(true);
-  });
-  bar.querySelector('#activity-copy').addEventListener('click', () => {
-    const filtered = filterActivity(_activityState.items);
-    const text = filtered.map(formatActivityForCopy).join('\n');
-    navigator.clipboard.writeText(text).catch(() => {});
-    flashActionBtn('#activity-copy', 'Copied');
   });
   bar.querySelector('#activity-export').addEventListener('click', () => {
     const filtered = filterActivity(_activityState.items);
@@ -6467,28 +6424,18 @@ function renderActivityToolbar() {
     a.download = `merlin-activity-${brand}-${new Date().toISOString().slice(0,10)}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    flashActionBtn('#activity-export', 'Exported');
+    const btn = bar.querySelector('#activity-export');
+    if (btn) {
+      btn.classList.add('flash');
+      setTimeout(() => btn.classList.remove('flash'), 900);
+    }
   });
   return bar;
 }
 
-function flashActionBtn(sel, label) {
-  const btn = document.querySelector(sel);
-  if (!btn) return;
-  const prev = btn.textContent;
-  btn.textContent = label;
-  btn.classList.add('flash');
-  setTimeout(() => { btn.textContent = prev; btn.classList.remove('flash'); }, 900);
-}
-
 function filterActivity(items) {
   const q = _activityState.query;
-  const f = _activityState.filter;
   return items.filter(item => {
-    if (f !== 'all') {
-      if (f === 'error') { if ((item.severity || item.type) !== 'error') return false; }
-      else if (item.type !== f) return false;
-    }
     if (!q) return true;
     const hay = [item.action, item.detail, item.product, item.sessionId, item.type]
       .filter(Boolean).join(' ').toLowerCase();
@@ -6516,7 +6463,7 @@ function renderActivityBody(body) {
   if (items.length === 0) {
     const hasAny = _activityState.items.length > 0;
     body.innerHTML = hasAny
-      ? '<div class="activity-empty-filtered">No matches for this filter.</div>'
+      ? '<div class="activity-empty-filtered">No matches for your search.</div>'
       : '<div class="activity-empty"><div class="activity-empty-icon">✦</div>No activity yet<br><span class="activity-empty-sub">Actions appear here as you create ads and run campaigns</span></div>';
     return;
   }
@@ -6908,33 +6855,25 @@ async function loadArchive() {
       // permanent; fall back to creativeUrl (Meta CDN thumbnail) for ads the
       // user launched outside Merlin — those URLs are signed and expire in
       // ~24h but get re-fetched on every insights refresh.
-      // Always materialize the placeholder HTML up front so we can swap it in
-      // as an onerror fallback when a CDN URL expires between refreshes —
-      // otherwise the browser paints its default broken-image icon. Catalog /
-      // dynamic-product ads also get swapped when the loaded image is tiny
-      // (< 80px) — Meta returns a generic silhouette stub for DPA creatives
-      // that loads successfully but looks like a broken image in the grid.
+      // Thumb and info render in a single innerHTML pass below so the image
+      // element's error/load handlers (bound after insertion) survive — an
+      // earlier "card.innerHTML = img; card.innerHTML += info" sequence
+      // destroyed the img element during the += reparse and silently
+      // discarded the fallback handlers, leaving broken CDN URLs to paint as
+      // the browser's default broken-image glyph.
       const platformName = escapeHtml(ad.platform || '');
       const placeholderHTML = `<div class="archive-card-thumb archive-card-thumb-placeholder">
           <div class="placeholder-mark" aria-hidden="true">✦</div>
           ${platformName ? `<div class="placeholder-platform-chip">${platformName}</div>` : ''}
         </div>`;
       const altText = escapeHtml(ad.adName || ad.product || 'Ad creative');
-      const bindThumbFallbacks = (img) => {
-        if (!img) return;
-        img.addEventListener('error', () => { card.innerHTML = placeholderHTML; }, { once: true });
-        img.addEventListener('load', () => {
-          if (img.naturalWidth > 0 && img.naturalWidth < 80) card.innerHTML = placeholderHTML;
-        }, { once: true });
-      };
+      let thumbHtml;
       if (ad.creativePath) {
-        card.innerHTML = `<img class="archive-card-thumb" src="${escapeHtml(merlinUrl(ad.creativePath))}" alt="${altText}" loading="lazy">`;
+        thumbHtml = `<img class="archive-card-thumb" src="${escapeHtml(merlinUrl(ad.creativePath))}" alt="${altText}" loading="lazy">`;
       } else if (ad.creativeUrl) {
-        card.innerHTML = `<img class="archive-card-thumb" src="${escapeHtml(ad.creativeUrl)}" alt="${altText}" loading="lazy" referrerpolicy="no-referrer">`;
-        // CSP blocks inline onerror — bind via addEventListener after insertion.
-        bindThumbFallbacks(card.querySelector('img.archive-card-thumb'));
+        thumbHtml = `<img class="archive-card-thumb" src="${escapeHtml(ad.creativeUrl)}" alt="${altText}" loading="lazy" referrerpolicy="no-referrer">`;
       } else {
-        card.innerHTML = placeholderHTML;
+        thumbHtml = placeholderHTML;
       }
 
       const brandLabel = ad.brand ? ad.brand.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : '';
@@ -6960,7 +6899,7 @@ async function loadArchive() {
         kpiChips.push(`<span class="kpi-chip kpi-dim" data-tip="Impressions this window" data-tip-pos="top">${fmtInt(impressions)} imp</span>`);
       }
 
-      card.innerHTML += `
+      const infoHtml = `
         <div class="archive-card-info">
           <div class="archive-card-title" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</div>
           <div class="archive-card-meta">
@@ -6972,6 +6911,24 @@ async function loadArchive() {
             hasMetrics ? '' : `<div class="archive-card-meta archive-card-hint">0 impressions</div>`}
           ${brandLabel ? `<div class="archive-card-meta archive-card-brand">${escapeHtml(brandLabel)}</div>` : ''}
         </div>`;
+
+      card.innerHTML = thumbHtml + infoHtml;
+
+      // Bind error/load fallbacks AFTER the final innerHTML is parsed — an
+      // earlier "innerHTML = img; innerHTML += info" sequence tore down the
+      // img element during the += reparse and silently discarded these
+      // handlers, which is why expired Meta CDN URLs were painting as the
+      // browser's default broken-image glyph instead of our placeholder.
+      // outerHTML replacement scopes the fallback to the thumb, leaving the
+      // KPI strip + brand label untouched.
+      const thumbImg = card.querySelector('img.archive-card-thumb');
+      if (thumbImg) {
+        const swap = () => { thumbImg.outerHTML = placeholderHTML; };
+        thumbImg.addEventListener('error', swap, { once: true });
+        thumbImg.addEventListener('load', () => {
+          if (thumbImg.naturalWidth > 0 && thumbImg.naturalWidth < 80) swap();
+        }, { once: true });
+      }
 
       // Left click: preview the creative. Prefer local path over remote URL.
       card.addEventListener('click', () => {
