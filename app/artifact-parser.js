@@ -48,10 +48,23 @@ function escapeForRegex(s) {
 // filenames with spaces, parentheses, or non-ASCII characters survive the
 // trip through HTML attributes. Mirrors renderer.js:merlinUrl — kept in
 // sync manually because mcp-tools runs in main, not renderer.
+//
+// Idempotent: input `results/img/foo%20bar.png` MUST round-trip to
+// `merlin://results/img/foo%20bar.png`, not `%2520bar`. Reached by
+// decoding each segment first (collapsing prior encoding), then
+// re-encoding canonically. A stray `%` (e.g. `5%off.png`) makes
+// decodeURIComponent throw — fall back to direct encode in that case so
+// real filenames with literal percent signs still produce a valid URL.
 function toMerlinUrl(rawPath) {
   if (!rawPath) return '';
   const normalized = String(rawPath).replace(/\\/g, '/').replace(/^merlin:\/\//, '');
-  return 'merlin://' + normalized.split('/').map(encodeURIComponent).join('/');
+  return 'merlin://' + normalized.split('/').map((seg) => {
+    try {
+      return encodeURIComponent(decodeURIComponent(seg));
+    } catch {
+      return encodeURIComponent(seg);
+    }
+  }).join('/');
 }
 
 // Escape a string for safe use as HTML attribute or text content. The

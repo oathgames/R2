@@ -994,6 +994,13 @@ function escapeHtml(text) {
 // inert inside HTML attributes) while leaving '/' as the segment delimiter.
 // Use this anywhere a filename derived from disk flows into `src=` or `href=`
 // — the custom merlin:// protocol handler already handles decoding.
+//
+// Idempotent (mirrors artifact-parser.js:toMerlinUrl): an already-encoded
+// segment like `foo%20bar.png` MUST NOT become `foo%2520bar.png` when
+// re-piped through this helper. Decode first to collapse prior encoding,
+// then re-encode canonically; on a stray literal `%` (decode throws) fall
+// back to direct encode so filenames like `5%off.png` still produce a
+// valid URL.
 function merlinUrl(relPath) {
   if (relPath == null) return '';
   const raw = String(relPath);
@@ -1003,7 +1010,13 @@ function merlinUrl(relPath) {
   // scheme and break the <img src>.
   if (/^https?:\/\//i.test(raw)) return raw;
   const clean = raw.replace(/^merlin:\/\//, '');
-  return 'merlin://' + clean.split('/').map(encodeURIComponent).join('/');
+  return 'merlin://' + clean.split('/').map((seg) => {
+    try {
+      return encodeURIComponent(decodeURIComponent(seg));
+    } catch {
+      return encodeURIComponent(seg);
+    }
+  }).join('/');
 }
 
 // Sanitize raw errors into user-friendly messages with actionable "Try:" guidance

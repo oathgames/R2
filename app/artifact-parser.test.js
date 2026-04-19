@@ -28,6 +28,40 @@ test('toMerlinUrl encodes path segments and normalizes backslashes', () => {
   assert.equal(toMerlinUrl(null), '');
 });
 
+test('toMerlinUrl is idempotent — already percent-encoded segments do NOT double-encode', () => {
+  // The bug Gitar caught on PR #69: input already contains %20, naive
+  // encodeURIComponent re-encodes the % to %25 producing %2520.
+  assert.equal(
+    toMerlinUrl('results/img/foo%20bar.png'),
+    'merlin://results/img/foo%20bar.png'
+  );
+  assert.equal(
+    toMerlinUrl('merlin://results/img/foo%20bar.png'),
+    'merlin://results/img/foo%20bar.png'
+  );
+  // Round-trip: re-running on the output produces the same URL.
+  const once = toMerlinUrl('results/img/foo bar.png');
+  assert.equal(toMerlinUrl(once), once);
+  // Mixed: one segment encoded, another with a literal space.
+  assert.equal(
+    toMerlinUrl('merlin://foo%20bar/baz qux.png'),
+    'merlin://foo%20bar/baz%20qux.png'
+  );
+});
+
+test('toMerlinUrl handles literal % in filenames without throwing', () => {
+  // `decodeURIComponent('5%off')` throws URIError — fallback path must
+  // still produce a usable URL rather than crashing the gallery render.
+  assert.equal(
+    toMerlinUrl('results/img/5%off.png'),
+    'merlin://results/img/5%25off.png'
+  );
+  assert.equal(
+    toMerlinUrl('a%b%c'),
+    'merlin://a%25b%25c'
+  );
+});
+
 test('extractArtifacts returns no bundles when no sentinel is present', () => {
   const stdout = 'Plain stdout with no sentinel block.';
   const out = extractArtifacts(stdout);
