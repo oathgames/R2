@@ -40,6 +40,30 @@ const BANNED_HEDGE = [
 
 const MAX_STALE_DAYS = 548; // ~18 months
 
+// Hostnames that talk to rate-limited platform APIs. Mirrored from
+// autocmo-core/ratelimit_preflight.go PlatformLimits + CLAUDE.md Rule 4 blocklist.
+// A docs_url pointing at any of these must use a path on DOCS_PATH_ALLOWLIST,
+// otherwise the monthly drift-detector would fetch the API root from CI and
+// burn into real rate-limit budgets. Prefer docs.* / developers.* subdomains.
+const RATE_LIMITED_HOSTS = new Set([
+  'graph.facebook.com', 'business-api.tiktok.com', 'googleads.googleapis.com',
+  'api.klaviyo.com', 'ads-api.reddit.com', 'openapi.etsy.com', 'graph.threads.net',
+  'api.stripe.com', 'api.linkedin.com', 'api.elevenlabs.io', 'api.heygen.com',
+  'fal.run', 'queue.fal.run',
+  'advertising-api.amazon.com', 'advertising-api.eu.amazon.com', 'advertising-api.fe.amazon.com',
+]);
+const SHOPIFY_ADMIN_SUFFIX = '.myshopify.com';
+const DOCS_PATH_ALLOWLIST = ['/portal/docs', '/docs', '/reference', '/api/docs', '/developers'];
+
+function hostIsRateLimited(host) {
+  const h = (host || '').toLowerCase();
+  return RATE_LIMITED_HOSTS.has(h) || h.endsWith(SHOPIFY_ADMIN_SUFFIX);
+}
+function pathIsDocsAllowlisted(p) {
+  const s = p || '/';
+  return DOCS_PATH_ALLOWLIST.some(pre => s === pre || s.startsWith(pre + '/'));
+}
+
 const errors = [];
 const warnings = [];
 
@@ -87,6 +111,19 @@ for (const [id, v] of Object.entries(data.vendors)) {
 
   if (typeof v.docs_url === 'string' && !v.docs_url.startsWith('https://')) {
     fail(id, `docs_url must be https (got ${v.docs_url})`);
+  }
+
+  // Refuse docs_urls that point at a rate-limited platform API host unless
+  // the path is a known docs subpath. Without this, a future edit that
+  // swaps e.g. business-api.tiktok.com/portal/docs for /open_api/... would
+  // start burning real TikTok rate-limit budget from the monthly CI cron.
+  if (typeof v.docs_url === 'string' && v.docs_url.startsWith('https://')) {
+    try {
+      const u = new URL(v.docs_url);
+      if (hostIsRateLimited(u.hostname) && !pathIsDocsAllowlisted(u.pathname)) {
+        fail(id, `docs_url "${v.docs_url}" hits rate-limited host "${u.hostname}" on non-docs path "${u.pathname}" — use a docs.* / developers.* subdomain, or a path under ${DOCS_PATH_ALLOWLIST.join(' / ')}`);
+      }
+    } catch { /* invalid URL — earlier check already failed */ }
   }
 
   // Hedge-word scan across prose fields
