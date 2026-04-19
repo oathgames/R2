@@ -2081,34 +2081,54 @@ merlin.onRemoteUserMessage((text) => {
 });
 
 // ── Mobile QR ───────────────────────────────────────────────
+function paintQrPayload(img, url, note, payload) {
+  img.src = payload.qrDataUri;
+  url.textContent = payload.pwaUrl;
+  // Surface the fallback so a phone on cellular doesn't silently get a LAN
+  // URL that only works on the same WiFi.
+  if (payload.mode === 'lan') {
+    note.textContent = payload.relayError
+      ? `Roaming unavailable (${payload.relayError}) — same-WiFi fallback only.`
+      : 'Roaming unavailable — same-WiFi fallback only.';
+    note.classList.remove('hidden');
+  } else {
+    note.textContent = '';
+    note.classList.add('hidden');
+  }
+}
+
 document.getElementById('mobile-btn').addEventListener('click', async () => {
   const modal = document.getElementById('qr-modal');
   const img = document.getElementById('qr-image');
   const url = document.getElementById('qr-url');
-  // Open the modal first in a neutral state so a slow relay handshake doesn't
-  // make the button feel dead on click — silent no-op was the original
-  // complaint when the button existed but the handler was missing.
+  const note = document.getElementById('qr-mode-note');
+  // Main pre-warms the QR at app start, so the IPC almost always returns a
+  // cached payload in <5ms. Race that against a 60ms timer: if the cache is
+  // warm we paint *before* showing the modal (no broken-image flash); if
+  // it's cold we open the modal with a placeholder so the button still
+  // feels responsive while the relay handshake completes.
+  const ipc = merlin.getMobileQR();
+  const fast = await Promise.race([
+    ipc.then(p => ({ ok: true, payload: p }), e => ({ ok: false, err: e })),
+    new Promise(resolve => setTimeout(() => resolve(null), 60)),
+  ]);
+  if (fast && fast.ok) {
+    paintQrPayload(img, url, note, fast.payload);
+    modal.classList.remove('hidden');
+    return;
+  }
+  // Cold path — show neutral placeholder, then paint when IPC settles.
+  // Either the 60ms timer beat the IPC (fast === null) or the IPC settled
+  // with an error (fast.ok === false) and we surface it via catch.
   img.removeAttribute('src');
   url.textContent = 'Generating pairing QR…';
+  note.textContent = '';
+  note.classList.add('hidden');
   modal.classList.remove('hidden');
   try {
-    const { qrDataUri, pwaUrl, mode, relayError } = await merlin.getMobileQR();
-    img.src = qrDataUri;
-    url.textContent = pwaUrl;
-    // Surface the fallback so a phone on cellular doesn't silently get a LAN
-    // URL that only works on the same WiFi. Pre-fix users reported "I clicked
-    // connect and nothing happened" because the relay subdomain wasn't
-    // deployed and the renderer swallowed the mode swap.
-    const note = document.getElementById('qr-mode-note');
-    if (mode === 'lan') {
-      note.textContent = relayError
-        ? `Roaming unavailable (${relayError}) — same-WiFi fallback only.`
-        : 'Roaming unavailable — same-WiFi fallback only.';
-      note.classList.remove('hidden');
-    } else {
-      note.textContent = '';
-      note.classList.add('hidden');
-    }
+    if (fast && !fast.ok) throw fast.err;
+    const payload = await ipc;
+    paintQrPayload(img, url, note, payload);
   } catch (err) {
     // Rule 6: raw IPC errors must pass through friendlyError before surfacing
     // to the user — `err.message` can carry Go stack traces or relay details
