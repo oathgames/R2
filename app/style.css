@@ -2050,10 +2050,6 @@ body.platform-mac .titlebar-drag{
   line-height:1.4;
 }
 
-/* ── Stubbed buttons (hidden until features are ready) ── */
-/* Phone: hidden until Cloudflare Tunnel security is ready */
-.icon-btn{display:none}
-
 /* ── QR Modal ────────────────────────────────────────────── */
 .qr-card{
   background:var(--bg);
@@ -2290,6 +2286,15 @@ body.platform-mac .titlebar-drag{
   border-color: var(--accent-border);
   transform: translateY(-1px);
 }
+/* Static cards (placeholder-only, no clickable preview). Removes the pointer
+   cursor + hover lift so the card reads as information-only. */
+.archive-card-static {
+  cursor: default;
+}
+.archive-card-static:hover {
+  border-color: var(--border);
+  transform: none;
+}
 .archive-card-thumb {
   width: 100%;
   aspect-ratio: 1;
@@ -2470,6 +2475,45 @@ body.platform-mac .titlebar-drag{
   max-height: 90%;
   border-radius: 12px;
   box-shadow: 0 20px 60px var(--shadow-lg);
+}
+/* Fallback panel for when the preview image fails to load (expired CDN URL
+   or missing file on disk). Without this, the browser's broken-image glyph
+   paints as a tiny floating tile, which was the exact regression the user
+   reported. Mirrors the archive card placeholder treatment. */
+.preview-fallback {
+  width: min(420px, 80vw);
+  aspect-ratio: 1;
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 28% 28%, rgba(167,139,250,.22), transparent 55%),
+    radial-gradient(circle at 72% 72%, rgba(52,211,153,.16), transparent 55%),
+    linear-gradient(135deg, rgba(26,22,37,.9), rgba(14,14,16,.9));
+  color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  box-shadow: 0 20px 60px var(--shadow-lg);
+}
+.preview-fallback-mark {
+  font-size: 56px;
+  color: rgba(167,139,250,.7);
+  line-height: 1;
+  margin-bottom: 12px;
+}
+.preview-fallback-text {
+  font-size: 15px;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.preview-fallback-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  max-width: 280px;
+  line-height: 1.4;
 }
 .archive-preview-close {
   position: fixed;

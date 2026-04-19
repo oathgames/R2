@@ -41,6 +41,13 @@
     checkSetup: async () => ({ needsSetup: false, completed: true }),
     startSession: noop,
 
+    // Mobile QR pairing — returns a placeholder QR-shape so the modal has
+    // something to render without round-tripping through the real relay.
+    getMobileQR: async () => ({
+      qrDataUri: 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 20 20"><rect width="20" height="20" fill="#fff"/><g fill="#000"><rect x="1" y="1" width="6" height="6"/><rect x="13" y="1" width="6" height="6"/><rect x="1" y="13" width="6" height="6"/><rect x="9" y="9" width="2" height="2"/><rect x="11" y="11" width="2" height="2"/><rect x="15" y="11" width="2" height="2"/></g></svg>'),
+      pwaUrl: 'https://relay.merlingotme.com/p/preview-abc123',
+    }),
+
     // Connection status — light up many tiles so filtering is visible
     getConnectionStatus: async () => ({
       meta: true, tiktok: true, google: true, amazon: true, reddit: true,

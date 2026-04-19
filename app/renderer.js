@@ -2055,6 +2055,39 @@ merlin.onRemoteUserMessage((text) => {
   addUserBubble('📱 ' + text);
 });
 
+// ── Mobile QR ───────────────────────────────────────────────
+document.getElementById('mobile-btn').addEventListener('click', async () => {
+  const modal = document.getElementById('qr-modal');
+  const img = document.getElementById('qr-image');
+  const url = document.getElementById('qr-url');
+  // Open the modal first in a neutral state so a slow relay handshake doesn't
+  // make the button feel dead on click — silent no-op was the original
+  // complaint when the button existed but the handler was missing.
+  img.removeAttribute('src');
+  url.textContent = 'Generating pairing QR…';
+  modal.classList.remove('hidden');
+  try {
+    const { qrDataUri, pwaUrl } = await merlin.getMobileQR();
+    img.src = qrDataUri;
+    url.textContent = pwaUrl;
+  } catch (err) {
+    // Rule 6: raw IPC errors must pass through friendlyError before surfacing
+    // to the user — `err.message` can carry Go stack traces or relay details
+    // we don't want leaking into the QR modal.
+    url.textContent = friendlyError(String(err && err.message || err), 'Mobile');
+  }
+});
+
+document.getElementById('qr-close').addEventListener('click', () => {
+  document.getElementById('qr-modal').classList.add('hidden');
+});
+
+document.getElementById('qr-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'qr-modal') {
+    document.getElementById('qr-modal').classList.add('hidden');
+  }
+});
+
 // ── Magic Panel ─────────────────────────────────────────────
 // Display names for the brand/platform tiles. Naive capitalize()
 // mangles "Tiktok", "Linkedin", "Elevenlabs", "Heygen" — use the
@@ -6921,23 +6954,34 @@ async function loadArchive() {
       // browser's default broken-image glyph instead of our placeholder.
       // outerHTML replacement scopes the fallback to the thumb, leaving the
       // KPI strip + brand label untouched.
+      // Cards that fall back to the placeholder (no image src OR image fails to
+      // load) must NOT be clickable — opening a preview modal for an ad with
+      // no renderable creative just shows another broken-image glyph, which
+      // was the regression the user reported. Flag the card as "static" and
+      // use it to gate both the click handler and the pointer cursor.
+      let isStaticCard = !ad.creativePath && !ad.creativeUrl;
       const thumbImg = card.querySelector('img.archive-card-thumb');
       if (thumbImg) {
-        const swap = () => { thumbImg.outerHTML = placeholderHTML; };
+        const swap = () => {
+          thumbImg.outerHTML = placeholderHTML;
+          isStaticCard = true;
+          card.classList.add('archive-card-static');
+        };
         thumbImg.addEventListener('error', swap, { once: true });
         thumbImg.addEventListener('load', () => {
           if (thumbImg.naturalWidth > 0 && thumbImg.naturalWidth < 80) swap();
         }, { once: true });
       }
+      if (isStaticCard) card.classList.add('archive-card-static');
 
       // Left click: preview the creative. Prefer local path over remote URL.
       card.addEventListener('click', () => {
+        if (isStaticCard) return;
         const previewSrc = ad.creativePath || ad.creativeUrl;
         if (previewSrc) {
           openArchivePreview({ type: 'image', thumbnail: previewSrc, folder: '', files: [] });
         }
       });
-      card.style.cursor = 'pointer';
 
       // Right click: context menu with Pause option
       card.addEventListener('contextmenu', (e) => {
@@ -7443,10 +7487,30 @@ function openArchivePreview(item) {
     </div>`;
   }
 
+  // Fallback panel shown when the src fails to load (expired Meta CDN URL,
+  // missing local file). Without this, a failed <img> paints the browser's
+  // default broken-image glyph as a tiny floating tile — confusing and ugly.
+  const previewFallbackHtml = `<div class="preview-fallback">
+      <div class="preview-fallback-mark" aria-hidden="true">✦</div>
+      <div class="preview-fallback-text">Preview unavailable</div>
+      <div class="preview-fallback-sub">The creative's thumbnail URL has expired or the file is no longer on disk.</div>
+    </div>`;
+
   if (isVideo && mediaPath) {
     overlay.innerHTML = `<div class="preview-layout"><video src="${escapeHtml(mediaPath)}" controls autoplay playsinline></video>${statsHtml}</div>`;
   } else if (mediaPath) {
     overlay.innerHTML = `<div class="preview-layout"><img src="${escapeHtml(mediaPath)}" alt="" data-folder="${escapeHtml(item.folder || '')}" data-file="${escapeHtml(decodeURIComponent(mediaPath.replace('merlin://', '')))}">${statsHtml}</div>`;
+    const previewImg = overlay.querySelector('img');
+    if (previewImg) {
+      const swap = () => {
+        const layout = overlay.querySelector('.preview-layout');
+        if (layout) layout.innerHTML = previewFallbackHtml + statsHtml;
+      };
+      previewImg.addEventListener('error', swap, { once: true });
+      previewImg.addEventListener('load', () => {
+        if (previewImg.naturalWidth > 0 && previewImg.naturalWidth < 80) swap();
+      }, { once: true });
+    }
   } else {
     overlay.innerHTML = `<div style="color:var(--text-muted);font-size:14px">No preview available</div>`;
   }
