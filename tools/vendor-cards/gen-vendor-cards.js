@@ -138,7 +138,10 @@ function main() {
     const block = renderBlock(vendorList);
     const current = fs.readFileSync(skillPath, 'utf8');
     const next = upsertBlock(skillPath, block);
-    if (current === next) continue;
+    // Compare after CRLF→LF normalization so Windows dev checkouts
+    // (git autocrlf=true) don't falsely trip --check against the
+    // generator's LF output. Writes always emit LF — repo stays LF.
+    if (current.replace(/\r\n/g, '\n') === next.replace(/\r\n/g, '\n')) continue;
     if (checkMode) {
       changed++;
       console.error(`[CHECK] ${skillName}/SKILL.md is out of date — run gen-vendor-cards.js`);
