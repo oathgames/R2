@@ -1090,6 +1090,31 @@ function humanizeUpdateError(raw) {
   return 'Update couldn\'t install. Try again in a moment.';
 }
 
+// REGRESSION GUARD (2026-04-19, Transcription-failed-modal incident):
+// transcription errors come back from main.js as classified codes
+// (transcribe:empty / :corrupt / :ffmpeg / :whisper / :missing-tools /
+// :too-large). The previous path piped raw ffmpeg stderr — including hex
+// addresses and a cryptic exit code like 3199971767 — straight into a
+// modal, violating the "every user-visible error passes through
+// friendlyError()" rule. This helper is the single user-facing mapping;
+// if you add a new error code in main.js, add a matching branch here.
+// Keep copy short, actionable, and free of technical jargon — it lands
+// in a modal right after the user tried to speak.
+function humanizeTranscriptionError(code, detail) {
+  const c = typeof code === 'string' ? code : '';
+  if (c === 'transcribe:empty') return 'I didn\'t catch any audio — hold the mic button a little longer and try again.';
+  if (c === 'transcribe:corrupt') return 'The recording got cut short. Try again — hold the mic until you\'re done speaking before releasing.';
+  if (c === 'transcribe:too-large') return 'That recording is too long. Try a shorter clip.';
+  if (c === 'transcribe:missing-tools') return detail || 'Voice input isn\'t installed. Reinstall Merlin to restore it.';
+  if (c === 'transcribe:ffmpeg' || c === 'transcribe:whisper') return 'Something went wrong transcribing that. Try again — if it keeps failing, restart Merlin.';
+  // Legacy / unclassified — strings from older main.js builds still land here.
+  const s = String(detail || code || '').trim();
+  if (!s) return 'Transcription failed. Try again.';
+  if (/ebml|invalid data|header parsing/i.test(s)) return 'The recording got cut short. Try again — hold the mic until you\'re done speaking before releasing.';
+  if (/ffmpeg exit|whisper exit/i.test(s)) return 'Something went wrong transcribing that. Try again — if it keeps failing, restart Merlin.';
+  return 'Transcription failed. Try again.';
+}
+
 // ── SDK Message Handling ────────────────────────────────────
 let firstMessage = true;
 let hasShownSparkleHint = false;
@@ -4662,9 +4687,13 @@ async function transcribeCurrent(isInterim) {
       else input.classList.remove('voice-interim');
       autoResize();
     } else if (result && result.error && !isInterim) {
+      // "empty" isn't really a failure — the user either didn't speak or
+      // clicked too quickly. Silently drop it; no modal. Any other code
+      // gets the humanized message.
+      if (result.error === 'transcribe:empty') return;
       showModal({
         title: 'Transcription failed',
-        body: result.error,
+        body: humanizeTranscriptionError(result.error, result.errorDetail),
         confirmLabel: 'OK',
       });
     }
@@ -4675,7 +4704,7 @@ async function transcribeCurrent(isInterim) {
       console.warn('transcribeAudio threw:', err);
       showModal({
         title: 'Transcription failed',
-        body: String(err && err.message ? err.message : err),
+        body: humanizeTranscriptionError('', err && err.message ? err.message : String(err)),
         confirmLabel: 'OK',
       });
     }

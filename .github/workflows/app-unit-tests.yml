@@ -46,3 +46,7 @@ jobs:
         run: node app/sentence-splitter.test.js
       - name: update-runner terminal-visibility lockdown
         run: node app/update-runner.test.js
+      - name: tts-worker validation + ONNX backend matcher
+        run: node --test app/tts-worker.test.js
+      - name: transcription error humanizer
+        run: node --test app/transcribe-error.test.js

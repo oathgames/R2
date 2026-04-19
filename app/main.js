@@ -3239,12 +3239,35 @@ ipcMain.handle('answer-question', (_, toolUseID, answers) => {
 // whisper-cli against ggml-tiny.en.bin. Binaries live alongside ffmpeg
 // at .claude/tools/. Auto-download is phase 2 — for now, a missing
 // binary returns a clear error with a download link.
+// REGRESSION GUARD (2026-04-19, EBML-header incident): MediaRecorder with a
+// 2.5 s timeslice can emit a final chunk that concatenates into a truncated
+// or header-less webm when the user clicks stop mid-timeslice or cancels
+// before any real audio was captured. ffmpeg then bails with "EBML header
+// parsing failed / Invalid data found when processing input" and the raw
+// stderr (including hex addresses + an exit code like 3199971767) lands in
+// a user-facing modal — violating the "every user-visible error passes
+// through friendlyError()" rule. Three layers of hardening here:
+//   1. Reject recordings below MIN_WEBM_BYTES before ffmpeg even runs — a
+//      sub-threshold blob is "no audio captured", not a transcription error.
+//   2. Pass +discardcorrupt / ignore_err to ffmpeg so a trailing partial
+//      cluster doesn't kill a recording that had real speech in it.
+//   3. Classify ffmpeg failures into stable error codes (transcribe:empty,
+//      transcribe:corrupt, transcribe:ffmpeg, transcribe:whisper) so the
+//      renderer maps them to friendly copy without brittle string-scanning.
+// Do NOT lower MIN_WEBM_BYTES below ~2 KB — an opus webm with zero speech
+// is ~1-2 KB of header + cluster metadata. Anything smaller is genuinely
+// empty and whisper would just return [BLANK_AUDIO] after a ~1 s spin-up.
+const MIN_WEBM_BYTES = 2048;
+
 ipcMain.handle('transcribe-audio', async (_, audioBytes) => {
   if (!Array.isArray(audioBytes) || audioBytes.length === 0) {
-    return { error: 'No audio data received' };
+    return { error: 'transcribe:empty', errorDetail: 'No audio data received' };
+  }
+  if (audioBytes.length < MIN_WEBM_BYTES) {
+    return { error: 'transcribe:empty', errorDetail: `Recording too short (${audioBytes.length} bytes)` };
   }
   if (audioBytes.length > 50 * 1024 * 1024) {
-    return { error: 'Audio too large (>50MB)' };
+    return { error: 'transcribe:too-large', errorDetail: 'Audio too large (>50MB)' };
   }
 
   const { spawn } = require('child_process');
@@ -3273,7 +3296,8 @@ ipcMain.handle('transcribe-audio', async (_, audioBytes) => {
   if (!modelPath)  missing.push('voice model');
   if (missing.length > 0) {
     return {
-      error: `Voice input is unavailable — ${missing.join(', ')} missing from install. Reinstall Merlin to restore.`,
+      error: 'transcribe:missing-tools',
+      errorDetail: `Voice input is unavailable — ${missing.join(', ')} missing from install. Reinstall Merlin to restore.`,
     };
   }
 
@@ -3286,22 +3310,56 @@ ipcMain.handle('transcribe-audio', async (_, audioBytes) => {
   try {
     fs.writeFileSync(webmPath, Buffer.from(audioBytes));
   } catch (err) {
-    return { error: `Failed to write audio: ${err.message}` };
+    return { error: 'transcribe:ffmpeg', errorDetail: `Failed to write audio: ${err.message}` };
   }
 
   try {
     // 1. ffmpeg: webm/opus → 16kHz mono 16-bit PCM WAV (whisper.cpp's required format)
-    await new Promise((resolve, reject) => {
-      const args = ['-y', '-loglevel', 'error', '-i', webmPath, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', wavPath];
+    //    +discardcorrupt / -err_detect ignore_err let ffmpeg salvage a recording
+    //    whose tail cluster got truncated by a mid-timeslice stop. Without these,
+    //    a single bad frame at the end of an otherwise-good recording bombs the
+    //    whole transcription — the exact failure mode in the EBML-header incident.
+    const ffStderr = await new Promise((resolve, reject) => {
+      const args = [
+        '-y', '-loglevel', 'error',
+        '-fflags', '+discardcorrupt',
+        '-err_detect', 'ignore_err',
+        '-i', webmPath,
+        '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
+        wavPath,
+      ];
       const ff = spawn(ffmpegPath, args, { windowsHide: true });
       let stderr = '';
       ff.stderr.on('data', (d) => { stderr += d.toString(); });
       ff.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`ffmpeg exit ${code}: ${stderr.slice(0, 500)}`));
+        if (code === 0) resolve(stderr);
+        else {
+          const lower = stderr.toLowerCase();
+          // EBML / invalid-data / moov signatures mean the recording is
+          // unrecoverable — classify as corrupt so the renderer shows the
+          // "couldn't catch that" message instead of a raw exit code.
+          const corrupt = /ebml|invalid data|moov atom|header parsing|no such file/i.test(lower);
+          reject({
+            code: corrupt ? 'transcribe:corrupt' : 'transcribe:ffmpeg',
+            detail: `ffmpeg exit ${code}: ${stderr.slice(0, 500)}`,
+          });
+        }
       });
-      ff.on('error', reject);
+      ff.on('error', (err) => reject({ code: 'transcribe:ffmpeg', detail: String(err && err.message ? err.message : err) }));
     });
+    void ffStderr;
+
+    // Belt-and-braces: ffmpeg with ignore_err can exit 0 on a 0-byte wav.
+    // Fail fast with an "empty" classification rather than letting whisper
+    // spin up on silence.
+    try {
+      const wavStat = fs.statSync(wavPath);
+      if (wavStat.size < 44) {
+        return { error: 'transcribe:empty', errorDetail: `wav too small (${wavStat.size} bytes)` };
+      }
+    } catch (err) {
+      return { error: 'transcribe:ffmpeg', errorDetail: `wav stat failed: ${err.message}` };
+    }
 
     // 2. whisper-cli: wav → transcript on stdout
     // Flags: -nt (no timestamps), -np (no progress), -l en (English)
@@ -3314,9 +3372,9 @@ ipcMain.handle('transcribe-audio', async (_, audioBytes) => {
       w.stderr.on('data', (d) => { stderr += d.toString(); });
       w.on('close', (code) => {
         if (code === 0) resolve(stdout.trim());
-        else reject(new Error(`whisper exit ${code}: ${stderr.slice(0, 500)}`));
+        else reject({ code: 'transcribe:whisper', detail: `whisper exit ${code}: ${stderr.slice(0, 500)}` });
       });
-      w.on('error', reject);
+      w.on('error', (err) => reject({ code: 'transcribe:whisper', detail: String(err && err.message ? err.message : err) }));
     });
 
     // whisper-cli sometimes prefixes lines with "[BLANK_AUDIO]" or logs
@@ -3329,7 +3387,13 @@ ipcMain.handle('transcribe-audio', async (_, audioBytes) => {
 
     return { transcript: cleaned };
   } catch (err) {
-    return { error: String(err && err.message ? err.message : err) };
+    if (err && typeof err.code === 'string' && err.code.startsWith('transcribe:')) {
+      console.warn('[transcribe]', err.code, err.detail);
+      return { error: err.code, errorDetail: err.detail };
+    }
+    const detail = String(err && err.message ? err.message : err);
+    console.warn('[transcribe] unknown failure:', detail);
+    return { error: 'transcribe:ffmpeg', errorDetail: detail };
   } finally {
     try { fs.unlinkSync(webmPath); } catch {}
     try { fs.unlinkSync(wavPath); } catch {}

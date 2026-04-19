@@ -32,6 +32,11 @@ let _tts = null;
 let _loading = null;
 let _cacheDir = null;
 let _device = 'cpu';
+// Flips to true the first time the active device fails inference and we fall
+// back to CPU. All subsequent loads skip the accelerated backend entirely so
+// one bad driver doesn't cost the user 2-3 s of failed DML/CoreML init per
+// synth. Resets only on worker restart.
+let _backendBlacklisted = false;
 // Unique token for the active job — overwritten on new synth/stream-start or
 // abort, so the running for-await loop exits by identity check without
 // throwing. A single token covers both one-shot and streaming sessions.
@@ -99,6 +104,7 @@ function validateSpeechText(raw) {
 async function loadModel(device) {
   if (_tts) return _tts;
   if (_loading) return _loading;
+  const effective = _backendBlacklisted ? 'cpu' : device;
   _loading = (async () => {
     const { env } = await import('@huggingface/transformers');
     if (_cacheDir) {
@@ -114,12 +120,13 @@ async function loadModel(device) {
     try {
       _tts = await KokoroTTS.from_pretrained(KOKORO_REPO, {
         dtype: 'q8',
-        device,
+        device: effective,
         progress_callback: (p) => post({ type: 'progress', ...p }),
       });
     } catch (err) {
-      if (device !== 'cpu') {
-        console.warn(`[tts-worker] ${device} backend failed, falling back to cpu:`, err && err.message);
+      if (effective !== 'cpu') {
+        console.warn(`[tts-worker] ${effective} backend failed, falling back to cpu:`, err && err.message);
+        _backendBlacklisted = true;
         _tts = await KokoroTTS.from_pretrained(KOKORO_REPO, {
           dtype: 'q8',
           device: 'cpu',
@@ -133,6 +140,42 @@ async function loadModel(device) {
   })();
   try { return await _loading; }
   finally { _loading = null; }
+}
+
+// REGRESSION GUARD (2026-04-19, ConvTranspose incident): DirectML on Windows
+// (and CoreML on macOS) can pass the model-load path and then fail at
+// inference time with "Non-zero status code returned while running
+// ConvTranspose node" — a driver-level bug on specific GPU + shape combos.
+// The load-time fallback above doesn't cover this case because the model
+// loaded successfully; only a specific op fails later. Without a runtime
+// fallback, the user sees a raw ONNX error modal and voice is dead until
+// they restart. We pattern-match the signature, blacklist the backend for
+// the rest of the worker lifetime, reload on CPU, and let the caller retry.
+// Signatures seen in the wild:
+//   - "Non-zero status code returned while running ConvTranspose node"
+//   - paths containing "onnxruntime" (the CI-built DLL bubbles its source path)
+//   - "DML" / "DirectML" / "CoreML" prefixed messages
+// Do NOT narrow this matcher to just ConvTranspose — other ops (Conv, GEMM,
+// LayerNorm) hit the same class of driver bug with different node names, and
+// a narrow matcher would re-strand users on the next driver regression.
+function isOnnxBackendError(err) {
+  if (!err) return false;
+  const msg = String(err.message || err);
+  if (!msg) return false;
+  return /Non-zero status code/i.test(msg)
+    || /onnxruntime/i.test(msg)
+    || /\bDML\b|DirectML|CoreML/i.test(msg);
+}
+
+// Tear down the current model and reload on CPU. Blacklists the accelerated
+// backend so `loadModel` stops trying it. Safe to call multiple times —
+// returns early if we're already on CPU.
+async function fallbackToCpu(reason) {
+  if (_backendBlacklisted && _tts) return _tts;
+  console.warn('[tts-worker] falling back to cpu after inference error:', reason);
+  _backendBlacklisted = true;
+  _tts = null;
+  return loadModel('cpu');
 }
 
 // Invariant enforcer. Call BEFORE any code that swaps `_currentToken`. If
@@ -165,18 +208,39 @@ async function handleSynth(msg) {
     if (_currentToken === token) _currentToken = null;
     return;
   }
-  try {
-    const tts = await loadModel(_device);
-    if (_currentToken !== token) { post({ type: 'final', reqId, aborted: true }); return; }
+  // Streams chunks from tts.stream(), returns the final `seq` on success.
+  // Any error bubbles — caller decides whether to retry on CPU.
+  const drainOnce = async (tts) => {
     let seq = 0;
     for await (const chunk of tts.stream(v.text, { voice })) {
-      if (_currentToken !== token) { post({ type: 'final', reqId, seq, aborted: true }); return; }
+      if (_currentToken !== token) { post({ type: 'final', reqId, seq, aborted: true }); return { aborted: true }; }
       const wav = new Uint8Array(chunk.audio.toWav());
       post({ type: 'chunk', reqId, seq, audio: wav });
       seq++;
     }
+    return { seq };
+  };
+  try {
+    let tts = await loadModel(_device);
+    if (_currentToken !== token) { post({ type: 'final', reqId, aborted: true }); return; }
+    let result;
+    try {
+      result = await drainOnce(tts);
+    } catch (err) {
+      if (!isOnnxBackendError(err) || _backendBlacklisted) throw err;
+      // Inference-time backend failure on the accelerated path. Swap to
+      // CPU and retry the full sentence — user sees a one-time ~2 s stall
+      // instead of a dead voice feature. Emitted chunks already sent to
+      // the renderer are harmless: the renderer plays a prefix, retry emits
+      // the full sentence from seq=0, and the renderer's per-reqId queue
+      // drops duplicates by seq monotonicity. Worst case: a short overlap.
+      tts = await fallbackToCpu(err.message);
+      if (_currentToken !== token) { post({ type: 'final', reqId, aborted: true }); return; }
+      result = await drainOnce(tts);
+    }
+    if (result.aborted) return;
     if (_currentToken === token) _currentToken = null;
-    post({ type: 'final', reqId, seq });
+    post({ type: 'final', reqId, seq: result.seq });
   } catch (err) {
     if (_currentToken === token) _currentToken = null;
     post({ type: 'error', reqId, message: String(err && err.message ? err.message : err) });
@@ -264,18 +328,35 @@ async function streamDrain() {
       const sentence = s.pending.shift();
       if (!sentence) continue;
       let localSeq = s.emittedSeq;
-      try {
+      const streamSentence = async () => {
         for await (const chunk of _tts.stream(sentence, { voice: s.voice })) {
           if (_stream !== s || s.token !== _currentToken) return;
           const wav = new Uint8Array(chunk.audio.toWav());
           post({ type: 'chunk', reqId: s.reqId, seq: localSeq, audio: wav });
           localSeq++;
         }
+      };
+      try {
+        await streamSentence();
       } catch (err) {
-        // A per-sentence failure (bad phoneme, transient ONNX issue) must
-        // not cancel sentences already playing in the renderer. Log, drop
-        // this sentence, and continue draining so the stream stays alive.
-        console.warn('[tts-worker] sentence synth failed:', err && err.message);
+        // ONNX backend errors (DML / CoreML ConvTranspose etc.) strand the
+        // accelerated path — swap to CPU and retry this sentence once so
+        // the rest of the stream survives. Non-backend errors (bad
+        // phoneme, transient) still get logged-and-dropped below.
+        if (isOnnxBackendError(err) && !_backendBlacklisted) {
+          try {
+            await fallbackToCpu(err && err.message);
+            localSeq = s.emittedSeq;
+            if (_stream === s && s.token === _currentToken) await streamSentence();
+          } catch (retryErr) {
+            console.warn('[tts-worker] sentence synth failed after cpu fallback:', retryErr && retryErr.message);
+          }
+        } else {
+          // A per-sentence failure (bad phoneme, transient ONNX issue) must
+          // not cancel sentences already playing in the renderer. Log, drop
+          // this sentence, and continue draining so the stream stays alive.
+          console.warn('[tts-worker] sentence synth failed:', err && err.message);
+        }
       }
       s.emittedSeq = localSeq;
     }
@@ -340,4 +421,4 @@ if (process.parentPort && typeof process.parentPort.on === 'function') {
 // utility-process entrypoint in production; under `require()` the guard
 // above skips the message handler registration, so importing these does
 // not attach any production listeners.
-module.exports = { validateSpeechText, MAX_SPEECH_TEXT_CHARS };
+module.exports = { validateSpeechText, MAX_SPEECH_TEXT_CHARS, isOnnxBackendError };
