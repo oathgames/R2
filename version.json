@@ -29,6 +29,7 @@
     "app/async-barrier.js",
     "app/brand-scraper.js",
     "app/brand-scraper-cli.js",
+    "app/chat-artifacts.js",
     "app/marked.min.js",
     "app/mcp-concurrency.js",
     "app/mcp-define-tool.js",
