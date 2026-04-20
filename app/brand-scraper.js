@@ -232,6 +232,25 @@ async function scrapeBrand(url, opts = {}) {
     throw new Error(`brand-scraper: ${guard.error}`);
   }
 
+  // REGRESSION GUARD (2026-04-20): these four webPreferences flags are the
+  // difference between a scraper and a remote code execution surface on the
+  // user's machine. The BrowserWindow below loads arbitrary third-party
+  // origins chosen by the user (their own site, logo CDNs, social preview
+  // redirects). Any one of these flags flipped re-opens the renderer to
+  // attacker-controlled JS running with broader privileges:
+  //   * nodeIntegration=true  → the page can require('child_process') and
+  //     fork a shell. Full RCE, instantly.
+  //   * contextIsolation=false → the page sees the preload's globals,
+  //     including any IPC handles exposed for the main window.
+  //   * webSecurity=false      → same-origin policy off, page can fetch()
+  //     the customer's local file:// tree and exfiltrate it through the
+  //     signal payload we return.
+  //   * sandbox=false          → OS-level sandbox off, page can probe
+  //     Electron APIs that leak out of the isolated context under bug.
+  // brand-scraper.test.js source-scans this block on every test run and
+  // fails CI if any flag moves. If a future scraper variant needs to load
+  // a trusted local HTML shim, build a SECOND helper with its own config
+  // and its own test — do not loosen this one.
   const win = new BrowserWindow({
     show: false,
     width: DESKTOP_VIEWPORT.width,

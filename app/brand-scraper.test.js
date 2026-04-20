@@ -376,3 +376,92 @@ test('ScrapeTimeoutError exposes a stable TIMEOUT code for envelope classificati
   // mis-route it as a non-Error value.
   assert.ok(err instanceof Error);
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// REGRESSION GUARD (2026-04-20): brand-scraper BrowserWindow hardening.
+//
+// The BrowserWindow loads arbitrary third-party origins (the user's site,
+// logo CDNs, social preview redirects). Loosening any of the four flags
+// below turns a scraper into a remote-code-execution channel on paying
+// users' machines. This test source-scans brand-scraper.js and fails if
+// the webPreferences block does not contain ALL four locked flags in
+// their safe state. Intentionally forgiving on whitespace; intentionally
+// unforgiving on value. If a legitimate variant ever needs a different
+// config, build it as a SECOND helper with its own test — do not loosen
+// the one enforcement point.
+// ─────────────────────────────────────────────────────────────────────
+
+const SCRAPER_SOURCE = fs.readFileSync(path.join(__dirname, 'brand-scraper.js'), 'utf8');
+
+test('REGRESSION GUARD (2026-04-20): brand-scraper BrowserWindow webPreferences locks four security flags', () => {
+  // Isolate the webPreferences block inside the scrapeBrand BrowserWindow
+  // call so we don't match an unrelated literal elsewhere in the file.
+  const bwMatch = SCRAPER_SOURCE.match(/new BrowserWindow\s*\(\s*\{[\s\S]*?webPreferences\s*:\s*\{([\s\S]*?)\}/);
+  assert.ok(
+    bwMatch,
+    'brand-scraper.js must construct exactly one BrowserWindow with a literal webPreferences object',
+  );
+  const prefs = bwMatch[1];
+
+  const MUST_HAVE = [
+    { flag: 'nodeIntegration', value: 'false', rationale: 'node access = instant RCE' },
+    { flag: 'contextIsolation', value: 'true',  rationale: 'isolation prevents preload leakage' },
+    { flag: 'webSecurity',      value: 'true',  rationale: 'same-origin policy blocks file:// exfil' },
+    { flag: 'sandbox',          value: 'true',  rationale: 'OS sandbox is the last line of defense' },
+  ];
+
+  for (const { flag, value, rationale } of MUST_HAVE) {
+    const pattern = new RegExp(`\\b${flag}\\s*:\\s*${value}\\b`);
+    assert.match(
+      prefs,
+      pattern,
+      `brand-scraper webPreferences must declare ${flag}: ${value} (${rationale}). ` +
+      `A change here rides a straight line from "merged PR" to "RCE on every paying user."`,
+    );
+  }
+
+  // Belt-and-braces: explicitly fail if the "unsafe" value of any flag is
+  // present anywhere in the block. Catches a future edit that adds an
+  // override line below the original (e.g. `sandbox: true, ... sandbox: false`).
+  const UNSAFE = [
+    /\bnodeIntegration\s*:\s*true\b/,
+    /\bcontextIsolation\s*:\s*false\b/,
+    /\bwebSecurity\s*:\s*false\b/,
+    /\bsandbox\s*:\s*false\b/,
+  ];
+  for (const bad of UNSAFE) {
+    assert.doesNotMatch(
+      prefs,
+      bad,
+      `brand-scraper webPreferences contains an unsafe override: ${bad}. Refuse to ship.`,
+    );
+  }
+});
+
+test('REGRESSION GUARD (2026-04-20): brand-scraper BrowserWindow does not declare a preload script', () => {
+  // A preload in the scraper window is an automatic exposure of Node APIs
+  // to the loaded third-party page — the whole point of `sandbox: true`
+  // plus `contextIsolation: true` is that nothing bridges the main-process
+  // boundary. If a future PR adds `preload: path.join(...)` here, the
+  // sandbox/isolation flags stop mattering for any API the preload exposes.
+  const bwMatch = SCRAPER_SOURCE.match(/new BrowserWindow\s*\(\s*\{[\s\S]*?webPreferences\s*:\s*\{([\s\S]*?)\}/);
+  assert.ok(bwMatch, 'brand-scraper.js must construct a BrowserWindow with webPreferences');
+  const prefs = bwMatch[1];
+  assert.doesNotMatch(
+    prefs,
+    /\bpreload\s*:/,
+    'brand-scraper webPreferences must not declare a preload script — it bridges Node into the loaded page',
+  );
+});
+
+test('REGRESSION GUARD (2026-04-20): brand-scraper only constructs ONE BrowserWindow', () => {
+  // If a second BrowserWindow appears in this file, it needs its own
+  // hardening review. Refuse to pass silently.
+  const matches = SCRAPER_SOURCE.match(/new BrowserWindow\s*\(/g) || [];
+  assert.equal(
+    matches.length,
+    1,
+    `brand-scraper.js must construct exactly one BrowserWindow (found ${matches.length}). ` +
+    `Any new scraper BrowserWindow needs its own hardened config and its own test coverage.`,
+  );
+});
