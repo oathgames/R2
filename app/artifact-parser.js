@@ -148,15 +148,56 @@ function renderGalleryMarkdown(bundle) {
   ].join('\n');
 }
 
+// Render a dashboard bundle as a ```html fenced markdown block.
+//
+// The Go binary pre-renders a complete, standalone HTML document (inline
+// CSS + inline SVG, zero scripts). We wrap it in a triple-backtick-html
+// fence so the existing HTML-artifact path in renderer.js (search for
+// /```html\n/ — it extracts fenced blocks BEFORE marked parses them and
+// injects them into a sandboxed iframe with sandbox="allow-scripts" and
+// CSP default-src 'none'; connect-src 'none') picks it up verbatim.
+//
+// This is the cheapest possible integration: zero renderer.js changes,
+// full reuse of the audited iframe sandbox. Trade-off: summary line lives
+// above the fence rather than inside it, but that's upside — Claude's
+// prose echo benefits from the summary being plainly visible in markdown.
+function renderDashboardMarkdown(bundle) {
+  if (!bundle || typeof bundle.html !== 'string' || bundle.html.trim() === '') {
+    return '';
+  }
+  // Defensive: if Go ever emits "```" inside the HTML (shouldn't — our
+  // renderer never produces backticks), we'd break out of the fence and
+  // expose raw HTML that bypasses the iframe sandbox. Replace any stray
+  // triple-backtick sequence. No legitimate dashboard HTML contains three
+  // consecutive backticks, so this is lossless in practice.
+  const safeHtml = bundle.html.replace(/```/g, '` ``');
+  const summary = bundle.summary || 'Merlin dashboard';
+  const metaParts = [];
+  if (bundle.brand) metaParts.push(bundle.brand);
+  const metaLine = metaParts.length
+    ? ` _(${metaParts.map(escapeHtml).join(' · ')})_`
+    : '';
+  return [
+    '',
+    `**${escapeHtml(summary)}**${metaLine}`,
+    '',
+    '```html',
+    safeHtml,
+    '```',
+    '',
+  ].join('\n');
+}
+
 // Extract one or more sentinel bundles from raw stdout. Multiple bundles
 // can occur in chained pipelines (e.g. an image pipeline that also clones
 // a voice). Returns { bundles: [], cleanText: string, galleryMarkdown: string }.
 //
 // `cleanText` has every sentinel block replaced with the corresponding
-// gallery markdown so Claude sees a single coherent stream. The separate
-// `galleryMarkdown` is provided for callers that want to render the
-// gallery independently (e.g. push it as a structured chat event before
-// the rest of the prose renders).
+// gallery OR dashboard markdown so Claude sees a single coherent stream.
+// The separate `galleryMarkdown` is provided for callers that want to
+// render artifacts independently (e.g. push as a structured chat event
+// before the rest of the prose renders). Its name is historical — it now
+// also carries dashboard fences.
 function extractArtifacts(stdout) {
   if (!stdout || typeof stdout !== 'string') {
     return { bundles: [], cleanText: stdout || '', galleryMarkdown: '' };
@@ -170,12 +211,14 @@ function extractArtifacts(stdout) {
     } catch (e) {
       // Malformed sentinel — leave the original block in stdout so the
       // user at least sees the file paths in raw form, and skip the
-      // gallery for this block. We don't want a parse failure to make
+      // render for this block. We don't want a parse failure to make
       // the entire chat response disappear.
       return jsonBlob;
     }
     bundles.push(bundle);
-    const md = renderGalleryMarkdown(bundle);
+    const md = bundle.kind === 'dashboard'
+      ? renderDashboardMarkdown(bundle)
+      : renderGalleryMarkdown(bundle);
     if (md) galleryParts.push(md);
     return '\n' + md + '\n';
   });
@@ -187,5 +230,6 @@ module.exports = {
   SENTINEL_CLOSE,
   extractArtifacts,
   renderGalleryMarkdown,
+  renderDashboardMarkdown,
   toMerlinUrl,
 };

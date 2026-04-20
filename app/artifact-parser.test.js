@@ -13,6 +13,7 @@ const {
   SENTINEL_CLOSE,
   extractArtifacts,
   renderGalleryMarkdown,
+  renderDashboardMarkdown,
   toMerlinUrl,
 } = require('./artifact-parser');
 
@@ -198,4 +199,134 @@ test('extractArtifacts singular grammar for one image', () => {
   })));
   assert.match(out.cleanText, /1 image generated/);
   assert.ok(!out.cleanText.includes('1 images'), 'must use singular');
+});
+
+// --- Dashboard bundle branch -------------------------------------------
+//
+// REGRESSION GUARD (2026-04-20, live-dashboard-artifact): dashboards ride
+// the SAME sentinel as image/video galleries but carry a pre-rendered HTML
+// document in `bundle.html` instead of an `items[]` array. The parser wraps
+// the HTML in a ```html fenced block so renderer.js's existing sandboxed-
+// iframe path picks it up (extracts before marked parses, iframes with
+// sandbox="allow-scripts" + CSP default-src 'none'). If this branch regresses,
+// dashboards render as raw HTML in the chat OR blow away Claude's prose
+// summary — both were observed during the initial integration.
+
+test('renderDashboardMarkdown wraps bundle.html in ```html fenced block', () => {
+  const html = '<!doctype html><html><body><div class="dash">ok</div></body></html>';
+  const md = renderDashboardMarkdown({
+    kind: 'dashboard',
+    html,
+    summary: 'Madchill performance — last 7 days',
+    brand: 'madchill',
+  });
+  assert.match(md, /^\s*\*\*Madchill performance — last 7 days\*\*/);
+  assert.match(md, /_\(madchill\)_/);
+  assert.match(md, /```html\n[\s\S]*<div class="dash">ok<\/div>[\s\S]*\n```/);
+});
+
+test('renderDashboardMarkdown returns empty string for missing/empty html', () => {
+  assert.equal(renderDashboardMarkdown(null), '');
+  assert.equal(renderDashboardMarkdown({}), '');
+  assert.equal(renderDashboardMarkdown({ kind: 'dashboard' }), '');
+  assert.equal(renderDashboardMarkdown({ kind: 'dashboard', html: '' }), '');
+  assert.equal(renderDashboardMarkdown({ kind: 'dashboard', html: '   \n\t ' }), '');
+});
+
+test('renderDashboardMarkdown escapes stray triple-backticks so fence stays intact', () => {
+  // Shouldn't happen (our Go renderer never emits backticks), but if it
+  // ever did, a raw ``` inside the body breaks out of the fence and
+  // bypasses the iframe sandbox. The replacement is lossless for any
+  // real dashboard HTML.
+  const html = '<pre>foo ``` bar</pre>';
+  const md = renderDashboardMarkdown({ kind: 'dashboard', html, summary: 'x' });
+  assert.ok(!md.includes('foo ``` bar'), 'stray triple-backtick must be escaped');
+  assert.match(md, /foo ` `` bar/);
+  // Only one opening + one closing fence.
+  assert.equal((md.match(/^```html$/gm) || []).length, 1);
+  assert.equal((md.match(/^```$/gm) || []).length, 1);
+});
+
+test('renderDashboardMarkdown escapes summary + brand for the markdown line', () => {
+  const md = renderDashboardMarkdown({
+    kind: 'dashboard',
+    html: '<div>ok</div>',
+    summary: 'evil & <script>',
+    brand: '"><img>',
+  });
+  // The header lives OUTSIDE the fence, so it's markdown — HTML
+  // entities are the right escape level here (marked will render them
+  // literally, DOMPurify will pass them through).
+  assert.ok(!md.includes('<script>'), 'summary must not leak raw <script>');
+  assert.ok(!md.includes('"><img>'), 'brand must not leak raw tag');
+  assert.match(md, /evil &amp; &lt;script&gt;/);
+});
+
+test('renderDashboardMarkdown omits brand line when bundle.brand is absent', () => {
+  const md = renderDashboardMarkdown({
+    kind: 'dashboard',
+    html: '<div>ok</div>',
+    summary: 'Week in review',
+  });
+  assert.match(md, /\*\*Week in review\*\*/);
+  assert.ok(!md.includes('_('), 'no brand meta line when brand missing');
+});
+
+test('extractArtifacts routes kind="dashboard" to the fenced-html branch', () => {
+  const bundle = {
+    kind: 'dashboard',
+    html: '<!doctype html><html><body><h1>Dashboard</h1></body></html>',
+    summary: '7-day snapshot',
+    brand: 'madchill',
+  };
+  const stdout = `preamble\n${wrap(JSON.stringify(bundle))}\nepilogue`;
+  const { bundles, cleanText } = extractArtifacts(stdout);
+
+  assert.equal(bundles.length, 1);
+  assert.equal(bundles[0].kind, 'dashboard');
+  // Dashboards use the fenced-HTML path, NOT the gallery grid.
+  assert.ok(!cleanText.includes('merlin-gallery'), 'dashboards must not use the gallery wrapper');
+  assert.match(cleanText, /```html\n[\s\S]*<h1>Dashboard<\/h1>[\s\S]*\n```/);
+  assert.ok(cleanText.startsWith('preamble'));
+  assert.ok(cleanText.trim().endsWith('epilogue'));
+  // Sentinels stripped.
+  assert.ok(!cleanText.includes(SENTINEL_OPEN));
+  assert.ok(!cleanText.includes(SENTINEL_CLOSE));
+});
+
+test('extractArtifacts handles mixed dashboard + gallery bundles in one stdout', () => {
+  const dash = {
+    kind: 'dashboard',
+    html: '<div class="kpi">ok</div>',
+    summary: 'Snapshot',
+  };
+  const gallery = {
+    kind: 'image',
+    items: [{ path: 'a.png', kind: 'image', label: 'A' }],
+  };
+  const stdout = [
+    'top',
+    wrap(JSON.stringify(dash)),
+    'middle',
+    wrap(JSON.stringify(gallery)),
+    'bottom',
+  ].join('\n');
+
+  const { bundles, cleanText } = extractArtifacts(stdout);
+  assert.equal(bundles.length, 2);
+  assert.equal(bundles[0].kind, 'dashboard');
+  assert.equal(bundles[1].kind, 'image');
+  // Both render paths present: fenced html + gallery div.
+  assert.match(cleanText, /```html/);
+  assert.match(cleanText, /<div class="merlin-gallery"/);
+});
+
+test('extractArtifacts treats a dashboard bundle without html as a no-op (still recorded)', () => {
+  const stdout = wrap(JSON.stringify({ kind: 'dashboard', summary: 'empty' }));
+  const { bundles, cleanText } = extractArtifacts(stdout);
+  // Bundle is still parsed so downstream observability / chat-event code
+  // can see a dashboard ran — but no fenced block is emitted.
+  assert.equal(bundles.length, 1);
+  assert.equal(bundles[0].kind, 'dashboard');
+  assert.ok(!cleanText.includes('```html'), 'no fenced block without html');
 });
