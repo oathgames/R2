@@ -198,7 +198,9 @@ Exact JSON shape. The Go validator enforces required fields, enum values, hex fo
   "ad_defaults": {
     "hook_patterns": ["string (3–5 patterns drawn from real site copy rhythms)"],
     "cta_patterns": ["string (3–5 CTA phrasings fitting the voice rules)"],
-    "forbidden_hook_patterns": ["string (4–6 patterns that would violate the voice rules)"]
+    "forbidden_hook_patterns": ["string (4–6 patterns that would violate the voice rules)"],
+    "preferred_angles": ["angle key (2–4 of: hidden_cost, failed_solution, social_proof_pivot, mechanism, enemy, identity_shift, urgency_of_now, comparison_flip, objection_first, insider) — pick from brand voice + vertical + audience. Example: a skeptical, research-driven audience → mechanism + objection_first + comparison_flip."],
+    "forbidden_angles": ["angle key (0–2) — same enum, pick only ones that would CLASH with the brand. Example: a trust-centered financial brand forbids urgency_of_now (feels manipulative) and enemy (picks a fight). Keep the list short — forbidden is a veto, not a taste preference. An angle must NOT appear in both preferred and forbidden."]
   },
   "generation_meta": {
     "generated_at": "ISO-8601 timestamp",

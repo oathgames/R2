@@ -346,6 +346,27 @@ For every generated blog, X/LinkedIn thread, short-form video script, social pos
 
 Every creative uses one: **curiosity-gap, pattern-interrupt, problem-agitation, POV, social-proof-frontload, skit, before-after, direct-address, voiceover-demo, testimonial-open.** Tag in `metadata.json`. QA rejects hooks <6/10 on attention pull.
 
+## Creative Angles (the strategic stance — orthogonal to format + hook)
+
+Every brief declares a `creativeAngle` — the WHY behind the ad. Format is the visual container, hook is the first-2s attention grab, angle is the strategic argument the whole creative makes. Pick ONE per brief. The 10 canonical angles (enforced in `angle.go`):
+
+1. **hidden_cost** — name the invisible cost of NOT solving the problem (time, money, relationships, self-image). "The real cost of [problem] isn't [obvious] — it's [invisible]."
+2. **failed_solution** — "You've tried X, Y, Z. Here's why none of them worked and what actually does." Respects the audience's history.
+3. **social_proof_pivot** — "I was skeptical too" → peer reveals they converted, specific number. Default when no angle is better-matched.
+4. **mechanism** — explain HOW the product works at an ingredient / system level. Converts skeptical, research-driven buyers.
+5. **enemy** — name a villain (an industry practice, a myth, a category norm) and stand opposite it. High-energy; clashes with trust-centered brands.
+6. **identity_shift** — the product isn't what you BUY, it's what you BECOME. Highest AOV lift when it matches positioning.
+7. **urgency_of_now** — external timing trigger makes inaction expensive TODAY (deadline, inventory, season, policy change). Avoid on trust-brands (reads manipulative).
+8. **comparison_flip** — "Everyone else does X. We do Y because [reason]." Generic-competitor, never a named brand.
+9. **objection_first** — lead with the biggest buyer skepticism; resolve it on-camera. Works when the objection is known and universal.
+10. **insider** — longtime-customer or founder reveals a quiet benefit the landing page doesn't lead with. High trust, low CAC.
+
+**Rules:**
+- Blank angle resolves to `social_proof_pivot` — safe fallback, rarely optimal. Pick deliberately.
+- Brand guide's `preferred_angles` drive selection when the brief is ambiguous; `forbidden_angles` are a hard veto.
+- Angle × format compatibility is advisory (see `angle.go` `CompatibleFormats`). Mismatches generate but score 10–15% lower at judge time.
+- Angle is encoded in the ad name as `/ angle:<key>` — wisdom system aggregates ROAS per angle for brand-guide synthesis feedback loops.
+
 ## Content Action Reference (`mcp__merlin__content`)
 
 | Action | Key params |

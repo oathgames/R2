@@ -43,7 +43,7 @@ Spawn a fresh `opus` subagent with:
 - The knowledge layer.
 - The original creative brief (product, audience, offer, format constraints).
 - **NOT the incumbent text.** This is the load-bearing constraint. If Author B can see incumbent A, it will rearrange A's words. Withholding A forces a different generative trajectory.
-- Instruction: *"Write a rival ad from scratch. The teardown describes weaknesses of an existing version you are NOT shown. Produce ONE complete creative — headline, body, CTA — that addresses those weaknesses while staying on brief and on brand. Pick a different angle from any swipe-file example, not a different wording."*
+- Instruction: *"Write a rival ad from scratch. The teardown describes weaknesses of an existing version you are NOT shown. Produce ONE complete creative — headline, body, CTA — that addresses those weaknesses while staying on brief and on brand. Pick a different **creativeAngle** from the incumbent's declared angle (see `merlin-content` → Creative Angles for the 10-angle taxonomy). If the incumbent is `social_proof_pivot`, try `mechanism` or `objection_first`; if `urgency_of_now`, try `hidden_cost` or `identity_shift`. Varying the angle — not just the wording — is what gives the tournament real signal. Respect the brand guide's `forbidden_angles` list; those are hard vetos."*
 
 Output: rival creative B. Save to `round_<N>/rival_B.md`.
 
