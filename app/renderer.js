@@ -3,6 +3,38 @@ let currentBubble = null;
 let isStreaming = false;
 let textBuffer = '';
 let rafPending = false;
+// REGRESSION GUARD (2026-04-20): one-bubble-per-turn UX. The Claude Agent SDK
+// streams one `assistant` message (and its own `message_stop`) per model turn,
+// and emits a fresh message every time the model pauses for a tool call. The
+// pre-2026-04-20 renderer called finalizeBubble() on EVERY message_stop AND
+// every `assistant` envelope, which spawned a new chat bubble for each
+// intermediate reasoning step. A single "render a chart" ask produced FOUR
+// separate speech bubbles of developer-voice monologue ("Let me check the
+// tool output", "Puppeteer is installed globally", …) — the exact opposite of
+// the Claude Desktop-style single-response feel Ryan wants. The fix: the turn
+// is ONE bubble. We finalize only on `result` (true turn end) or just before
+// rendering an image block (image bubbles intentionally stand alone). New
+// text after a prior message_stop appends to the same bubble with a blank-
+// line separator so multi-message reasoning reads as one flowing response.
+// `_pendingMessageBreak` carries the break request from content_block_start
+// (where we know a new message is starting) to the next text_delta (where
+// we actually have text to prefix). Do NOT restore finalizeBubble() in
+// message_stop or in the bare `case 'assistant':` branch without reading
+// this comment — the 4-bubble regression lands in two lines.
+let _pendingMessageBreak = false;
+// REGRESSION GUARD (2026-04-20): auto-embed image artifacts produced during a
+// turn. The model often writes a PNG/JPG/SVG (Write tool, Bash + Puppeteer,
+// image-gen MCP tools) and then narrates the result WITHOUT emitting the file
+// path in its final message — "There it is — rendering works perfectly" with
+// nothing to render, per Ryan's 2026-04-20 bug report on the ROAS chart ask.
+// We scan every tool_use's `input` that streams by for image-extension paths,
+// dedupe them, and on `result` append any that aren't already referenced in
+// the final bubble as markdown images. The markdown renderer already handles
+// merlin:// local paths and data: URIs, so appending `![chart](path)` lands
+// as an inline <img>. List resets on each `result`. Do not remove this
+// without replacing it with a proper image-artifact MCP tool that returns
+// image content blocks — or the "invisible chart" regression is back.
+let _turnImageArtifacts = [];
 
 // ── Fact-binding pipeline (DEFAULT OFF) ──────────────────────
 // Wires facts-cache + verify-facts passes + TailQuarantine into the streaming
@@ -637,6 +669,11 @@ function addUserBubble(text) {
   div.style.whiteSpace = 'pre-wrap';
   div.textContent = text;
   messages.appendChild(div);
+  // New user turn starts — clear any artifact list that didn't get reset by
+  // a successful `result` (e.g. previous turn errored before completion).
+  // Without this, artifacts from a failed turn would leak into the next one.
+  _turnImageArtifacts = [];
+  _pendingMessageBreak = false;
   scrollToBottom(true); // User sent a message — always scroll to show it
 }
 
@@ -717,6 +754,8 @@ function paintBrandThread(bubbles) {
   currentBubble = null;
   textBuffer = '';
   isStreaming = false;
+  _pendingMessageBreak = false;
+  _turnImageArtifacts = [];
   if (!Array.isArray(bubbles) || bubbles.length === 0) return 0;
   for (const b of bubbles) {
     if (!b || (b.role !== 'user' && b.role !== 'claude')) continue;
@@ -826,6 +865,7 @@ function finalizeBubble() {
   currentBubble = null;
   textBuffer = '';
   isStreaming = false;
+  _pendingMessageBreak = false;
   setInputDisabled(false);
   scrollToBottom();
   input.focus();
@@ -1199,6 +1239,33 @@ let firstMessage = true;
 let hasShownSparkleHint = false;
 let _userMessageCount = 0;
 
+// Pure helpers live in chat-artifacts.js (dual-module: window global + CJS
+// module) so Node tests can cover them without JSDOM. This thin wrapper
+// binds the DOM-dependent append step; everything path-shaped defers to
+// the shared module.
+const _chatArtifacts = (typeof window !== 'undefined' && window.MerlinChatArtifacts) || null;
+
+// After a turn ends, append any image artifacts the model produced but did
+// NOT reference in its final text. Renders one inline `<img>` per artifact
+// so the user sees the chart even when the model forgot to embed it.
+function appendUnreferencedImageArtifacts(bubble) {
+  if (!bubble || !_turnImageArtifacts.length || !_chatArtifacts) return;
+  const existing = bubble.innerHTML || '';
+  const unique = _chatArtifacts.uniqueByBasename(_turnImageArtifacts);
+  for (const p of unique) {
+    const base = p.split(/[\\\/]/).pop();
+    if (_chatArtifacts.bubbleAlreadyReferences(existing, base)) continue;
+    const norm = _chatArtifacts.normalizeImagePathForMerlinUrl(p);
+    if (!norm) continue;
+    const img = document.createElement('img');
+    img.src = `merlin://${norm}`;
+    img.alt = base;
+    img.loading = 'lazy';
+    img.style.cssText = 'max-width:100%;border-radius:10px;margin-top:8px;display:block';
+    bubble.appendChild(img);
+  }
+}
+
 merlin.onSdkMessage((msg) => {
   // Suppress internal action responses (spell toggle/create) — no chat bubbles
   if (msg._internal) return;
@@ -1210,6 +1277,8 @@ merlin.onSdkMessage((msg) => {
     _restartAttempts = 0; // session connected successfully — reset circuit breaker
     currentBubble = null;
     textBuffer = '';
+    _pendingMessageBreak = false;
+    _turnImageArtifacts = [];
   }
 
   // Remove typing indicator + cancel pending when real content starts
@@ -1235,17 +1304,32 @@ merlin.onSdkMessage((msg) => {
       break;
 
     case 'assistant':
-      finalizeBubble();
-      // Check for image content blocks in the assistant message
+      // Intentionally NO finalizeBubble() here — see REGRESSION GUARD at top.
+      // The streaming text bubble keeps accumulating across multiple assistant
+      // messages within the same turn; it finalizes on `result`.
+      // Check for image content blocks in the assistant message. Images stand
+      // alone in their own bubble, so we DO finalize the text bubble before
+      // rendering the image, then clear currentBubble so subsequent text
+      // after the image starts a fresh bubble.
       if (msg.message?.content) {
         for (const block of msg.message.content) {
           if (block.type === 'image' && block.source?.data && block.source.data.length > 100 && block.source.data.length < 10_000_000) { // cap at ~7.5MB decoded
+            finalizeBubble();
             const imgBubble = addClaudeBubble();
             const mimeType = (block.source.media_type || 'image/png').replace(/[^a-z0-9/+-]/gi, '');
             imgBubble.innerHTML = `<img src="data:${mimeType};base64,${block.source.data}" alt="Image" style="max-width:100%;border-radius:10px">`;
             imgBubble.classList.remove('streaming');
             currentBubble = null;
             textBuffer = '';
+            _pendingMessageBreak = false;
+          }
+          // Track image artifacts produced by tool calls so the `result`
+          // handler can auto-embed any the model forgot to reference.
+          if (block.type === 'tool_use' && _chatArtifacts) {
+            const paths = _chatArtifacts.extractImagePathsFromToolInput(block.name || '', block.input || {});
+            for (const p of paths) {
+              if (_turnImageArtifacts.indexOf(p) === -1) _turnImageArtifacts.push(p);
+            }
           }
         }
       }
@@ -1254,7 +1338,12 @@ merlin.onSdkMessage((msg) => {
     case 'result':
       sessionActive = false;
       if (typingTimeout) { clearTimeout(typingTimeout); typingTimeout = null; }
+      // Auto-embed any unreferenced image artifacts before finalization so
+      // they land inside the same bubble the model is closing on. See the
+      // `_turnImageArtifacts` REGRESSION GUARD at top of file.
+      try { appendUnreferencedImageArtifacts(currentBubble); } catch {}
       finalizeBubble();
+      _turnImageArtifacts = [];
       removeTypingIndicator();
       clearStatusLabel();
       isStreaming = false;
@@ -1307,6 +1396,13 @@ function handleStreamEvent(msg) {
       if (!currentBubble) {
         addClaudeBubble();
         isStreaming = true;
+      } else if (textBuffer.length > 0) {
+        // Reusing the turn's existing bubble for a follow-up assistant message
+        // (post tool-call continuation). Arm a blank-line break so the new
+        // message's first text_delta renders on its own paragraph instead of
+        // concatenating onto the tail of the previous one. See REGRESSION
+        // GUARD at top of file.
+        _pendingMessageBreak = true;
       }
     }
     // Show tool activity status (like Claude Code) — single persistent row, no stacking
@@ -1370,13 +1466,21 @@ function handleStreamEvent(msg) {
 
   if (event.type === 'content_block_delta') {
     if (event.delta && event.delta.type === 'text_delta' && event.delta.text) {
+      if (_pendingMessageBreak) {
+        const sep = textBuffer.endsWith('\n\n') ? '' : (textBuffer.endsWith('\n') ? '\n' : '\n\n');
+        if (sep) appendText(sep);
+        _pendingMessageBreak = false;
+      }
       appendText(event.delta.text);
     }
   }
 
   if (event.type === 'message_stop') {
-    // Don't clear status — message_stop is not turn-end (more tools may follow)
-    finalizeBubble();
+    // Intentionally NO finalizeBubble() — message_stop is not turn-end. The
+    // SDK emits one per assistant message, but a single user turn can contain
+    // many messages separated by tool calls. We keep the bubble open until
+    // `result` (true turn end) so the whole turn lands in one bubble. See
+    // REGRESSION GUARD at top of file. Status label is managed elsewhere.
   }
 }
 
