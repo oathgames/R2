@@ -6985,17 +6985,24 @@ async function loadArchive() {
       // no renderable creative just shows another broken-image glyph, which
       // was the regression the user reported. Flag the card as "static" and
       // use it to gate both the click handler and the pointer cursor.
+      //
+      // REGRESSION GUARD (2026-04-20, archive-thumb-fix incident):
+      // Do NOT gate the swap on naturalWidth — an earlier guard swapped any
+      // image < 80px to the sparkle placeholder to hide Meta's generic DPA
+      // silhouette, but Meta's `thumbnail_url` for LEGITIMATE image/video
+      // creatives is also 64x64, so every externally-run ad in the Archive
+      // rendered as a sparkle even though creativeUrl was populated. CSS
+      // (`object-fit: cover`, `aspect-ratio: 1`) upscales small thumbnails
+      // cleanly; DPA silhouettes upscale too but that's a far smaller UX hit
+      // than hiding every real creative. Keep ONLY the error handler — it's
+      // the reliable signal for expired/404 CDN URLs.
       let isStaticCard = !ad.creativePath && !ad.creativeUrl;
       const thumbImg = card.querySelector('img.archive-card-thumb');
       if (thumbImg) {
-        const swap = () => {
+        thumbImg.addEventListener('error', () => {
           thumbImg.outerHTML = placeholderHTML;
           isStaticCard = true;
           card.classList.add('archive-card-static');
-        };
-        thumbImg.addEventListener('error', swap, { once: true });
-        thumbImg.addEventListener('load', () => {
-          if (thumbImg.naturalWidth > 0 && thumbImg.naturalWidth < 80) swap();
         }, { once: true });
       }
       if (isStaticCard) card.classList.add('archive-card-static');
