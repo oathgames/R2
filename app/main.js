@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, protocol, nativeTheme, Menu, Tray, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, nativeTheme, Menu, Tray, shell, safeStorage, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -1272,6 +1272,10 @@ async function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, 'index.html'));
+  // §2.7: flush any merlin:// deep link that arrived before the window loaded.
+  win.webContents.on('did-finish-load', () => {
+    flushPendingDeepLink();
+  });
 
   // Open external links in OS default browser (opens Discord app if installed)
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -3880,6 +3884,77 @@ async function transcribeAudioImpl(audioBytes) {
 }
 
 ipcMain.handle('transcribe-audio', async (_, audioBytes) => transcribeAudioImpl(audioBytes));
+
+// §2.6: OS-level microphone permission status + request.
+//
+// Why this exists even though setPermissionCheckHandler already allows `microphone`:
+//   Electron's permission handlers govern CHROMIUM's internal gate. On macOS
+//   the OS also maintains its own TCC database (System Settings > Privacy &
+//   Security > Microphone). If the user denied it there — or never saw the
+//   prompt because a prior launch crashed before the first getUserMedia —
+//   getUserMedia throws NotAllowedError with no distinguishable error code,
+//   leaving the renderer unable to tell "user said no in the system prompt"
+//   apart from "Chromium denied it" or "mic hardware missing."
+//
+// These IPCs let the renderer:
+//   (a) pre-check the TCC state before showing the record button, so we can
+//       render a "Enable mic in System Settings" card up-front instead of a
+//       failed record attempt.
+//   (b) trigger the native TCC prompt exactly once on first-use, so users
+//       who never saw the initial dialog get a fresh chance to grant.
+//
+// Windows / Linux: Electron reports 'granted' unconditionally (the OS has no
+// per-app mic ACL on Win10 outside Store apps, and on Linux PipeWire/PulseAudio
+// aren't gated by the app layer). These handlers simply return success on
+// those platforms so the renderer flow is uniform.
+ipcMain.handle('mic-permission-status', async () => {
+  try {
+    if (process.platform !== 'darwin') return { status: 'granted', platform: process.platform };
+    if (!systemPreferences || typeof systemPreferences.getMediaAccessStatus !== 'function') {
+      return { status: 'unknown', platform: 'darwin', reason: 'api-missing' };
+    }
+    const status = systemPreferences.getMediaAccessStatus('microphone');
+    // Possible values: 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown'
+    return { status: status || 'unknown', platform: 'darwin' };
+  } catch (e) {
+    return { status: 'unknown', platform: process.platform, error: e && e.message };
+  }
+});
+
+ipcMain.handle('mic-permission-request', async () => {
+  try {
+    if (process.platform !== 'darwin') return { granted: true, platform: process.platform };
+    if (!systemPreferences || typeof systemPreferences.askForMediaAccess !== 'function') {
+      return { granted: false, platform: 'darwin', reason: 'api-missing' };
+    }
+    // Returns a Promise<boolean>. If the status was 'denied' or 'restricted'
+    // the prompt does NOT re-appear — the OS silently returns false and the
+    // user must toggle it in System Settings. The renderer should surface a
+    // "Open System Settings > Privacy > Microphone" link on false.
+    const granted = await systemPreferences.askForMediaAccess('microphone');
+    return { granted: !!granted, platform: 'darwin' };
+  } catch (e) {
+    return { granted: false, platform: process.platform, error: e && e.message };
+  }
+});
+
+// Open Mac's TCC settings pane directly. Handy after `mic-permission-request`
+// returns false — lets the user flip the toggle without hunting through menus.
+ipcMain.handle('mic-permission-open-settings', async () => {
+  try {
+    if (process.platform === 'darwin') {
+      await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone');
+      return { ok: true };
+    }
+    if (process.platform === 'win32') {
+      await shell.openExternal('ms-settings:privacy-microphone');
+      return { ok: true };
+    }
+    return { ok: false, reason: 'unsupported-platform' };
+  } catch (e) {
+    return { ok: false, error: e && e.message };
+  }
+});
 
 // Voice tools (ffmpeg, whisper-cli, ggml-small.en-q5_1.bin) are bundled into the
 // Electron installer at build time — see "Bundle voice tools" in
@@ -7928,16 +8003,89 @@ async function installUpdateFromLatestRelease() {
         child.unref();
       };
     } else if (process.platform === 'darwin') {
-      const a = data.assets.find(x => /\.dmg$/i.test(x.name)) || data.assets.find(x => /-mac.*\.zip$/i.test(x.name));
-      if (!a) throw new Error('No Mac installer in release');
-      assetName = a.name;
+      // Arch-aware asset pick (§2.8): arm64 Macs must not get x64 DMGs.
+      assetName = pickMacInstallerAssetName(data.assets);
+      if (!assetName) throw new Error(`No Mac installer in release for ${process.arch}`);
       runner = (filePath) => {
-        const { spawn } = require('child_process');
-        // Show guidance before opening DMG — non-technical users need instructions
+        // §2.5: hdiutil attach + ditto (in-place replace) — no user drag required.
+        // Prior version: `spawn('open', [dmg])` displayed Finder window, relied on
+        // user to drag icon to Applications. Non-technical users left the window
+        // open and never completed the update, running stale versions for weeks.
+        //
+        // New flow:
+        //   1. hdiutil attach -nobrowse -readonly -mountpoint <tmp> <dmg>
+        //   2. ditto <mount>/Merlin.app /Applications/Merlin.app  (or wherever the
+        //      current bundle lives — we resolve it from app.getPath('exe')).
+        //   3. hdiutil detach -force <mount>
+        //   4. spawn `open -n /Applications/Merlin.app` to relaunch, then exit.
+        //
+        // Errors fall back to the legacy `open <dmg>` behaviour so users can
+        // complete the drag manually rather than get stuck.
+        const { spawnSync, spawn } = require('child_process');
         if (win && !win.isDestroyed()) {
-          win.webContents.send('update-progress', 'Opening installer — drag Merlin to your Applications folder to complete the update.');
+          win.webContents.send('update-progress', 'Installing update in place...');
         }
-        spawn('open', [filePath], { detached: true, stdio: 'ignore' }).unref();
+        // Mount point under tmpdir — unique per run to avoid collisions.
+        const mountDir = path.join(os.tmpdir(), `merlin-dmg-${Date.now()}`);
+        let mountedAt = null;
+        let targetAppPath = null;
+        try {
+          fs.mkdirSync(mountDir, { recursive: true });
+          // Attach DMG. stdout contains mount point on last line; we also passed
+          // -mountpoint explicitly so we already know it.
+          const attach = spawnSync('hdiutil', [
+            'attach', filePath,
+            '-nobrowse', '-readonly',
+            '-mountpoint', mountDir,
+            '-noautoopen',
+          ], { encoding: 'utf8', timeout: 60000 });
+          if (attach.status !== 0) {
+            throw new Error(`hdiutil attach failed (${attach.status}): ${attach.stderr || attach.stdout || ''}`);
+          }
+          mountedAt = mountDir;
+          // Locate Merlin.app inside the mount. DMGs typically have exactly one
+          // .app at the root, but guard against multiple by picking the one
+          // whose name matches the current app.
+          const mountEntries = fs.readdirSync(mountDir, { withFileTypes: true });
+          const appDir = mountEntries.find((d) => d.isDirectory() && /\.app$/i.test(d.name) && /merlin/i.test(d.name));
+          if (!appDir) throw new Error('Merlin.app not found inside DMG');
+          const srcAppPath = path.join(mountDir, appDir.name);
+          // Resolve the CURRENT app bundle to overwrite. app.getPath('exe') is
+          //   /Applications/Merlin.app/Contents/MacOS/Merlin
+          // so we walk up three levels.
+          targetAppPath = path.resolve(path.dirname(app.getPath('exe')), '..', '..');
+          if (!targetAppPath.endsWith('.app')) {
+            throw new Error(`Could not resolve current .app bundle from ${app.getPath('exe')}`);
+          }
+          // `ditto` preserves xattrs, resource forks, and codesigning metadata.
+          // `cp -R` loses some of this on older macOS versions. --rsrc is default.
+          const ditto = spawnSync('ditto', [srcAppPath, targetAppPath], {
+            encoding: 'utf8',
+            timeout: 120000,
+          });
+          if (ditto.status !== 0) {
+            throw new Error(`ditto failed (${ditto.status}): ${ditto.stderr || ''}`);
+          }
+          // Detach before relaunch (force in case Finder is holding a handle).
+          try { spawnSync('hdiutil', ['detach', '-force', mountedAt], { timeout: 30000 }); } catch {}
+          mountedAt = null;
+          // Clear any quarantine attribute on the freshly copied bundle.
+          try { spawnSync('xattr', ['-dr', 'com.apple.quarantine', targetAppPath], { timeout: 15000 }); } catch {}
+          // Relaunch the updated bundle detached from this process.
+          spawn('open', ['-n', targetAppPath], { detached: true, stdio: 'ignore' }).unref();
+          return; // installation succeeded — outer handler will quit the app
+        } catch (err) {
+          console.error('[update][mac]', err && err.message);
+          // Cleanup mount if we got that far.
+          if (mountedAt) {
+            try { spawnSync('hdiutil', ['detach', '-force', mountedAt], { timeout: 30000 }); } catch {}
+          }
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('update-progress', 'Automatic install failed — opening the installer. Drag Merlin to Applications to finish.');
+          }
+          // Fallback to the old behaviour so the user isn't stranded.
+          spawn('open', [filePath], { detached: true, stdio: 'ignore' }).unref();
+        }
       };
     } else {
       throw new Error('Auto-install not supported on this platform');
@@ -8202,7 +8350,14 @@ function compareVersions(a, b) {
 // version check — especially during forced-update recovery after a failed
 // install where config may be missing or corrupted.
 async function getBinaryVersion() {
-  const binaryPath = getBinaryPath();
+  return getBinaryVersionAt(getBinaryPath());
+}
+
+// §2.1 — Probe a specific binary path for its reported version. Used by
+// ensureBinaryMinVersion to prefer the bundled install-local copy over a
+// stale workspace copy before deciding to download.
+async function getBinaryVersionAt(binaryPath) {
+  if (!binaryPath) return null;
   try { fs.accessSync(binaryPath); } catch { return null; }
   const { execFile } = require('child_process');
   return new Promise((resolve) => {
@@ -8297,6 +8452,34 @@ async function ensureBinaryMinVersion(onProgress = null) {
   if (current && compareVersions(current, MIN_BINARY_VERSION) >= 0) {
     _binaryTooOld = false;
     return { ok: true, version: current };
+  }
+
+  // §2.1 — Prefer the bundled install-local binary before falling back to a
+  // network download. Historical Mac pain: installer shipped a fresh Merlin
+  // binary under .app/Contents/Resources/.claude/tools/, but because the
+  // previous run had left a stale copy at <ContentDir>/.claude/tools/,
+  // `getBinaryPath()` would prefer the workspace copy (incorrect lookup
+  // order in older builds), return an outdated version, and trigger a full
+  // engine download every launch — ~40s of progress bar for no reason.
+  //
+  // `getBinaryPath()` has since been fixed to prefer install-local. This
+  // block is a belt-and-braces second check: explicitly ask for the
+  // install-local version by path. If it satisfies MIN, return OK without
+  // touching the network or workspace. A mismatch here means the bundled
+  // binary genuinely is too old and a download is warranted.
+  try {
+    const binaryName = process.platform === 'win32' ? 'Merlin.exe' : 'Merlin';
+    const installLocalPath = path.join(appInstall, '.claude', 'tools', binaryName);
+    if (fs.existsSync(installLocalPath)) {
+      const installLocalVersion = await getBinaryVersionAt(installLocalPath);
+      if (installLocalVersion && compareVersions(installLocalVersion, MIN_BINARY_VERSION) >= 0) {
+        _binaryTooOld = false;
+        console.log(`[engine] using bundled install-local binary v${installLocalVersion} (workspace copy was stale)`);
+        return { ok: true, version: installLocalVersion, source: 'install-local' };
+      }
+    }
+  } catch (e) {
+    console.warn('[engine] install-local probe failed:', e.message);
   }
 
   console.log(`[engine] current=${current || 'unknown'} requires=>=${MIN_BINARY_VERSION} — updating`);
@@ -8413,15 +8596,53 @@ async function ensureBinary(opts = {}) {
   return true;
 }
 
-// Returns true if the release contains an installer asset for THIS platform.
-// Used to skip update toasts for releases that didn't ship a Mac DMG (e.g.
-// when CI minutes were exhausted and the build was done locally on Windows).
+// Returns true if the release contains an installer asset for THIS platform
+// AND architecture. Used to skip update toasts for releases that didn't ship
+// a Mac DMG for the user's arch (arm64 user on an Intel-only release, or
+// vice versa) — a mismatch would download an installer that refuses to open.
+//
+// Mac asset naming (per release.yml): Merlin-mac-arm64.dmg, Merlin-mac-x64.dmg,
+// plus the legacy universal Merlin-mac.dmg (pre-arch-split releases). If a
+// universal DMG is present we treat it as a match for either arch.
 function releaseHasInstallerForPlatform(assets) {
   if (!Array.isArray(assets)) return false;
   if (!assets.some(a => a && a.name === 'checksums.txt')) return false;
   if (process.platform === 'win32') return assets.some(a => /^Merlin\.Setup\..*\.exe$/i.test(a.name));
-  if (process.platform === 'darwin') return assets.some(a => /\.dmg$/i.test(a.name) || /-mac.*\.zip$/i.test(a.name));
+  if (process.platform === 'darwin') {
+    const names = assets.map((a) => (a && a.name) || '');
+    const hasArchDmg = (arch) => {
+      const tag = arch === 'arm64' ? '(arm64|aarch64|apple)' : '(x64|amd64|intel)';
+      const re = new RegExp(`-mac-${tag}.*\\.dmg$`, 'i');
+      return names.some((n) => re.test(n));
+    };
+    // Universal DMG (no arch suffix): matches any arch.
+    const hasUniversalDmg = names.some((n) => /^Merlin[^-]*-mac\.dmg$/i.test(n) || /^Merlin\.dmg$/i.test(n));
+    // Legacy zip fallback (arch-less).
+    const hasZip = names.some((n) => /-mac.*\.zip$/i.test(n));
+    if (hasArchDmg(process.arch)) return true;
+    if (hasUniversalDmg) return true;
+    if (hasZip) return true;
+    return false;
+  }
   return true;
+}
+
+// Pick the single Mac asset name that matches this platform + arch. Returns
+// null if no suitable asset exists. Caller decides whether to surface the
+// "no installer for your arch" error vs retry later. Preference order:
+// arch-specific DMG > universal DMG > any zip (last-resort).
+function pickMacInstallerAssetName(assets) {
+  if (!Array.isArray(assets)) return null;
+  const names = assets.map((a) => (a && a.name) || '').filter(Boolean);
+  const arch = process.arch;
+  const tag = arch === 'arm64' ? '(arm64|aarch64|apple)' : '(x64|amd64|intel)';
+  const archRe = new RegExp(`-mac-${tag}.*\\.dmg$`, 'i');
+  const archHit = names.find((n) => archRe.test(n));
+  if (archHit) return archHit;
+  const universal = names.find((n) => /^Merlin[^-]*-mac\.dmg$/i.test(n) || /^Merlin\.dmg$/i.test(n));
+  if (universal) return universal;
+  const zip = names.find((n) => /-mac.*\.zip$/i.test(n));
+  return zip || null;
 }
 
 async function checkForUpdates() {
@@ -8814,10 +9035,62 @@ async function downloadAndApplyUpdate() {
 
 // ── App Lifecycle ───────────────────────────────────────────
 
+// Deep-link buffer: merlin:// URLs may arrive before the window is ready
+// (macOS: open-url can fire before app.whenReady; Windows: second-instance
+// may fire while the first instance is still bootstrapping). Buffer them
+// and flush once the window is available.
+let _pendingDeepLink = null;
+function deliverDeepLink(url) {
+  if (!url || typeof url !== 'string' || !/^merlin:\/\//i.test(url)) return;
+  if (win && !win.isDestroyed() && win.webContents && !win.webContents.isLoading()) {
+    try { win.webContents.send('merlin-deep-link', url); } catch {}
+    return;
+  }
+  _pendingDeepLink = url;
+}
+function flushPendingDeepLink() {
+  if (!_pendingDeepLink) return;
+  const url = _pendingDeepLink;
+  _pendingDeepLink = null;
+  deliverDeepLink(url);
+}
+
+// Register Merlin as the default handler for merlin:// URLs. Electron writes
+// the registration to:
+//   Windows: HKCU\Software\Classes\merlin (idempotent; re-registers every launch
+//            so a repair/rebuild picks up new protocol bindings without an
+//            installer run).
+//   macOS:   Info.plist via electron-builder `protocols` block (below in
+//            package.json). setAsDefaultProtocolClient reinforces it at runtime
+//            so dev builds also resolve merlin:// without a full reinstall.
+// Guarded: OS registration only makes sense when the binary is stable (packaged
+// builds or when invoked with an explicit exe path). In dev the call is a no-op
+// because electron.exe shouldn't be the OS default handler.
+if (app.isPackaged) {
+  try { app.setAsDefaultProtocolClient('merlin'); } catch {}
+} else if (process.platform === 'win32' && process.argv.length >= 2) {
+  // Dev on Windows: register against the current launcher so local testing works.
+  try { app.setAsDefaultProtocolClient('merlin', process.execPath, [path.resolve(process.argv[1])]); } catch {}
+}
+
 // Single instance lock — prevent multiple windows
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) { app.exit(0); } // exit(0) is synchronous — quit() is async and flashes a taskbar icon before closing
-app.on('second-instance', () => {
+
+// macOS delivers merlin://… via open-url. This fires BEFORE whenReady on cold
+// start when the user clicks a deep-link that launches the app, so we buffer.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  deliverDeepLink(url);
+});
+
+app.on('second-instance', (_event, argv) => {
+  // Windows / Linux deliver merlin://… as the last argv entry when the OS
+  // hands the URL to an already-running instance.
+  try {
+    const urlArg = Array.isArray(argv) ? argv.find((a) => typeof a === 'string' && /^merlin:\/\//i.test(a)) : null;
+    if (urlArg) deliverDeepLink(urlArg);
+  } catch {}
   if (win && !win.isDestroyed()) {
     win.show();
     if (win.isMinimized()) win.restore();

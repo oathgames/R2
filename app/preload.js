@@ -329,6 +329,14 @@ contextBridge.exposeInMainWorld('merlin', {
     const h = (_, err) => cb(err); ipcRenderer.on('update-error', h);
     return () => ipcRenderer.removeListener('update-error', h);
   },
+  // §2.7: merlin:// URLs routed in from open-url (Mac) or second-instance
+  // (Win/Linux). URL schema TBD; payload is the raw URL string — renderer
+  // parses it. Returns an unsubscribe handle.
+  onMerlinDeepLink: (cb) => {
+    const h = (_, url) => { try { cb(url); } catch {} };
+    ipcRenderer.on('merlin-deep-link', h);
+    return () => ipcRenderer.removeListener('merlin-deep-link', h);
+  },
   onTrialExpired: (cb) => {
     const h = () => cb(); ipcRenderer.on('trial-expired', h);
     return () => ipcRenderer.removeListener('trial-expired', h);
@@ -377,6 +385,17 @@ contextBridge.exposeInMainWorld('merlin', {
     if (bytes.length > 50 * 1024 * 1024) throw new Error('audio too large');
     return ipcRenderer.invoke('transcribe-audio', bytes);
   },
+
+  // §2.6: OS-level mic permission. These wrap the Electron `systemPreferences`
+  // TCC helpers on macOS and are no-ops elsewhere (return granted=true).
+  // Use micPermissionStatus() before attempting getUserMedia on first launch
+  // so we can render a clean "Enable mic" card instead of a silent rejection.
+  // micPermissionRequest() shows the native TCC prompt exactly once; subsequent
+  // calls when the user previously denied return false silently — wire
+  // micPermissionOpenSettings() to the "Open System Settings" button.
+  micPermissionStatus: () => ipcRenderer.invoke('mic-permission-status'),
+  micPermissionRequest: () => ipcRenderer.invoke('mic-permission-request'),
+  micPermissionOpenSettings: () => ipcRenderer.invoke('mic-permission-open-settings'),
 
   // Voice output: text → Kokoro TTS → WAV bytes for playback in renderer.
   // Returns { success: true, audio: Uint8Array } | { aborted: true } | { error }.
