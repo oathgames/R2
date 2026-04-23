@@ -4457,11 +4457,19 @@ ipcMain.handle('copy-image', (_, filePath) => {
   try {
     if (!filePath || typeof filePath !== 'string') return { success: false };
     const { nativeImage, clipboard } = require('electron');
+    // REGRESSION GUARD (2026-04-23, codex audit session/security-quick-wins):
+    // Prefix-only startsWith bypass — `path.resolve(appRoot) + path.sep`
+    // plus exact-root check matches the correct pattern used elsewhere
+    // in this file (merlin:// handler at ~1005, media handler at ~4437).
+    // Without the path.sep suffix, a sibling directory that starts with
+    // the same prefix (e.g. appRoot='/merlin', attacker='/merlin-evil')
+    // would pass. Do not revert.
+    const resolvedAppRoot = path.resolve(appRoot);
     const fullPath = path.resolve(appRoot, filePath);
-    if (!fullPath.startsWith(path.resolve(appRoot))) return { success: false };
+    if (!fullPath.startsWith(resolvedAppRoot + path.sep) && fullPath !== resolvedAppRoot) return { success: false };
     try {
       const realPath = fs.realpathSync(fullPath);
-      if (!realPath.startsWith(path.resolve(appRoot))) return { success: false };
+      if (!realPath.startsWith(resolvedAppRoot + path.sep) && realPath !== resolvedAppRoot) return { success: false };
     } catch { return { success: false }; }
     const img = nativeImage.createFromPath(fullPath);
     if (img.isEmpty()) return { success: false };
@@ -4516,11 +4524,16 @@ ipcMain.handle('save-image-data-url', async (_, dataUrl, filename) => {
 
 ipcMain.handle('open-folder', (_, folderPath) => {
   if (!folderPath || typeof folderPath !== 'string') return;
+  // REGRESSION GUARD (2026-04-23, codex audit session/security-quick-wins):
+  // See copy-image handler above — same prefix-bypass class. Adds
+  // path.sep suffix to the containment check so `/app-evil` can't
+  // pass the check for `/app`.
+  const resolvedAppRoot = path.resolve(appRoot);
   const fullPath = path.resolve(appRoot, folderPath);
-  if (!fullPath.startsWith(path.resolve(appRoot))) return { success: false };
+  if (!fullPath.startsWith(resolvedAppRoot + path.sep) && fullPath !== resolvedAppRoot) return { success: false };
   try {
     const realPath = fs.realpathSync(fullPath);
-    if (!realPath.startsWith(path.resolve(appRoot))) return { success: false };
+    if (!realPath.startsWith(resolvedAppRoot + path.sep) && realPath !== resolvedAppRoot) return { success: false };
   } catch { return { success: false }; }
   shell.openPath(fullPath);
   return { success: true };
@@ -6732,17 +6745,28 @@ ipcMain.handle('rotate-relay-pairing', async () => {
   return { qrDataUri, pwaUrl: pair.pairUrl, sessionId: pair.sessionId, expiresInSec: pair.expiresInSec };
 });
 
+// REGRESSION GUARD (2026-04-23, codex audit session/security-quick-wins):
+// save-pasted-media writes arbitrary data: URLs decoded as binary to
+// results/. Prior to this guard the handler accepted ANY `data:*;base64,`
+// MIME and relied only on filename sanitization — meaning a data:text/html
+// or data:application/x-msdownload paste could land a .png-named file in
+// results/ that the renderer would then happily serve via the merlin://
+// protocol at its actual MIME. Validation logic lives in ./pasted-media.js
+// so it can be unit-tested without booting Electron. DO NOT inline the
+// check back here — breaking that seam breaks the test coverage.
+const { validatePastedMedia } = require('./pasted-media');
 ipcMain.handle('save-pasted-media', (_, dataUrl, filename) => {
   try {
-    // Sanitize filename — strip path traversal, keep only the basename
-    const safeName = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
-    if (!safeName || safeName.startsWith('.')) return null;
+    const v = validatePastedMedia(dataUrl, filename);
+    if (!v.ok) {
+      console.error('[media-save] rejected:', v.reason);
+      return null;
+    }
     const resultsDir = path.join(appRoot, 'results');
     if (!fs.existsSync(resultsDir)) fs.mkdirSync(resultsDir, { recursive: true });
-    const filePath = path.join(resultsDir, safeName);
-    const base64 = dataUrl.replace(/^data:[^;]+;base64,/, '');
-    fs.writeFileSync(filePath, Buffer.from(base64, 'base64'));
-    return `results/${safeName}`;
+    const filePath = path.join(resultsDir, v.safeName);
+    fs.writeFileSync(filePath, v.buf);
+    return `results/${v.safeName}`;
   } catch (err) {
     console.error('[media-save]', err.message);
     return null;
