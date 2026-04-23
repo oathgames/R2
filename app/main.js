@@ -4861,6 +4861,28 @@ const briefingLastNotified = new Map(); // path -> last date string already noti
 const briefingDebounce = new Map();     // path -> NodeJS.Timeout
 let briefingWatcher = null;
 
+// §5.4 — Drop entries from briefingLastNotified whose underlying file no
+// longer exists (brand deleted / manual cleanup) or whose tracked date is
+// older than 14 days. Without this the map grows one entry per brand per
+// briefing file for the lifetime of the process; long-running installs
+// (spells running daily for months) accumulate stale keys. Runs on every
+// watch tick for zero-cost deletion pressure.
+function pruneBriefingLastNotified() {
+  const cutoff = Date.now() - (14 * 24 * 60 * 60 * 1000);
+  for (const [full, dateKey] of briefingLastNotified) {
+    let drop = false;
+    if (!fs.existsSync(full)) {
+      drop = true;
+    } else {
+      // dateKey is a YYYY-MM-DD-ish string written by the briefing
+      // producer. Parse defensively — unparseable strings keep the entry.
+      const ts = Date.parse(dateKey);
+      if (Number.isFinite(ts) && ts < cutoff) drop = true;
+    }
+    if (drop) briefingLastNotified.delete(full);
+  }
+}
+
 function startBriefingNotifier() {
   try { fs.mkdirSync(appRoot, { recursive: true }); } catch {}
   // Seed state from briefings already on disk so the first fs.watch event
@@ -4876,6 +4898,9 @@ function startBriefingNotifier() {
       } catch {}
     }
   } catch {}
+  // Prune immediately after seeding so cold-start doesn't carry stale
+  // entries forward from a previous session.
+  pruneBriefingLastNotified();
 
   try {
     briefingWatcher = fs.watch(appRoot, { persistent: false }, (_event, filename) => {
@@ -4888,6 +4913,10 @@ function startBriefingNotifier() {
       briefingDebounce.set(full, setTimeout(() => {
         briefingDebounce.delete(full);
         maybeNotifyBriefing(full);
+        // §5.4 — tack pruning onto the post-notify tail so memory stays
+        // bounded without a separate timer. Cheap scan (Map is tiny —
+        // one entry per brand).
+        pruneBriefingLastNotified();
       }, 500));
     });
   } catch (err) {
@@ -5078,15 +5107,43 @@ const perfCache = {};
 // mtime resolution. This cache is shared across computePerfSummary (perf bar)
 // and get-agency-report (reports overlay), so a single brand's dashboard is
 // parsed at most once across the two call paths.
+//
+// §5.1 — LRU-bounded at DASHBOARD_CACHE_MAX entries. Agencies can have
+// 50+ brands and each brand accumulates one dashboard file per polled
+// period (1d/7d/30d × multiple poll windows). Unbounded, the cache
+// grows to cover every brand × every period × every result file ever
+// opened. Dashboard JSONs are ~20-50KB each parsed; 64 entries × 50KB
+// = ~3MB ceiling.
+//
+// Recency is tracked by Map insertion order (JS Map preserves it).
+// On hit we re-insert to move the key to the tail; on overflow we
+// evict the head (oldest).
+const DASHBOARD_CACHE_MAX = 64;
 const dashboardFileCache = new Map();
+function _touchDashboardCache(key, value) {
+  // Re-insert so the key moves to the tail (most-recently-used end).
+  if (dashboardFileCache.has(key)) dashboardFileCache.delete(key);
+  dashboardFileCache.set(key, value);
+  // Evict the oldest entry when over the bound. Map iteration order is
+  // insertion order; .keys().next().value is the LRU entry.
+  while (dashboardFileCache.size > DASHBOARD_CACHE_MAX) {
+    const oldest = dashboardFileCache.keys().next().value;
+    if (oldest === undefined) break;
+    dashboardFileCache.delete(oldest);
+  }
+}
 async function readDashboardJson(fullPath) {
   let st;
   try { st = await fs.promises.stat(fullPath); } catch { return null; }
   const hit = dashboardFileCache.get(fullPath);
-  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.data;
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+    // LRU: bump to tail on hit so hot paths stay resident.
+    _touchDashboardCache(fullPath, hit);
+    return hit.data;
+  }
   let data = null;
   try { data = JSON.parse(await fs.promises.readFile(fullPath, 'utf8')); } catch {}
-  dashboardFileCache.set(fullPath, { mtimeMs: st.mtimeMs, size: st.size, data });
+  _touchDashboardCache(fullPath, { mtimeMs: st.mtimeMs, size: st.size, data });
   return data;
 }
 
@@ -5105,11 +5162,33 @@ async function computePerfSummary(days, brandName) {
   // exact bug this guard exists to prevent.
   const resultsDir = brandName ? path.join(appRoot, 'results', brandName) : path.join(appRoot, 'results');
   const allFiles = [];
+  // §5.7 — filter by mtime before we even stat-parse each file. On
+  // long-lived installs the results/<brand>/ directory accumulates one
+  // dashboard_YYYYMMDD_HHMMSS.json per poll (sometimes 4-8/day across
+  // periods). A 1-year-old install for a steady advertiser could have
+  // 1000+ files. We only ever compare `latest` vs `prev` for the trend
+  // arrow, so anything older than the lookback window + buffer is
+  // wasted stat+parse work AND a memory tax on dashboardFileCache.
+  //
+  // 60d is the floor: the longest-window perf bar button is 30d, and
+  // the trend comparator picks the *previous file of the same period*
+  // — so a 30d-period file 45d old is still a legitimate 'prev'.
+  // Double the window as a safety margin for retrospective reports.
+  const mtimeCutoffMs = Date.now() - (60 * 24 * 60 * 60 * 1000);
   try {
-    for (const f of await fs.promises.readdir(resultsDir)) {
-      if (f.startsWith('dashboard_') && f.endsWith('.json')) {
-        allFiles.push({ name: f, path: path.join(resultsDir, f) });
-      }
+    const entries = await fs.promises.readdir(resultsDir, { withFileTypes: true });
+    const statJobs = entries
+      .filter((e) => e.isFile && e.isFile() && e.name.startsWith('dashboard_') && e.name.endsWith('.json'))
+      .map(async (e) => {
+        const full = path.join(resultsDir, e.name);
+        try {
+          const st = await fs.promises.stat(full);
+          if (st.mtimeMs < mtimeCutoffMs) return null;
+          return { name: e.name, path: full };
+        } catch { return null; }
+      });
+    for (const entry of await Promise.all(statJobs)) {
+      if (entry) allFiles.push(entry);
     }
   } catch {}
   if (allFiles.length === 0) return null;
@@ -5756,37 +5835,107 @@ const BRAND_KEYS = [
 // This is a local desktop app on the user's device — encryption added complexity
 // that broke the binary/IPC boundary without meaningful security benefit.
 
+// §5.8 — Hot-path cache. readConfig() is called on EVERY inbound stream
+// event (voice tag resolution, spell lookup, brand resolution), on every
+// MCP tool call, and from a half-dozen IPC handlers. Each call was doing
+// fs.readFileSync + JSON.parse, which on a 20KB config is ~0.5-1ms and
+// triggers a full disk read on SMB/USB filesystems.
+//
+// Cache is keyed by file mtime + size. Miss → re-parse. Hit → return the
+// memoised object. size is a second signal because SMB / USB have coarse
+// mtime (1s resolution on FAT32, 2s on some SMB builds).
+//
+// We deep-freeze the cached object so callers can't accidentally mutate
+// the shared reference — every mutation site uses writeConfig() which
+// clears the cache explicitly.
+let _readConfigCache = null; // { mtimeMs, size, cfg }
+function _invalidateReadConfigCache() { _readConfigCache = null; }
+
+// §5.8 — Sweep orphaned .merlin-config-tmp-*.json files older than 24h
+// from the tools dir. These are produced by writeConfig's atomic
+// tmp+rename — an interrupted write (power loss, crash between write and
+// rename) leaves one behind. Each one is a full config copy (plaintext
+// tokens + brand data) so unbounded growth is both a disk + security
+// hygiene issue. 24h is long enough that any legitimate in-flight write
+// has long since completed or been retried.
+let _readConfigTmpSweepLastRun = 0;
+function _maybeSweepConfigTmp(toolsDir) {
+  const now = Date.now();
+  // Only scan once per 15 minutes (the sweep does a readdir + stat-each
+  // which we don't want to amortize onto every readConfig call).
+  if (now - _readConfigTmpSweepLastRun < 15 * 60 * 1000) return;
+  _readConfigTmpSweepLastRun = now;
+  const cutoffMs = now - (24 * 60 * 60 * 1000);
+  try {
+    for (const name of fs.readdirSync(toolsDir)) {
+      // Match both shapes used in the wild:
+      //   .merlin-config-tmp-<rand>.json  (newer atomic-write sibling)
+      //   merlin-config.json.tmp           (legacy in-place tmp)
+      if (!/^\.merlin-config-tmp-.*\.json$/.test(name) && name !== 'merlin-config.json.tmp') continue;
+      const full = path.join(toolsDir, name);
+      try {
+        const st = fs.statSync(full);
+        if (st.mtimeMs < cutoffMs) fs.unlinkSync(full);
+      } catch {}
+    }
+  } catch {}
+}
+
 function readConfig() {
   const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
-  let cfg = {};
-  try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
 
-  // One-time migration: merge encrypted .merlin-tokens back into plaintext config
-  const tokensFilePath = path.join(appRoot, '.claude', 'tools', '.merlin-tokens');
+  // §5.8 — mtime cache. Check stat first; only re-parse on change.
   try {
-    const buf = fs.readFileSync(tokensFilePath);
-    let tokens;
-    if (canUseSafeStorage()) {
-      try { tokens = JSON.parse(safeStorage.decryptString(buf)); } catch {
+    const st = fs.statSync(configPath);
+    if (_readConfigCache
+        && _readConfigCache.mtimeMs === st.mtimeMs
+        && _readConfigCache.size === st.size) {
+      return _readConfigCache.cfg;
+    }
+    // Miss — read and cache.
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
+    _readConfigCache = { mtimeMs: st.mtimeMs, size: st.size, cfg };
+
+    // Opportunistic tmp-file sweep. Runs at most once per 15 min
+    // regardless of how often readConfig is called.
+    _maybeSweepConfigTmp(path.dirname(configPath));
+
+    // One-time migration: merge encrypted .merlin-tokens back into plaintext config
+    const tokensFilePath = path.join(appRoot, '.claude', 'tools', '.merlin-tokens');
+    try {
+      const buf = fs.readFileSync(tokensFilePath);
+      let tokens;
+      if (canUseSafeStorage()) {
+        try { tokens = JSON.parse(safeStorage.decryptString(buf)); } catch {
+          tokens = JSON.parse(buf.toString('utf8'));
+        }
+      } else if (process.platform === 'darwin' && looksEncrypted(buf) && safeStorage.isEncryptionAvailable()) {
+        // macOS legacy migration — one keychain prompt then never again
+        try { tokens = JSON.parse(safeStorage.decryptString(buf)); } catch {
+          try { fs.renameSync(tokensFilePath, tokensFilePath + '.legacy'); } catch {}
+          throw new Error('legacy decrypt denied');
+        }
+      } else {
         tokens = JSON.parse(buf.toString('utf8'));
       }
-    } else if (process.platform === 'darwin' && looksEncrypted(buf) && safeStorage.isEncryptionAvailable()) {
-      // macOS legacy migration — one keychain prompt then never again
-      try { tokens = JSON.parse(safeStorage.decryptString(buf)); } catch {
-        try { fs.renameSync(tokensFilePath, tokensFilePath + '.legacy'); } catch {}
-        throw new Error('legacy decrypt denied');
-      }
-    } else {
-      tokens = JSON.parse(buf.toString('utf8'));
-    }
-    Object.assign(cfg, tokens);
-    // Write merged config and delete the tokens file
-    writeConfig(cfg);
-    try { fs.unlinkSync(tokensFilePath); } catch {}
-    console.log('[config] migrated .merlin-tokens into plaintext config');
-  } catch {} // no tokens file — fine
+      Object.assign(cfg, tokens);
+      // Write merged config and delete the tokens file. writeConfig
+      // invalidates the cache so the next call re-stats the freshly
+      // merged file.
+      writeConfig(cfg);
+      try { fs.unlinkSync(tokensFilePath); } catch {}
+      console.log('[config] migrated .merlin-tokens into plaintext config');
+    } catch {} // no tokens file — fine
 
-  return cfg;
+    return cfg;
+  } catch {
+    // stat failed — config absent or unreadable. Return the previous
+    // cache (if any) to keep the caller alive, else {}. Do NOT cache
+    // the empty object (we'd poison the cache and never reload).
+    if (_readConfigCache && _readConfigCache.cfg) return _readConfigCache.cfg;
+    return {};
+  }
 }
 
 let _configLock = false;
@@ -5800,6 +5949,10 @@ function writeConfig(cfg) {
     const tmpPath = configPath + '.tmp';
     fs.writeFileSync(tmpPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
     fs.renameSync(tmpPath, configPath);
+    // §5.8 — invalidate readConfig's mtime cache so the next reader
+    // re-stats. Safer than trying to pre-populate (would miss file-
+    // level mtime drift on some filesystems).
+    _invalidateReadConfigCache();
   } catch (err) { console.error('[config] write failed:', err.message); }
   finally { _configLock = false; }
 }
