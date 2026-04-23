@@ -8,7 +8,11 @@
 // platform-namespacing, and defensive input handling.
 
 const assert = require('assert');
-const { groupLiveAdsByCampaign, NO_CAMPAIGN_KEY } = require('./archive-campaign-group');
+const {
+  groupLiveAdsByCampaign,
+  makeAdCampaignKey,
+  NO_CAMPAIGN_KEY,
+} = require('./archive-campaign-group');
 
 let passed = 0;
 let failed = 0;
@@ -211,6 +215,76 @@ test('empty ads array produces empty result, showHeaders=false', () => {
 test('exports NO_CAMPAIGN_KEY as a stable string constant', () => {
   assert.strictEqual(typeof NO_CAMPAIGN_KEY, 'string');
   assert.ok(NO_CAMPAIGN_KEY.length > 0);
+});
+
+// \u2500\u2500 Drift guard: makeAdCampaignKey must stay in lockstep with
+//               groupLiveAdsByCampaign \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+//
+// renderer.js matches each ad card back to its group header by calling
+// `makeAdCampaignKey(ad)` and looking up the group by that key. If
+// groupLiveAdsByCampaign ever buckets with a different rule than
+// makeAdCampaignKey returns (say, someone adds name normalization to one
+// but not the other), ad cards silently render under the wrong header or
+// orphan into "Uncategorized". These tests pin the two together.
+
+test('makeAdCampaignKey exposed as a function', () => {
+  assert.strictEqual(typeof makeAdCampaignKey, 'function');
+});
+
+test('makeAdCampaignKey returns the same key groupLiveAdsByCampaign uses', () => {
+  // Cross-section of every path: named, whitespace-only (uncategorized),
+  // missing campaignName, missing platform, mixed-case platform, platform-
+  // namespaced collisions. For every ad, the key returned by
+  // makeAdCampaignKey(ad) MUST equal the `.key` of the group it landed in.
+  const ads = [
+    ad({ adId: 'meta-scaling-1', platform: 'meta',   campaignName: 'Scaling',     spend: 80 }),
+    ad({ adId: 'meta-scaling-2', platform: 'Meta',   campaignName: 'Scaling',     spend: 40 }),
+    ad({ adId: 'tiktok-scale',   platform: 'tiktok', campaignName: 'Scaling',     spend: 20 }),
+    ad({ adId: 'meta-retarget',  platform: 'meta',   campaignName: 'Retargeting', spend: 10 }),
+    ad({ adId: 'no-name-1',      platform: 'meta',   campaignName: '' }),
+    ad({ adId: 'no-name-2',      platform: 'meta',   campaignName: '   ' }),
+    ad({ adId: 'no-platform',    platform: '',       campaignName: 'Orphan',      spend: 5 }),
+  ];
+  const { groups } = groupLiveAdsByCampaign(ads);
+
+  // Build ad -> groupKey lookup from the grouper's output
+  const groupKeyByAdId = new Map();
+  for (const g of groups) {
+    for (const a of g.ads) groupKeyByAdId.set(a.adId, g.key);
+  }
+
+  for (const a of ads) {
+    const helperKey = makeAdCampaignKey(a);
+    const grouperKey = groupKeyByAdId.get(a.adId);
+    assert.strictEqual(
+      helperKey, grouperKey,
+      `drift: makeAdCampaignKey=${JSON.stringify(helperKey)} but grouper=${JSON.stringify(grouperKey)} for ad ${a.adId}`
+    );
+  }
+});
+
+test('makeAdCampaignKey returns NO_CAMPAIGN_KEY for whitespace-only names', () => {
+  for (const bad of ['', '   ', '\t\n', null, undefined]) {
+    const key = makeAdCampaignKey({ platform: 'meta', campaignName: bad });
+    assert.strictEqual(key, NO_CAMPAIGN_KEY);
+  }
+});
+
+test('makeAdCampaignKey lowercases platform and preserves campaign case', () => {
+  assert.strictEqual(
+    makeAdCampaignKey({ platform: 'Meta', campaignName: 'Scaling' }),
+    'meta::Scaling',
+  );
+  assert.strictEqual(
+    makeAdCampaignKey({ platform: 'TIKTOK', campaignName: 'Scaling' }),
+    'tiktok::Scaling',
+  );
+});
+
+test('makeAdCampaignKey returns NO_CAMPAIGN_KEY for non-object input', () => {
+  for (const bad of [null, undefined, 'string', 42, true]) {
+    assert.strictEqual(makeAdCampaignKey(bad), NO_CAMPAIGN_KEY);
+  }
 });
 
 // \u2500\u2500 Run \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500

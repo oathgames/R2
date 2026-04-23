@@ -40,6 +40,21 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   const NO_CAMPAIGN_KEY = '__no_campaign__';
 
+  // Single source of truth for the campaign-grouping key. renderer.js calls
+  // this to match each ad card back to its group header; groupLiveAdsByCampaign
+  // calls this when bucketing. Both paths MUST agree or ad cards will render
+  // under the wrong (or no) header. If you tweak the rule (e.g. add a
+  // normalization step), every caller updates in one place — and the
+  // "stability vs. grouper" test in archive-campaign-group.test.js will fail
+  // loudly if a future change forgets to route through here.
+  function makeAdCampaignKey(ad) {
+    if (!ad || typeof ad !== 'object') return NO_CAMPAIGN_KEY;
+    const name = typeof ad.campaignName === 'string' ? ad.campaignName.trim() : '';
+    if (!name) return NO_CAMPAIGN_KEY;
+    const platform = typeof ad.platform === 'string' ? ad.platform : '';
+    return `${platform.toLowerCase()}::${name}`;
+  }
+
   function groupLiveAdsByCampaign(ads) {
     if (!Array.isArray(ads)) {
       return { groups: [], flatAds: [], showHeaders: false };
@@ -48,9 +63,15 @@
     const groupMap = new Map();
     for (const ad of ads) {
       if (!ad || typeof ad !== 'object') continue;
-      const name = typeof ad.campaignName === 'string' ? ad.campaignName.trim() : '';
+      const key = makeAdCampaignKey(ad);
+      // The group's display `name` is the trimmed campaign name for named
+      // buckets, or '' for the Uncategorized bucket (renderer substitutes
+      // 'Uncategorized' at render time). Recomputing here keeps the key +
+      // display values derived from the same inputs in the same function.
+      const name = key === NO_CAMPAIGN_KEY
+        ? ''
+        : (typeof ad.campaignName === 'string' ? ad.campaignName.trim() : '');
       const platform = typeof ad.platform === 'string' ? ad.platform : '';
-      const key = name ? `${platform.toLowerCase()}::${name}` : NO_CAMPAIGN_KEY;
       let group = groupMap.get(key);
       if (!group) {
         group = { key, name, platform, ads: [], totalSpend: 0 };
@@ -83,5 +104,5 @@
     return { groups, flatAds, showHeaders };
   }
 
-  return { groupLiveAdsByCampaign, NO_CAMPAIGN_KEY };
+  return { groupLiveAdsByCampaign, makeAdCampaignKey, NO_CAMPAIGN_KEY };
 }));

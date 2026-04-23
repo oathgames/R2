@@ -7296,19 +7296,21 @@ async function loadArchive() {
     const MerlinArchiveCampaignGroup = window.MerlinArchiveCampaignGroup;
     const { groups: campaignGroups, flatAds, showHeaders: showCampaignHeaders } =
       MerlinArchiveCampaignGroup.groupLiveAdsByCampaign(ads);
-    const NO_CAMPAIGN_KEY = MerlinArchiveCampaignGroup.NO_CAMPAIGN_KEY;
+    // makeAdCampaignKey is THE key construction for a single ad; re-using it
+    // here (instead of re-implementing the platform+name rule inline) means a
+    // future tweak in the library — name normalization, platform aliasing,
+    // whatever — can never silently diverge from the header bucketing. If
+    // renderer.js and groupLiveAdsByCampaign disagree on an ad's key, the
+    // card renders under the wrong (or no) header and we silently mis-group.
+    const { makeAdCampaignKey } = MerlinArchiveCampaignGroup;
     const groupByKey = new Map(campaignGroups.map(g => [g.key, g]));
     ads = flatAds;
     let currentGroupKey = null;
     const fmtGroupSpend = (n) => n >= 1000 ? `$${(n/1000).toFixed(1)}k` : `$${n.toFixed(2)}`;
-    const campaignKeyForAd = (ad) => {
-      const name = (ad.campaignName || '').trim();
-      return name ? `${(ad.platform || '').toLowerCase()}::${name}` : NO_CAMPAIGN_KEY;
-    };
 
     ads.forEach(ad => {
       if (showCampaignHeaders) {
-        const key = campaignKeyForAd(ad);
+        const key = makeAdCampaignKey(ad);
         if (key !== currentGroupKey) {
           const g = groupByKey.get(key);
           const header = document.createElement('div');
@@ -7316,8 +7318,13 @@ async function loadArchive() {
           const label = g.name || 'Uncategorized';
           const count = g.ads.length;
           const spend = g.totalSpend;
+          // Platform strings are system-controlled today ("meta", "tiktok",
+          // …) but we escape BOTH the class-attribute and text-content uses
+          // so a future API-derived or brand-derived platform string can't
+          // inject class- or attribute-breakout markup into the header's
+          // innerHTML assignment.
           const platformBadge = g.platform
-            ? `<span class="platform-badge platform-${g.platform.toLowerCase()}">${escapeHtml(g.platform)}</span>`
+            ? `<span class="platform-badge platform-${escapeHtml(g.platform.toLowerCase())}">${escapeHtml(g.platform)}</span>`
             : '';
           const spendChip = spend > 0 ? ` · ${fmtGroupSpend(spend)}` : '';
           header.innerHTML = `
