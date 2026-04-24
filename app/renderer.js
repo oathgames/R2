@@ -2107,7 +2107,24 @@ merlin.onSdkError((err) => {
   // friendlyError() instead. DO NOT revert to raw-error concatenation.
   let userMsg = friendlyError(err, '') || 'Something went wrong.';
   const isClaudeNotFound = errLower.includes('enoent') && (errLower.includes('spawn') || errLower.includes('node'));
-  const isAuthError = errLower.includes('401') || errLower.includes('unauthorized');
+  // REGRESSION GUARD (2026-04-24, auth-error-graceful):
+  // Widen auth-error detection to cover the SDK's exact fingerprint
+  // strings (`failed to authenticate`, `"type":"authentication_error"`,
+  // `please run /login`) in addition to the generic 401/unauthorized
+  // markers. main.js's `isSdkAuthErrorMessage` interceptor swallows the
+  // synthetic assistant payload BEFORE it reaches onSdkError, so in the
+  // normal path this branch only fires on true thrown errors — but if a
+  // future SDK version changes its emission shape and the interceptor
+  // misses, this widened match is the belt-and-suspenders that still
+  // routes the user to graceful sign-in instead of the retry loop.
+  const isAuthError = errLower.includes('401')
+    || errLower.includes('unauthorized')
+    || errLower.includes('failed to authenticate')
+    || errLower.includes('"type":"authentication_error"')
+    || errLower.includes('please run /login')
+    || errLower.includes('authentication_failed')
+    || errLower.includes('oauth token has been revoked')
+    || errLower.includes('oauth token expired');
 
   const bubble = addClaudeBubble();
 
@@ -2120,6 +2137,67 @@ merlin.onSdkError((err) => {
   // escapes square brackets.
   renderErrorToBubble(bubble, err, '');
   bubble.style.borderColor = 'rgba(239,68,68,.3)';
+
+  // REGRESSION GUARD (2026-04-24, auth-error-graceful):
+  // Auth errors are NOT retryable — refreshing the session without new
+  // credentials will fail the same way. Retrying 3× just chains three
+  // identical failures and lands the user on the "Merlin tried 3 times"
+  // banner instead of the sign-in UI they actually need. User quote
+  // 2026-04-23: "this cannot happen, we need to fail and clear
+  // gracefully."
+  //
+  // Fail-fast path: skip the retry loop entirely and show a single
+  // "Sign In to Claude" button that calls triggerClaudeLogin (the same
+  // path onAuthRequired uses — which re-queues and replays the user's
+  // original message on success). No countdown, no exponential backoff,
+  // no "attempt 2 of 3" text. The bubble above already carries the
+  // friendly "Authorization failed for the platform" copy from
+  // friendlyError(). DO NOT fall through to the generic retry path for
+  // isAuthError — every added retry is another spam blast at an
+  // endpoint that will 401 again in the exact same way.
+  if (isAuthError) {
+    _restartAttempts = 0; // reset the circuit so post-sign-in startSession isn't penalized
+    const signInBtn = document.createElement('button');
+    signInBtn.className = 'auth-retry-btn';
+    signInBtn.textContent = 'Sign In to Claude';
+    signInBtn.style.cssText = 'margin-top:12px;padding:8px 20px;border-radius:10px;border:none;background:var(--accent);color:#fff;font-weight:600;font-size:13px;cursor:pointer';
+    signInBtn.onclick = async () => {
+      if (!merlin.triggerClaudeLogin) return;
+      signInBtn.disabled = true;
+      signInBtn.textContent = 'Opening browser...';
+      try {
+        const result = await merlin.triggerClaudeLogin();
+        if (result && result.success) {
+          signInBtn.remove();
+          // Successful sign-in — replay the triggering message if we have one,
+          // matching the onAuthRequired post-success path. Otherwise fall back
+          // to a fresh session so the user can continue.
+          if (_lastUserMessage && typeof merlin.sendMessage === 'function') {
+            showTypingIndicator();
+            turnStartTime = Date.now();
+            turnTokens = 0;
+            sessionActive = true;
+            startTickingTimer();
+            merlin.sendMessage(_lastUserMessage);
+          } else {
+            sessionActive = true;
+            merlin.startSession();
+          }
+          return;
+        }
+        // Sign-in failed or was cancelled — re-enable the button so the
+        // user can try again without reloading.
+        signInBtn.disabled = false;
+        signInBtn.textContent = 'Sign In to Claude';
+      } catch (e) {
+        console.error('[auth-retry]', e);
+        signInBtn.disabled = false;
+        signInBtn.textContent = 'Sign In to Claude';
+      }
+    };
+    bubble.appendChild(signInBtn);
+    return;
+  }
 
   if (_restartAttempts > MAX_RESTART_ATTEMPTS) {
     // REGRESSION GUARD (2026-04-14, Codex P3 #6 — stale Desktop nudges):

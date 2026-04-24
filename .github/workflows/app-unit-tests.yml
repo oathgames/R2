@@ -44,6 +44,13 @@ jobs:
       # identifier collision. If this flips red, DO NOT ship the release.
       - name: main.js duplicate-toplevel-ids lockdown
         run: node --test app/main-no-duplicate-toplevel-ids.test.js
+      # Auth-error graceful fail — the v1.18.0 "raw 401 JSON in a chat
+      # bubble followed by 3× retry" incident canary. Locks down both
+      # the main.js interceptor (swallows SDK auth-error messages before
+      # they hit sdk-message fan-out) AND the renderer.js fail-fast
+      # branch (skips the retry loop and jumps straight to sign-in UI).
+      - name: auth-error graceful fail lockdown
+        run: node --test app/main-auth-error-intercept.test.js app/renderer-auth-error-fail-fast.test.js
       - name: ws-server listen-bind lockdown
         run: node app/ws-server.test.js
       - name: relay-client contract
