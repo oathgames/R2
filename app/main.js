@@ -6178,13 +6178,24 @@ function _vaultLoadSalt() {
 
 // Generate a fresh 32-byte salt on first write. Atomic via tmp+rename.
 // Returns the salt in use (either pre-existing or freshly generated).
+//
+// REGRESSION GUARD (2026-04-24, Gitar finding on PR #112): the tmp path
+// carries 4 random bytes instead of a fixed `.tmp` suffix. On Windows,
+// AV scanners and backup agents routinely hold short-lived locks on
+// predictable `.tmp` names they've seen before; a collision there would
+// throw from writeFileSync and the empty catch on mkdirSync wouldn't
+// help — the error propagates and bricks the v1→v2 vault migration on
+// that install. Randomizing the suffix makes each salt-write use a
+// fresh path no external process has seen. Rename-to-final stays atomic.
+// Go side (autocmo-core/vault.go:ensureVaultSalt) carries the matching
+// change — the two must stay in lockstep on tmp-file hygiene.
 function _vaultEnsureSalt() {
   const existing = _vaultLoadSalt();
   if (existing) return existing;
   const salt = _vaultCrypto.randomBytes(32);
   const p = _vaultSaltFilePath();
   try { fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 }); } catch {}
-  const tmp = p + '.tmp';
+  const tmp = p + '.tmp-' + _vaultCrypto.randomBytes(4).toString('hex');
   fs.writeFileSync(tmp, salt, { mode: 0o600 });
   fs.renameSync(tmp, p);
   return salt;
