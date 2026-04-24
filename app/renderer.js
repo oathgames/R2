@@ -4373,35 +4373,38 @@ document.addEventListener('click', async (e) => {
 
 // Manual API key modal for Meta — escape hatch for users with a long-lived
 // access token (e.g. from Graph API Explorer, System User, or a pre-existing
-// business integration). Collects access token + ad account ID; Page/Pixel
-// can be discovered later via `meta-discover`.
+// business integration). Normal flow is OAuth (runOAuth). This single-step
+// flow saves the token, then asks the binary to auto-resolve ad account /
+// page / pixel via `meta-discover` — same discovery the OAuth path uses.
+// Users never type an ad account ID: the token already knows it.
 function showMetaApiKeyModal(activeBrand) {
+  // Build body as real DOM nodes so the Graph API Explorer link is clickable
+  // rather than a stringified URL embedded in prose. Matches the pattern used
+  // by the API_KEY_PLATFORMS modal above.
+  const metaBody = document.createElement('div');
+  metaBody.appendChild(document.createTextNode('Paste your Meta access token. '));
+  const metaLink = document.createElement('a');
+  metaLink.href = 'https://developers.facebook.com/tools/explorer/';
+  metaLink.target = '_blank';
+  metaLink.rel = 'noopener noreferrer';
+  metaLink.style.color = 'var(--accent)';
+  metaLink.textContent = 'Get one from the Graph API Explorer';
+  metaBody.appendChild(metaLink);
+  metaBody.appendChild(document.createTextNode('.'));
+
   showModal({
     title: 'Meta — Access Token',
-    body: 'Paste your Meta access token (from Graph API Explorer or a System User). (Step 1 of 2)',
+    bodyNode: metaBody,
     inputPlaceholder: 'EAAL...',
-    confirmLabel: 'Next',
+    confirmLabel: 'Connect',
     onConfirm: async (tokenValue) => {
       if (!tokenValue || tokenValue.trim().length < 20) { showModalError('Token looks too short'); throw new Error('validation'); }
       const token = tokenValue.trim();
-      setTimeout(() => {
-        showModal({
-          title: 'Meta — Ad Account ID',
-          body: 'Enter your Meta Ad Account ID (starts with act_). (Step 2 of 2)',
-          inputPlaceholder: 'act_1234567890',
-          confirmLabel: 'Save',
-          onConfirm: async (acctValue) => {
-            let acct = (acctValue || '').trim();
-            if (!acct) { showModalError('Ad account ID required'); throw new Error('validation'); }
-            if (!acct.startsWith('act_')) acct = 'act_' + acct.replace(/^act_/, '');
-            const r1 = await merlin.saveConfigField('metaAccessToken', token, activeBrand);
-            if (!r1.success) { showModalError(r1.error || 'Failed to save token'); throw new Error('save'); }
-            const r2 = await merlin.saveConfigField('metaAdAccountId', acct, activeBrand);
-            if (!r2.success) { showModalError(r2.error || 'Failed to save ad account'); throw new Error('save'); }
-            loadConnections();
-          },
-        });
-      }, 0);
+      const r1 = await merlin.saveConfigField('metaAccessToken', token, activeBrand);
+      if (!r1.success) { showModalError(r1.error || 'Failed to save token'); throw new Error('save'); }
+      const d = await merlin.discoverMetaIds(activeBrand);
+      if (d.error) { showModalError(d.error); throw new Error('discover'); }
+      loadConnections();
     },
   });
 }
