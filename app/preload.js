@@ -226,6 +226,11 @@ contextBridge.exposeInMainWorld('merlin', {
   updateSpellMeta: (id, meta) => ipcRenderer.invoke('update-spell-meta', assertStr(id, 200), assertObj(meta)),
   savePastedMedia: (dataUrl, filename) => ipcRenderer.invoke('save-pasted-media', assertStr(dataUrl, 5000000), assertStr(filename, 200)),
   runOAuth: (platform, brand, extra) => ipcRenderer.invoke('run-oauth', assertPlatform(platform), assertBrand(brand), assertObj(extra)),
+  // Manual-override Meta connect: after the renderer saves metaAccessToken
+  // via saveConfigField, this runs the Go binary's meta-discover action to
+  // auto-resolve ad account / page / pixel IDs. Normal path is runOAuth —
+  // this exists only for users with a pre-existing long-lived token.
+  discoverMetaIds: (brand) => ipcRenderer.invoke('discover-meta-ids', assertBrand(brand)),
   onConnectionsChanged: (cb) => {
     const handler = () => cb();
     ipcRenderer.on('connections-changed', handler);

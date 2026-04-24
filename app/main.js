@@ -3708,6 +3708,67 @@ ipcMain.handle('run-oauth', async (_, platform, brandName, extra) => {
   return runOAuthFlow(platform, brandName, extra);
 });
 
+// Manual-override Meta connect: the OAuth path (run-oauth + meta-login) is
+// the normal flow, but users with a long-lived token from Graph API Explorer
+// or a System User need an escape hatch. The renderer saves metaAccessToken
+// via save-config-field first, then calls this handler to auto-discover
+// adAccountId / pageId / pixelId from the token — same discovery the OAuth
+// path uses, so the two flows land at the same "fully connected" state.
+//
+// We intentionally do NOT prompt the user for the ad account ID manually:
+// /me/adaccounts answers it from the token in one call. If the token lacks
+// scope or has no active accounts, the binary returns an empty adAccountId
+// and we surface a scope-hint error.
+ipcMain.handle('discover-meta-ids', async (_, brandName) => {
+  try {
+    let binaryPath = getBinaryPath();
+    const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
+    try { fs.accessSync(binaryPath); } catch { return { error: 'Engine not found. Restart Merlin to download it.' }; }
+    try { fs.accessSync(configPath); } catch { return { error: 'Config not found. Run preflight first.' }; }
+    await maybeHydrateBinaryLicenseToken('meta-discover');
+
+    const { execFile } = require('child_process');
+    return await new Promise((resolve) => {
+      const cmd = JSON.stringify({ action: 'meta-discover', brand: brandName || '' });
+      const child = execFile(binaryPath, ['--config', configPath, '--cmd', cmd], {
+        timeout: 30000, cwd: appRoot, maxBuffer: 10 * 1024 * 1024,
+      }, (err, stdout) => {
+        activeChildProcesses.delete(child);
+        if (err) return resolve({ error: (err.message || 'meta-discover failed').slice(0, 500) });
+        try {
+          // runMetaDiscover prints JSON at the end of stdout — see meta.go
+          // around `jsonData, _ := json.MarshalIndent(result, ...)`.
+          const m = stdout.match(/\{[\s\S]*"adAccountId"[\s\S]*\}/);
+          if (!m) return resolve({ error: 'No ad accounts discovered. Your token may lack ads_management scope.' });
+          const d = JSON.parse(m[0]);
+          if (!d.adAccountId) return resolve({ error: 'No active ad accounts found. Check the token has ads_management permission and access to an active account.' });
+          const updates = { metaAdAccountId: d.adAccountId };
+          if (d.pageId) updates.metaPageId = d.pageId;
+          if (d.pixelId) updates.metaPixelId = d.pixelId;
+          if (brandName) {
+            writeBrandTokens(brandName, updates);
+          } else {
+            const cfg = readConfig();
+            Object.assign(cfg, updates);
+            writeConfig(cfg);
+          }
+          if (win && !win.isDestroyed()) win.webContents.send('connections-changed');
+          resolve({
+            success: true,
+            adAccountId: d.adAccountId,
+            adAccountName: d.adAccountName || '',
+            pageId: d.pageId || '',
+            pixelId: d.pixelId || '',
+          });
+        } catch (e) {
+          resolve({ error: 'Could not parse discovery result: ' + e.message });
+        }
+      });
+      activeChildProcesses.add(child);
+    });
+  } catch (err) { return { error: err.message }; }
+});
+
 // Save a single config field (for API key entry from UI).
 // Allowlist prevents injection of internal metadata keys (_migrationVersion, _userEmail, etc.)
 // and lives in oauth-persist.js alongside VAULT_SENSITIVE_KEYS so the two
