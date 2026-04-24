@@ -901,6 +901,85 @@ function isClaudeAuthError(message = '') {
   return /auth|authorization|token|sign in|signin|logged in|login|account/i.test(message);
 }
 
+// REGRESSION GUARD (2026-04-24, auth-error-graceful):
+// The Claude Agent SDK emits authentication failures as a synthetic
+// assistant message with `isApiErrorMessage: true` and `error:
+// 'authentication_failed'`. The message's content array carries the raw
+// upstream error text — which on a 401 is a verbatim Anthropic API JSON
+// payload like:
+//
+//   `Failed to authenticate. API Error: 401 {"type":"error","error":
+//    {"type":"authentication_error","message":"OAuth token expired"}}`
+//
+// If we forward that message through the normal `sdk-message` pipe, the
+// renderer's streaming text path (stream_event → content_block_delta →
+// appendText) lands the raw JSON inside a chat bubble. Paying users then
+// see a stack-trace-grade error dialog followed by a "Merlin tried 3
+// times" retry banner — violating CLAUDE.md Rule 6 (friendlyError). The
+// user's exact words on 2026-04-23: "this cannot happen, we need to fail
+// and clear gracefully."
+//
+// Classification runs against:
+//   (a) the synthetic wrapper fields (`isApiErrorMessage` / `error:
+//       'authentication_failed'`) — the canonical signal emitted by
+//       `r3()` in the SDK's cli.js
+//   (b) the text-delta fallback — defence in depth, for future SDK
+//       versions that stream the auth error as text chunks instead of
+//       (or in addition to) a one-shot assistant wrapper
+//   (c) the raw 401 JSON fingerprint — the literal authentication_error
+//       type string that Anthropic's API returns; anchors detection
+//       even if SDK wording changes
+//
+// The classifier is pure + side-effect-free. The caller (the fan-out
+// site in startSession) is responsible for swallowing the message,
+// freezing the queue for replay, and calling requireAuth() to open the
+// sign-in flow. See the matching REGRESSION GUARD block at the fan-out
+// site and the unit test in app/main-auth-error-intercept.test.js.
+function isSdkAuthErrorMessage(msg) {
+  if (!msg || typeof msg !== 'object') return false;
+  // (a) Canonical SDK wrapper — the authoritative signal.
+  if (msg.type === 'assistant') {
+    if (msg.error === 'authentication_failed') return true;
+    if (msg.isApiErrorMessage === true) {
+      // `isApiErrorMessage` alone is not auth-specific (the SDK also
+      // uses it for billing / invalid_request). Inspect the content
+      // for the auth fingerprint before claiming this is an auth fail.
+      const blocks = msg.message && Array.isArray(msg.message.content) ? msg.message.content : [];
+      for (const b of blocks) {
+        if (b && b.type === 'text' && typeof b.text === 'string' && authErrorFingerprint(b.text)) {
+          return true;
+        }
+      }
+    }
+  }
+  // (b) Stream-event fallback — catches the text_delta path if a future
+  // SDK version streams the auth-error content block instead of
+  // bundling it in one assistant message.
+  if (msg.type === 'stream_event' && msg.event && msg.event.type === 'content_block_delta') {
+    const d = msg.event.delta;
+    if (d && d.type === 'text_delta' && typeof d.text === 'string' && authErrorFingerprint(d.text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// authErrorFingerprint matches the literal strings only ever present
+// in an auth-failure payload. Must NOT match billing errors, 403
+// permission errors, rate-limit errors, or ANY other 4xx — those have
+// their own recovery paths and must still stream normally so
+// friendlyError can classify them. Kept narrow on purpose.
+function authErrorFingerprint(text) {
+  if (!text || typeof text !== 'string') return false;
+  return (
+    text.includes('Failed to authenticate')
+    || text.includes('"type":"authentication_error"')
+    || text.includes('"type": "authentication_error"')
+    || /Please run \/login/i.test(text)
+    || /OAuth token (has been revoked|is expired|expired)/i.test(text)
+  );
+}
+
 // sendInlineMessage renders a system-generated chat bubble in the renderer
 // without going through the SDK message pipeline. Used for auth prompts,
 // engine download status, etc. — anything that needs to appear in the chat
@@ -2662,6 +2741,15 @@ async function startSession(brandOverride) {
     }
   } catch (e) { console.error('[account-info]', e.message); }
 
+  // REGRESSION GUARD (2026-04-24, auth-error-graceful):
+  // Per-session sentinel for the SDK auth-error interceptor below. Declared
+  // at the loop scope so subsequent messages in the SAME iteration (e.g. the
+  // trailing `result` with subtype `error_during_execution`) are also
+  // suppressed — the auth-required flow owns the UI once we've intercepted.
+  // Not a module-level flag because parallel sessions (e.g. switch-brand
+  // mid-auth-failure) must not share this state.
+  let _authFailureIntercepted = false;
+
   try {
     for await (const msg of activeQuery) {
       // Per-brand session-id capture. The SDK emits one init message per
@@ -2739,6 +2827,36 @@ async function startSession(brandOverride) {
           + `cache_read=${cacheRead} cache_create=${cacheCreate} `
           + `hit_rate=${hitRate}% cost=$${cost} dur=${durMs}ms api=${apiMs}ms`
         );
+      }
+
+      // REGRESSION GUARD (2026-04-24, auth-error-graceful):
+      // Swallow SDK auth-error messages BEFORE the sdk-message fan-out.
+      // The synthetic `{type:'assistant', isApiErrorMessage:true, error:
+      // 'authentication_failed'}` message carries the raw 401 JSON in
+      // its content — forwarding it lets the renderer's text pipeline
+      // render the payload verbatim in a chat bubble. Once we intercept:
+      //   1. Set `_authFailureIntercepted` so any subsequent messages
+      //      in this iteration (the `result` with subtype
+      //      `error_during_execution`) are also swallowed — we don't
+      //      want a "session ended with error" bubble either; the
+      //      auth-required flow owns the UI from here.
+      //   2. Freeze the pending queue so the triggering user message
+      //      replays automatically after sign-in succeeds.
+      //   3. Fire `requireAuth()` exactly once — duplicates are
+      //      de-duped renderer-side by `_authLoginInFlight`, but we
+      //      guard here too.
+      // See isSdkAuthErrorMessage() for the classification contract.
+      if (!_authFailureIntercepted && isSdkAuthErrorMessage(msg)) {
+        console.warn('[auth] SDK auth-error message intercepted — routing through requireAuth');
+        _authFailureIntercepted = true;
+        _queueFrozenForAuth = true;
+        requireAuth('session error: authentication failed');
+        continue;
+      }
+      if (_authFailureIntercepted) {
+        // Drain remaining messages (typically the trailing `result`)
+        // silently — the auth-required flow is now driving the UI.
+        continue;
       }
 
       if (win && !win.isDestroyed()) {
@@ -2874,11 +2992,24 @@ async function startSession(brandOverride) {
       // Auth-related failures route through the unified requireAuth() entry
       // point, which auto-triggers login and replays the pending message on
       // success. Non-auth errors go through the generic sdk-error channel.
-      const isAuth = isClaudeAuthError(errMsg)
+      //
+      // REGRESSION GUARD (2026-04-24, auth-error-graceful):
+      // If the stream-side interceptor already fired requireAuth for this
+      // session (SDK emitted the synthetic auth-error message before
+      // throwing), skip the duplicate here — the renderer de-dupes but we
+      // avoid the extra log line + event and keep the contract clean.
+      // If the thrown error itself IS an auth failure (caught before the
+      // synthetic message made it through), honor it. We also widen the
+      // match to cover the auth-fingerprint strings surfaced by the SDK.
+      const isAuth = _authFailureIntercepted
+        || isClaudeAuthError(errMsg)
+        || authErrorFingerprint(errMsg)
         || /not logged in|please run \/login|login required|no credentials|account information/i.test(errMsg);
       if (isAuth) {
         _queueFrozenForAuth = true; // preserve the queue across auth recovery
-        requireAuth('session error: ' + errMsg.slice(0, 120));
+        if (!_authFailureIntercepted) {
+          requireAuth('session error: ' + errMsg.slice(0, 120));
+        }
       } else {
         win.webContents.send('sdk-error', errMsg);
         wsServer.broadcast('sdk-error', errMsg);
