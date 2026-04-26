@@ -1523,6 +1523,34 @@ async function createWindow() {
     flushPendingDeepLink();
   });
 
+  // ── Live archive invalidation ───────────────────────────────
+  // The Archive panel needs to reflect filesystem truth without a manual
+  // refresh: when the binary writes a fresh run folder, when the user
+  // trashes via the bulk-cull viewer, or when an external tool drops a
+  // file into results/. We attach a debounced fs.watch (recursive on
+  // Win/Mac, polling fallback elsewhere) and broadcast a single
+  // `archive-changed` event per burst — the renderer drops its cache
+  // and rebuilds. Self-writes (.flags.json, archive-index.json + atomic
+  // siblings) are filtered inside the watcher so flag toggles don't
+  // trigger a feedback loop.
+  try {
+    const { createResultsWatcher } = require('./results-watcher');
+    if (resultsWatcher) {
+      try { resultsWatcher.stop(); } catch {}
+      resultsWatcher = null;
+    }
+    resultsWatcher = createResultsWatcher(path.join(path.resolve(appRoot), 'results'), {
+      onChange: () => {
+        if (win && !win.isDestroyed()) {
+          try { win.webContents.send('archive-changed'); } catch {}
+        }
+      },
+    });
+    resultsWatcher.start();
+  } catch (err) {
+    console.warn('[archive-watcher] failed to start:', err && err.message);
+  }
+
   // §6.2 — Handle a dead renderer. Before this lived here, a renderer
   // crash (OOM from a runaway marked+DOMPurify reparse, WebGL driver
   // panic, GPU process kill) left the main process alive with a blank
@@ -5322,8 +5350,8 @@ ipcMain.handle('create-spell', (_, taskId, cron, description, prompt, brandName)
 
 // Accepts either a single relative path (string) — legacy call sites — or a
 // list of paths (array). Each path is validated independently before any
-// deletion runs, so a bad entry fails the whole batch rather than corrupting
-// the archive halfway through.
+// trash runs, so a bad entry fails the whole batch rather than partially
+// trashing.
 //
 // REGRESSION GUARD (2026-04-16, loose-delete data-loss incident): previously
 // the renderer always handed us `folderPath = filePath.split('/').slice(0,-1)`
@@ -5335,6 +5363,17 @@ ipcMain.handle('create-spell', (_, taskId, cron, description, prompt, brandName)
 // explicit list — file paths for loose items, the run folder for run items —
 // so the batch matches user intent exactly. Do not restore the "just take
 // whatever string comes in and rm -rf it" behaviour.
+//
+// REGRESSION GUARD (2026-04-26, OS-native trash for cull-at-scale): every
+// delete now goes through Electron's `shell.trashItem`, which sends the
+// target to the OS Recycle Bin (Windows) / Trash (macOS). With multi-select
+// bulk-cull landing in the Archive viewer, hard `fs.rm` made a single
+// mis-click catastrophic. Soft-delete via the OS trash gives users a familiar
+// undo path and matches the pattern Lightroom / Apple Photos / Finder use.
+// Do NOT revert to `fs.rm` — the recovery story is the whole reason bulk
+// cull is safe to ship. `shell.trashItem` is the native API on every shipping
+// platform; falling back to `fs.rm` would silently make trash unrecoverable
+// for whichever path took the fallback.
 ipcMain.handle('delete-file', async (_, target) => {
   try {
     const rawTargets = Array.isArray(target) ? target : [target];
@@ -5356,16 +5395,101 @@ ipcMain.handle('delete-file', async (_, target) => {
       resolved.push(fullPath);
     }
 
+    const errors = [];
+    const trashed = [];
     for (const fullPath of resolved) {
-      // Use async rm to avoid blocking the main process (prevents "Not Responding")
-      await fs.promises.rm(fullPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      try {
+        await shell.trashItem(fullPath);
+        trashed.push(fullPath);
+      } catch (err) {
+        errors.push({ path: fullPath, message: err && err.message });
+      }
     }
-    // Invalidate archive index so it rebuilds
+    // Drop any flag entries for trashed paths so the sidecar doesn't grow
+    // unbounded with stale references. Best-effort — failures here are
+    // non-fatal (sidecar self-heals on next read).
+    if (trashed.length > 0) {
+      try {
+        const flagsModule = require('./results-flags');
+        const keys = trashed.map(p => path.relative(resultsDir, p));
+        await flagsModule.dropKeys(resultsDir, keys);
+      } catch {}
+    }
+    // Invalidate archive index so it rebuilds.
     try { await fs.promises.unlink(path.join(resultsDir, 'archive-index.json')); } catch {}
-    return { success: true };
+    if (errors.length > 0 && trashed.length === 0) {
+      return { success: false, errors };
+    }
+    return {
+      success: true,
+      trashedCount: trashed.length,
+      partial: errors.length > 0,
+      errors,
+    };
   } catch (err) {
     console.error('[delete]', err.message);
     return { success: false };
+  }
+});
+
+// ── Keep/reject flag sidecar IPC ────────────────────────────────
+// The Archive viewer persists per-creative ★ keep / ✗ reject marks to a
+// single sidecar at `results/.flags.json`. Renderer never touches the file
+// directly — every read/write goes through these handlers so path validation
+// + atomic-write semantics live in one place. See app/results-flags.js.
+function _resultsFlagsModule() {
+  return require('./results-flags');
+}
+function _resultsDirAbs() {
+  return path.join(path.resolve(appRoot), 'results');
+}
+
+ipcMain.handle('archive-flags-get', async () => {
+  try {
+    const dir = _resultsDirAbs();
+    const state = await _resultsFlagsModule().readFlags(dir);
+    return { success: true, flags: state.flags };
+  } catch (err) {
+    console.warn('[archive-flags-get]', err && err.message);
+    return { success: false, flags: {} };
+  }
+});
+
+ipcMain.handle('archive-flags-set', async (_, payload) => {
+  try {
+    if (!payload || typeof payload !== 'object') return { success: false };
+    const key = typeof payload.key === 'string' ? payload.key : '';
+    const flag = payload.flag === null ? null : payload.flag;
+    if (!key) return { success: false };
+    if (flag !== null && flag !== 'keep' && flag !== 'reject') return { success: false };
+    if (key.length > 500) return { success: false };
+    await _resultsFlagsModule().setFlag(_resultsDirAbs(), key, flag);
+    return { success: true };
+  } catch (err) {
+    console.warn('[archive-flags-set]', err && err.message);
+    return { success: false };
+  }
+});
+
+ipcMain.handle('archive-flags-set-bulk', async (_, updates) => {
+  try {
+    if (!Array.isArray(updates)) return { success: false, applied: 0 };
+    if (updates.length > 5000) return { success: false, applied: 0 };
+    // Lightweight per-entry validation — the sidecar module also validates
+    // but we trim early so a malformed renderer payload can't reach disk.
+    const safe = [];
+    for (const u of updates) {
+      if (!u || typeof u !== 'object') continue;
+      if (typeof u.key !== 'string' || u.key.length === 0 || u.key.length > 500) continue;
+      const flag = u.flag === null ? null : u.flag;
+      if (flag !== null && flag !== 'keep' && flag !== 'reject') continue;
+      safe.push({ key: u.key, flag });
+    }
+    const result = await _resultsFlagsModule().setFlagsBulk(_resultsDirAbs(), safe);
+    return result;
+  } catch (err) {
+    console.warn('[archive-flags-set-bulk]', err && err.message);
+    return { success: false, applied: 0 };
   }
 });
 
@@ -5492,6 +5616,11 @@ function appendErrorLog(line) {
 const briefingLastNotified = new Map(); // path -> last date string already notified
 const briefingDebounce = new Map();     // path -> NodeJS.Timeout
 let briefingWatcher = null;
+// Recursive fs.watch on results/ that broadcasts `archive-changed` to the
+// renderer when run folders or loose files appear/disappear. Started in
+// createWindow() after win.loadFile, torn down in before-quit (alongside
+// briefingWatcher) so the event loop releases on app exit.
+let resultsWatcher = null;
 
 // §5.4 — Drop entries from briefingLastNotified whose underlying file no
 // longer exists (brand deleted / manual cleanup) or whose tracked date is
@@ -10417,6 +10546,7 @@ app.whenReady().then(async () => {
     }
     activeChildProcesses.clear();
     if (briefingWatcher) { try { briefingWatcher.close(); } catch {} briefingWatcher = null; }
+    if (resultsWatcher) { try { resultsWatcher.stop(); } catch {} resultsWatcher = null; }
     // §G7 — Stop the JobStore's periodic prune timer so the event loop
     // doesn't hold the process open past before-quit. Safe to call
     // multiple times (JobStore.shutdown is idempotent) and safe when

@@ -1111,6 +1111,11 @@ function finalizeBubble() {
     } else {
       currentBubble.innerHTML = renderMarkdown(cleaned);
     }
+    // Stack-collapse any artifact galleries the binary just emitted, so a
+    // 25-image batch shows as a fanned 4-card preview with click-to-expand
+    // into the shared viewer instead of dominating the chat with an open
+    // grid. Idempotent — safe to call when the bubble has no galleries.
+    try { __transformChatGalleries(currentBubble); } catch {}
     // Assistant bubbles get a replay button + stored raw text so the user
     // can hear any past message even when the global toggle was off.
     if (cleaned && cleaned.trim().length > 0) {
@@ -6815,10 +6820,88 @@ document.getElementById('help-nudge-close').addEventListener('click', () => {
   try { localStorage.setItem('merlin-nudge-last', String(Date.now())); } catch {}
 });
 
+// ── Creative Gallery Viewer (shared, chat + archive) ─────────
+// One full-screen viewer is the point of contact for every batch creative
+// review surface — chat-rendered artifact galleries collapse into a stack
+// of 1–4 fanned cards (transformGalleryToStack) and click-to-expand into
+// the same viewer used by the Archive tab. See app/gallery-viewer.js for
+// the full keyboard / swipe / virtualization story.
+//
+// REGRESSION GUARD (2026-04-26, batch-cull-at-scale rollout): the legacy
+// chat lightbox (single-image zoom, no nav) lives below and remains the
+// fallback for inline images that are NOT inside a Merlin gallery (user-
+// pasted screenshots, briefing cards, etc.). Gallery images route to the
+// viewer instead — `img.closest('.merlin-gallery-stack')` short-circuits
+// the lightbox. Do NOT remove that guard, or every gallery item silently
+// reverts to a no-nav lightbox.
+let __merlinSharedViewer = null;
+function __getSharedViewer() {
+  if (!__merlinSharedViewer && window.MerlinGalleryViewer) {
+    __merlinSharedViewer = window.MerlinGalleryViewer.createGalleryViewer();
+  }
+  return __merlinSharedViewer;
+}
+
+// Translate a gallery item's merlin:// src back to a relative path the
+// `delete-file` IPC accepts. Decodes URL-encoded segments because the
+// parser encodes paths with spaces / parens — the trash handler validates
+// against the on-disk path, not the URL form.
+function __merlinSrcToRelPath(src) {
+  const raw = String(src || '').replace(/^merlin:\/\//, '');
+  try { return decodeURI(raw); } catch { return raw; }
+}
+
+async function __viewerTrash(key, item) {
+  const rel = __merlinSrcToRelPath(item && item.src ? item.src : key);
+  if (!rel) return { success: false };
+  const result = await merlin.deleteFile(rel);
+  if (result && result.success) {
+    showCopyToast(result.partial ? 'Some items could not be moved' : 'Moved to Trash');
+  } else {
+    showCopyToast('Trash failed');
+  }
+  return result || { success: false };
+}
+
+function __openChatViewer(items, startIndex) {
+  if (!items || items.length === 0) return;
+  const viewer = __getSharedViewer();
+  if (!viewer) return;
+  viewer.open({
+    items,
+    startIndex: Math.max(0, Math.min(startIndex || 0, items.length - 1)),
+    mode: 'chat',
+    onTrash: __viewerTrash,
+  });
+}
+
+// Walk a freshly-rendered chat bubble and convert every .merlin-gallery
+// (open grid emitted by artifact-parser.js) into a stacked-card preview.
+// Called after every renderMarkdown finalization. Idempotent — transform
+// guards against double-application via data-merlin-stacked.
+function __transformChatGalleries(root) {
+  if (!root || !window.MerlinGalleryViewer) return;
+  const galleries = root.querySelectorAll && root.querySelectorAll('.merlin-gallery');
+  if (!galleries) return;
+  for (const g of galleries) {
+    try {
+      window.MerlinGalleryViewer.transformGalleryToStack(g, __openChatViewer);
+    } catch (err) {
+      // Never let a malformed gallery crash the bubble render — fall back
+      // to the open grid (still functional, just not stacked).
+      try { console.warn('[gallery] transform failed', err); } catch {}
+    }
+  }
+}
+
 // ── Image Lightbox (click to zoom, click/Esc to close) ──────
 document.addEventListener('click', (e) => {
   const img = e.target.closest('.msg-bubble img');
   if (!img) return;
+  // Gallery items have their own viewer (see __openChatViewer). Skip the
+  // legacy single-image lightbox so the stack click handler can fire.
+  if (img.closest('.merlin-gallery-stack')) return;
+  if (img.closest('.gv-viewer')) return;
   const lb = document.createElement('div');
   lb.className = 'lightbox';
   const lbImg = document.createElement('img');
@@ -8208,6 +8291,9 @@ async function loadArchive() {
 
   // Clear multi-select on tab switch
   window._archiveSelected = [];
+  window._archiveItemsByKey = new Map();
+  window._archiveVisibleItems = [];
+  if (__archiveModel) __archiveModel.clear();
   const existingMerge = document.getElementById('merge-btn');
   if (existingMerge) existingMerge.style.display = 'none';
 
@@ -8724,7 +8810,12 @@ async function loadArchive() {
       return;
     }
 
+    // Populate the visible-items list so the shared viewer can swipe/arrow
+    // through the entire filtered set, not just one card at a time. Order
+    // matches what the user sees on screen, top-to-bottom.
+    window._archiveVisibleItems = items.slice();
     let lastDate = '';
+    const orderedKeys = [];
     items.forEach(item => {
       const d = new Date(item.timestamp);
       const dateStr = formatArchiveDate(d);
@@ -8735,8 +8826,15 @@ async function loadArchive() {
         grid.appendChild(header);
         lastDate = dateStr;
       }
-      grid.appendChild(createArchiveCard(item));
+      const card = createArchiveCard(item);
+      grid.appendChild(card);
+      const key = __archiveCardKey(item, card);
+      if (key) {
+        window._archiveItemsByKey.set(key, { card, item });
+        orderedKeys.push(key);
+      }
     });
+    if (__archiveModel) __archiveModel.syncOrder(orderedKeys);
     observeLazyVideos(grid);
   } catch (err) {
     console.warn('[archive]', err);
@@ -8874,15 +8972,29 @@ function createArchiveCard(item) {
   }
 
   const activate = (e) => {
-    // Pairing mode: if at least one swipe-card (competitor) is already selected,
-    // clicks on archive cards toggle multi-select instead of opening preview.
+    const ctrl = !!(e && (e.ctrlKey || e.metaKey));
+    const shift = !!(e && e.shiftKey);
+    // Pairing mode: if a swipe-card (competitor) is already selected,
+    // clicks on archive cards toggle multi-select instead of opening viewer.
     const sel = window._archiveSelected || [];
-    if (sel.some(s => s.item && s.item.brand)) {
+    const inPairingMode = sel.some(s => s.item && s.item.brand);
+    if (inPairingMode || ctrl || shift) {
       if (e) { e.stopPropagation(); e.preventDefault(); }
-      toggleArchiveSelect(card, item);
+      const key = __archiveCardKey(item, card);
+      if (__archiveModel && key) {
+        __archiveModel.click(key, { ctrlKey: ctrl, shiftKey: shift, metaKey: e && e.metaKey });
+      } else {
+        toggleArchiveSelect(card, item);
+      }
       return;
     }
-    openArchivePreview(item);
+    // Modifier-free click on a card while items are selected: clear and open
+    // the viewer at this card. The "click anywhere to clear" pattern matches
+    // file managers + photo apps and avoids accidental preview blocking.
+    if (__archiveModel && __archiveModel.size() > 0) {
+      __archiveModel.clear();
+    }
+    __openArchiveViewerAt(item, card);
   };
   card.addEventListener('click', activate);
   card.addEventListener('keydown', (e) => {
@@ -8982,23 +9094,254 @@ function observeLazyVideos(root) {
   videos.forEach(v => io.observe(v));
 }
 
-// ── Multi-select + Merge for creative pairing ──────────────
-function toggleArchiveSelect(card, item) {
-  const sel = window._archiveSelected;
-  const idx = sel.findIndex(s => s.card === card);
-  if (idx >= 0) {
-    sel.splice(idx, 1);
-    card.classList.remove('archive-selected');
-  } else {
-    if (sel.length >= 2) {
-      // Deselect the oldest
-      sel[0].card.classList.remove('archive-selected');
-      sel.shift();
-    }
-    sel.push({ card, item });
-    card.classList.add('archive-selected');
+// ── Multi-select + Bulk-cull + Merge for creative pairing ──
+//
+// REGRESSION GUARD (2026-04-26, batch-cull-at-scale rollout): selection is
+// no longer capped at 2. The legacy cap existed only for the "Merge two
+// creatives" feature (which is preserved — it surfaces the Merge button
+// when exactly 2 items are selected and at least one is a competitor
+// swipe). Bulk operations (trash to OS recycle bin, keep/reject flags) now
+// run over the full multi-select. Do NOT reintroduce the cap — paying
+// users on autonomous spell loops generate hundreds of creatives at a time
+// and need Lightroom-grade culling.
+//
+// The pure state machine lives in app/archive-multiselect.js. The renderer
+// owns DOM updates: every onChange tick re-syncs the .archive-selected
+// class on each card and rebuilds the selection toolbar.
+const __archiveModel = (window.MerlinArchiveSelection
+  ? window.MerlinArchiveSelection.createSelection() : null);
+window._archiveSelectionModel = __archiveModel;
+
+function __archiveCardKey(item, card) {
+  // Stable key per item — folder for run items, JSON-stringified file list
+  // for loose items (the same identifier the trash IPC accepts), or the
+  // card's path attribute for swipes.
+  if (!item) return '';
+  if (item.path) return 'path:' + item.path;
+  if (item.id) return 'id:' + item.id;
+  if (card && card.dataset && card.dataset.source === 'loose' && card.dataset.files) {
+    return 'loose:' + card.dataset.files;
   }
+  if (item.folder) return 'folder:' + item.folder;
+  return card && card.dataset ? 'card:' + (card.dataset.folder || card.dataset.id || '') : '';
+}
+
+// Lookup table: key → { card, item } for the currently-rendered grid.
+// Rebuilt on every loadArchive() so the selection model can resolve keys
+// back to live DOM elements + items (for trash, keep/reject, merge).
+window._archiveItemsByKey = new Map();
+
+function __syncSelectionUI() {
+  if (!__archiveModel) return;
+  const selectedKeys = new Set(__archiveModel.toArray());
+  for (const [key, ref] of window._archiveItemsByKey) {
+    const has = selectedKeys.has(key);
+    if (ref && ref.card) ref.card.classList.toggle('archive-selected', has);
+  }
+  // Mirror to the legacy `_archiveSelected` array so the existing Merge
+  // flow (which expects [{card, item}, …]) keeps working.
+  window._archiveSelected = __archiveModel.toDocumentOrder()
+    .map(k => window._archiveItemsByKey.get(k))
+    .filter(Boolean);
+  __renderSelectionToolbar();
   updateMergeButton();
+}
+
+if (__archiveModel) {
+  __archiveModel.onChange(() => __syncSelectionUI());
+}
+
+function __archiveSelectionToolbarEl() {
+  let bar = document.getElementById('archive-selection-toolbar');
+  if (bar) return bar;
+  bar = document.createElement('div');
+  bar.id = 'archive-selection-toolbar';
+  bar.className = 'archive-selection-toolbar hidden';
+  bar.innerHTML = '<span class="asb-count">0 selected</span>'
+    + '<button class="asb-btn" data-action="keep" title="Mark as Keep (Space in viewer)">★ Keep</button>'
+    + '<button class="asb-btn" data-action="reject" title="Mark as Reject (R in viewer)">✗ Reject</button>'
+    + '<button class="asb-btn asb-trash" data-action="trash" title="Move to Recycle Bin (Delete)">🗑 Trash</button>'
+    + '<button class="asb-btn" data-action="clear" title="Clear selection (Esc)">Clear</button>';
+  // Insert above the grid.
+  const grid = document.getElementById('archive-grid');
+  if (grid && grid.parentNode) grid.parentNode.insertBefore(bar, grid);
+  bar.addEventListener('click', (e) => {
+    const btn = e.target.closest('.asb-btn');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const action = btn.getAttribute('data-action');
+    if (action === 'keep') __bulkSetFlag('keep');
+    else if (action === 'reject') __bulkSetFlag('reject');
+    else if (action === 'trash') __bulkTrashSelected();
+    else if (action === 'clear') __archiveModel && __archiveModel.clear();
+  });
+  return bar;
+}
+
+function __renderSelectionToolbar() {
+  const bar = __archiveSelectionToolbarEl();
+  if (!bar || !__archiveModel) return;
+  const n = __archiveModel.size();
+  const countEl = bar.querySelector('.asb-count');
+  if (countEl) countEl.textContent = n + ' selected';
+  bar.classList.toggle('hidden', n === 0);
+}
+
+async function __bulkSetFlag(flag) {
+  if (!__archiveModel || __archiveModel.size() === 0) return;
+  const keys = __archiveModel.toDocumentOrder();
+  const updates = [];
+  for (const k of keys) {
+    const ref = window._archiveItemsByKey.get(k);
+    if (!ref || !ref.item || !ref.item.folder) continue;
+    updates.push({ key: ref.item.folder, flag });
+  }
+  if (updates.length === 0) return;
+  try {
+    await merlin.setArchiveFlagsBulk(updates);
+    showCopyToast(`Marked ${updates.length} as ${flag}`);
+  } catch {
+    showCopyToast('Flag update failed');
+  }
+  loadArchive();
+}
+
+async function __bulkTrashSelected() {
+  if (!__archiveModel || __archiveModel.size() === 0) return;
+  const keys = __archiveModel.toDocumentOrder();
+  const targets = [];
+  const cards = [];
+  for (const k of keys) {
+    const ref = window._archiveItemsByKey.get(k);
+    if (!ref || !ref.card) continue;
+    cards.push(ref.card);
+    const t = resolveArchiveDeleteTargets(ref.card);
+    for (const p of t) targets.push(p);
+  }
+  if (targets.length === 0) { showCopyToast('Nothing to trash'); return; }
+  const noun = cards.length === 1 ? 'item' : `${cards.length} items`;
+  showModal({
+    title: `Move ${noun} to Trash?`,
+    body: `${cards.length === 1 ? 'This' : 'These'} will go to your OS Recycle Bin (Windows) or Trash (macOS) — recover anytime from there.`,
+    confirmLabel: 'Move to Trash',
+    cancelLabel: 'Cancel',
+    onConfirm: async () => {
+      const result = await merlin.deleteFile(targets);
+      if (result && result.success) {
+        showCopyToast(result.partial ? `Trashed ${result.trashedCount} (some failed)` : `Trashed ${cards.length}`);
+        for (const c of cards) {
+          try { c.style.opacity = '0'; setTimeout(() => c.remove(), 250); } catch {}
+        }
+        __archiveModel.clear();
+      } else {
+        showCopyToast('Trash failed');
+      }
+    },
+  });
+}
+
+// Open the shared full-screen viewer over the currently-visible archive
+// items, starting at the clicked card. Used in place of the legacy
+// openArchivePreview overlay so the user can swipe / arrow through every
+// generated creative without close-and-reopen.
+async function __openArchiveViewerAt(item, card) {
+  const items = Array.isArray(window._archiveVisibleItems) ? window._archiveVisibleItems : [];
+  if (items.length === 0) { openArchivePreview(item); return; }
+  let flags = {};
+  try {
+    const r = await merlin.getArchiveFlags();
+    if (r && r.flags) flags = r.flags;
+  } catch {}
+  const startKey = (item && item.folder) || (item && item.path)
+    || (card && card.dataset && card.dataset.folder) || '';
+  const viewerItems = items.map(it => {
+    let kind = it.type === 'video' ? 'video' : 'image';
+    let src = '';
+    if (it.thumbnail) src = merlinUrl(it.thumbnail);
+    else if (it.type === 'video' && it.files && it.files.length) {
+      const best = it.files.find(f => f === 'captioned.mp4')
+        || it.files.find(f => f === 'final.mp4')
+        || it.files.find(f => /\.(mp4|mov|webm|m4v)$/i.test(f));
+      if (best) src = merlinUrl((it.folder ? it.folder + '/' : '') + best);
+    }
+    return {
+      key: it.folder || it.path || '',
+      src,
+      kind,
+      label: it.product || it.brand || '',
+      meta: it.model ? prettyModelName(it.model) : '',
+      qa: it.qaPassed === false ? { pass: false, reason: 'QA flagged' } : null,
+    };
+  }).filter(v => v.src);
+  // REGRESSION GUARD (2026-04-26, viewer-startIndex-misalign): the
+  // startIndex is computed AFTER the .filter() so a card whose item was
+  // dropped (no src) doesn't shift every subsequent item by one. Doing
+  // the findIndex on the pre-filter list and using it on the filtered
+  // list opened the viewer at the wrong card whenever any item ahead
+  // of the click target had no thumbnail.
+  let startIndex = viewerItems.findIndex(v => v.key === startKey);
+  if (startIndex < 0) startIndex = 0;
+  const viewer = __getSharedViewer();
+  if (!viewer || viewerItems.length === 0) { openArchivePreview(item); return; }
+  const inMemFlags = { ...flags };
+  viewer.open({
+    items: viewerItems,
+    startIndex: Math.max(0, Math.min(startIndex, viewerItems.length - 1)),
+    mode: 'archive',
+    getFlag: (k) => (inMemFlags[k] && inMemFlags[k].flag) || null,
+    onSetFlag: async (k, flag) => {
+      if (flag == null) delete inMemFlags[k];
+      else inMemFlags[k] = { flag, ts: Date.now() };
+      try { await merlin.setArchiveFlag(k, flag); }
+      catch {}
+    },
+    onTrash: async (k, vItem) => {
+      const ref = window._archiveItemsByKey.get('folder:' + k)
+        || window._archiveItemsByKey.get('path:' + k);
+      const targets = ref && ref.card
+        ? resolveArchiveDeleteTargets(ref.card)
+        : (k ? [k] : []);
+      if (targets.length === 0) return { success: false };
+      const result = await merlin.deleteFile(targets.length > 1 ? targets : targets[0]);
+      if (result && result.success) {
+        showCopyToast('Moved to Trash');
+        if (ref && ref.card) { try { ref.card.style.opacity = '0'; setTimeout(() => ref.card.remove(), 250); } catch {} }
+      } else {
+        showCopyToast('Trash failed');
+      }
+      return result || { success: false };
+    },
+  });
+}
+
+// Live archive invalidation: when the watcher in the main process detects
+// a fresh run folder, an external file drop, or a bulk trash, refresh the
+// panel without losing focus or scroll position.
+if (typeof merlin.onArchiveChanged === 'function') {
+  merlin.onArchiveChanged(() => {
+    const panel = document.getElementById('archive-panel');
+    if (!panel || panel.classList.contains('hidden')) return;
+    loadArchive();
+  });
+}
+
+// Legacy entry point — used by the swipe-pairing flow and by archive cards
+// in pairing mode. Emulates "click to toggle" semantics by routing through
+// the model with ctrlKey, which preserves the existing selection so the
+// user can still pick a competitor + their own creative for the Merge
+// flow. The model's onChange listener updates `.archive-selected` classes
+// + window._archiveSelected + the Merge button — no manual bookkeeping.
+function toggleArchiveSelect(card, item) {
+  if (!__archiveModel) return;
+  const key = __archiveCardKey(item, card);
+  if (!key) return;
+  if (!window._archiveItemsByKey.has(key)) {
+    window._archiveItemsByKey.set(key, { card, item });
+    const order = Array.from(window._archiveItemsByKey.keys());
+    __archiveModel.syncOrder(order);
+  }
+  __archiveModel.click(key, { ctrlKey: true });
 }
 
 function updateMergeButton() {
@@ -9160,23 +9503,53 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Escape key closes the archive panel when no modal/preview/context-menu is
-// already intercepting the key. Previews and context menus register their
-// own Escape handlers and call stopPropagation, so this only fires when the
-// archive is the front-most dismissible surface.
+// Archive keyboard shortcuts:
+//   - Esc with selection > 0 → clear selection (don't close the panel — the
+//     selection is the foreground state).
+//   - Esc with no selection   → close the panel (legacy behavior).
+//   - Delete / Backspace      → trash the current selection (with confirm).
+//   - Ctrl-A / Cmd-A          → select every visible card.
+// Each shortcut bails when a modal / preview / context menu / overlay is
+// open or when typing in an input outside the archive panel.
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape') return;
   const panel = document.getElementById('archive-panel');
   if (!panel || panel.classList.contains('hidden')) return;
+  if (document.querySelector('.gv-viewer')) return; // viewer owns its own keys
   if (document.querySelector('.archive-preview')) return;
   if (document.querySelector('.merlin-context-menu')) return;
   if (document.querySelector('.overlay:not(.hidden)')) return;
   const active = document.activeElement;
-  if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') && !panel.contains(active)) return;
-  panel.classList.remove('expanded');
-  const expandBtn = document.getElementById('archive-expand');
-  if (expandBtn) expandBtn.textContent = '←';
-  panel.classList.add('hidden');
+  const typingOutsidePanel = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') && !panel.contains(active);
+  if (typingOutsidePanel) return;
+  // Allow typing inside the archive search box without consuming shortcuts.
+  const typingInSearch = active && active.id === 'archive-search';
+
+  if (e.key === 'Escape') {
+    if (__archiveModel && __archiveModel.size() > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      __archiveModel.clear();
+      return;
+    }
+    panel.classList.remove('expanded');
+    const expandBtn = document.getElementById('archive-expand');
+    if (expandBtn) expandBtn.textContent = '←';
+    panel.classList.add('hidden');
+    return;
+  }
+  if (typingInSearch) return;
+  if ((e.key === 'Delete' || e.key === 'Backspace') && __archiveModel && __archiveModel.size() > 0) {
+    e.preventDefault();
+    e.stopPropagation();
+    __bulkTrashSelected();
+    return;
+  }
+  if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (__archiveModel) __archiveModel.selectAll();
+    return;
+  }
 });
 
 // ── Trial Expired ──────────────────────────────────────────

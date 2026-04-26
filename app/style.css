@@ -1,5 +1,36 @@
 /* ── Reset & Base ─────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
+
+/* ── Global focus-ring policy ─────────────────────────────────
+   Chromium-Electron paints a chunky orange/yellow outline on click-focus
+   by default, which is jarring against the dark UI (and the lavender
+   light theme). Suppress click-focus rings universally and keep the
+   keyboard-only :focus-visible ring tasteful + on-brand via the accent
+   variable. Individual components can still opt-in to a stronger ring
+   by overriding :focus-visible locally (the gallery stack, the chat
+   input, etc. already do this). */
+button:focus,
+a:focus,
+[role="button"]:focus,
+[tabindex]:focus,
+input:focus,
+textarea:focus,
+select:focus,
+summary:focus{
+  outline:none;
+}
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible{
+  outline:2px solid var(--accent, #a78bfa);
+  outline-offset:2px;
+  border-radius:6px;
+}
 :root{
   --bg:#1a1a1c;
   --bg-deep:#141416;
@@ -2831,3 +2862,365 @@ body.platform-mac .titlebar-drag{
 .platform-reddit { background:rgba(255,69,0,.12); color:#FF4500; }
 .platform-linkedin { background:rgba(10,102,194,.15); color:#0a66c2; }
 .platform-snapchat { background:rgba(255,252,0,.15); color:#fffc00; }
+
+/* ── Collapsed gallery stack (chat) ─────────────────────────────
+   Replaces the open .merlin-gallery-grid with a fanned stack of 1–4
+   cards. Click anywhere on the stack opens the shared full-screen
+   viewer over the entire batch. The .merlin-gallery shell + header
+   above this stack is unchanged so Claude's prose echo still sees
+   the structured "N images generated" summary. */
+.merlin-gallery-stack{
+  position:relative;
+  height:240px;
+  margin:6px auto 4px;
+  max-width:360px;
+  cursor:zoom-in;
+  outline:none;
+  perspective:900px;
+}
+.merlin-gallery-stack:focus-visible{
+  outline:2px solid var(--accent, #7c5cff);
+  outline-offset:6px;
+  border-radius:14px;
+}
+.merlin-stack-card{
+  position:absolute;
+  inset:0;
+  border-radius:14px;
+  overflow:hidden;
+  background:var(--bg, #0b0d12);
+  border:1px solid var(--border, rgba(255,255,255,.06));
+  box-shadow:0 8px 22px var(--shadow-md, rgba(0,0,0,.4));
+  transform-origin:bottom center;
+  transition:transform .25s cubic-bezier(.2,.8,.2,1), box-shadow .25s ease;
+}
+/* Stagger the cards so the back of the stack is visible. The top card
+   stays crisp; the back cards rotate + lift slightly to fan out. */
+.merlin-stack-card:nth-child(1){ transform:rotate(-1.5deg) translateY(0); z-index:4; }
+.merlin-stack-card:nth-child(2){ transform:rotate(2deg) translate(8px, 4px) scale(.97); z-index:3; opacity:.95; filter:saturate(.95); }
+.merlin-stack-card:nth-child(3){ transform:rotate(-3deg) translate(-12px, 8px) scale(.94); z-index:2; opacity:.85; filter:saturate(.9) blur(.4px); }
+.merlin-stack-card:nth-child(4){ transform:rotate(4deg) translate(16px, 14px) scale(.92); z-index:1; opacity:.75; filter:saturate(.85) blur(.6px); }
+.merlin-gallery-stack:hover .merlin-stack-card:nth-child(1){ transform:rotate(-2deg) translateY(-4px); box-shadow:0 14px 32px var(--shadow-lg, rgba(0,0,0,.5)); }
+.merlin-gallery-stack:hover .merlin-stack-card:nth-child(2){ transform:rotate(3deg) translate(14px, 0) scale(.98); }
+.merlin-gallery-stack:hover .merlin-stack-card:nth-child(3){ transform:rotate(-5deg) translate(-20px, 4px) scale(.96); }
+.merlin-gallery-stack:hover .merlin-stack-card:nth-child(4){ transform:rotate(7deg) translate(26px, 8px) scale(.94); }
+.merlin-stack-card img,
+.merlin-stack-card video{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+.merlin-stack-placeholder{
+  width:100%;height:100%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:48px;color:var(--text-dim);
+  background:linear-gradient(135deg, rgba(124,92,255,.08), rgba(52,211,153,.05));
+}
+.merlin-stack-hint{
+  position:absolute;
+  left:50%;
+  bottom:-22px;
+  transform:translateX(-50%);
+  font-size:11px;
+  color:var(--text-dim);
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space:nowrap;
+  letter-spacing:.02em;
+  pointer-events:none;
+  opacity:.85;
+}
+.merlin-gallery[data-merlin-stacked="1"]{
+  /* When stacked, the gallery container needs more vertical room to fit
+     the fanned cards plus the hint below them without clipping. */
+  padding-bottom:32px;
+}
+
+/* ── Full-screen creative viewer (gv-*) ─────────────────────────
+   Used by both chat (mode='chat') and Archive (mode='archive'). The
+   viewer is a top-level overlay; everything inside is contained. */
+.gv-viewer{
+  position:fixed;
+  inset:0;
+  z-index:9998;
+  display:grid;
+  grid-template-rows:auto 1fr 100px;
+  background:var(--scrim, rgba(8,10,14,.92));
+  backdrop-filter:blur(28px);
+  -webkit-backdrop-filter:blur(28px);
+  animation:gv-in .22s cubic-bezier(.2,.8,.2,1);
+  outline:none;
+}
+@keyframes gv-in{
+  from{ opacity:0; transform:scale(.985); }
+  to{ opacity:1; transform:scale(1); }
+}
+.gv-toolbar{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  padding:14px 18px;
+  background:linear-gradient(to bottom, rgba(0,0,0,.45), rgba(0,0,0,0));
+  pointer-events:none;
+}
+.gv-toolbar > *{ pointer-events:auto; }
+.gv-counter{
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size:12px;
+  color:rgba(255,255,255,.7);
+  letter-spacing:.04em;
+  min-width:64px;
+}
+.gv-labels{ flex:1; min-width:0; }
+.gv-label{
+  font-size:14px;
+  color:#fff;
+  font-weight:600;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.gv-meta{
+  font-size:11px;
+  color:rgba(255,255,255,.55);
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-top:2px;
+}
+.gv-actions{
+  display:flex;
+  gap:8px;
+  /* Align so all four square buttons sit on the exact same baseline —
+     parent .gv-toolbar uses align-items:center, but flex items with
+     differing intrinsic heights (emoji glyphs vary) would otherwise
+     stretch. Forcing center here too eliminates the rounding drift. */
+  align-items:center;
+}
+.gv-action{
+  /* Hard-locked 36×36 hit region. Every action button — keep, reject,
+     trash, close — is the SAME bbox regardless of glyph (emoji vs ASCII
+     vs text). Without these constraints emoji metrics (esp. 🗑 on
+     Windows-Segoe-UI-Emoji) make the trash button render ~2px taller
+     than its neighbors and the row looks crooked. */
+  width:36px;
+  height:36px;
+  padding:0;
+  margin:0;
+  flex:0 0 36px;
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.12);
+  color:#fff;
+  border-radius:8px;
+  font-size:15px;
+  line-height:1;
+  font-family:inherit;
+  cursor:pointer;
+  transition:background .15s ease, border-color .15s ease, transform .1s ease;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  /* Kill the user-agent button text-shift on click that nudges glyphs
+     half a pixel down + adds an asymmetric hit target offset. */
+  -webkit-appearance:none;
+  appearance:none;
+  user-select:none;
+  -webkit-user-select:none;
+  /* Force every glyph (emoji + text) to render at the same advance width
+     so the centerpoint is consistent. */
+  text-align:center;
+  font-variant-emoji:text;
+}
+.gv-action:hover{ background:rgba(255,255,255,.16); border-color:rgba(255,255,255,.2); }
+.gv-action:active{ transform:scale(.94); }
+.gv-action.is-active{ background:rgba(124,92,255,.32); border-color:#7c5cff; color:#fff; }
+.gv-flag-keep.is-active{ background:rgba(52,211,153,.28); border-color:#34d399; }
+.gv-flag-reject.is-active{ background:rgba(239,68,68,.28); border-color:#ef4444; }
+.gv-trash:hover{ background:rgba(239,68,68,.2); border-color:#ef4444; }
+/* Close glyph (×) renders small at 15px; bump it to match the visual
+   weight of the other action buttons without changing the bbox. */
+.gv-close{ font-size:22px; }
+
+.gv-stage-wrap{
+  position:relative;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+}
+.gv-stage{
+  position:relative;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:100%;
+  height:100%;
+  cursor:zoom-out;
+}
+.gv-stage > .gv-media{
+  max-width:92vw;
+  max-height:78vh;
+  object-fit:contain;
+  border-radius:14px;
+  box-shadow:0 30px 80px rgba(0,0,0,.7);
+  cursor:default;
+  background:#000;
+}
+.gv-stage > video.gv-media,
+.gv-stage > audio.gv-media{ background:#000; }
+.gv-stage > audio.gv-media{ width:480px; height:auto; max-height:80px; }
+
+.gv-arrow{
+  position:absolute;
+  top:50%;
+  transform:translateY(-50%);
+  width:48px;
+  height:80px;
+  background:rgba(0,0,0,.35);
+  border:1px solid rgba(255,255,255,.12);
+  color:#fff;
+  font-size:32px;
+  line-height:1;
+  cursor:pointer;
+  border-radius:12px;
+  transition:background .15s ease, transform .15s ease;
+  z-index:2;
+  font-family:inherit;
+}
+.gv-arrow-prev{ left:18px; }
+.gv-arrow-next{ right:18px; }
+.gv-arrow:hover{ background:rgba(124,92,255,.35); transform:translateY(-50%) scale(1.04); }
+
+.gv-qa-badge{
+  position:absolute;
+  top:24px;
+  right:24px;
+  background:rgba(239,68,68,.92);
+  color:#fff;
+  padding:6px 12px;
+  font-size:11px;
+  font-weight:600;
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing:.04em;
+  border-radius:6px;
+  z-index:3;
+  box-shadow:0 6px 14px rgba(239,68,68,.4);
+}
+
+.gv-strip{
+  position:relative;
+  overflow-x:auto;
+  overflow-y:hidden;
+  padding:8px 0 8px;
+  background:rgba(0,0,0,.4);
+  border-top:1px solid rgba(255,255,255,.06);
+  /* Hide the OS scrollbar — the filmstrip is navigated by click / arrow /
+     swipe / drag. The Chromium-default scrollbar (chunky gray bar with
+     arrow buttons on Windows) breaks the dark viewer aesthetic. */
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+.gv-strip::-webkit-scrollbar{ height:0; width:0; display:none; }
+.gv-strip::-webkit-scrollbar-track,
+.gv-strip::-webkit-scrollbar-thumb,
+.gv-strip::-webkit-scrollbar-button{ display:none; }
+.gv-strip-inner{
+  position:relative;
+  height:80px;
+}
+.gv-thumb{
+  position:absolute;
+  top:0;
+  height:80px;
+  padding:0;
+  background:rgba(255,255,255,.04);
+  border:2px solid transparent;
+  border-radius:6px;
+  overflow:hidden;
+  cursor:pointer;
+  transition:border-color .15s ease, transform .12s ease;
+  display:block;
+}
+.gv-thumb img,
+.gv-thumb video{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+.gv-thumb-placeholder{
+  width:100%;height:100%;
+  display:flex;align-items:center;justify-content:center;
+  color:rgba(255,255,255,.4);
+  font-size:24px;
+}
+.gv-thumb:hover{ border-color:rgba(255,255,255,.3); transform:scale(1.04); }
+.gv-thumb.is-current{ border-color:#7c5cff; box-shadow:0 0 0 2px rgba(124,92,255,.3); }
+.gv-thumb.is-keep{ border-color:#34d399; }
+.gv-thumb.is-reject{ border-color:#ef4444; opacity:.55; }
+.gv-thumb.is-keep.is-current{ box-shadow:0 0 0 2px rgba(52,211,153,.4); }
+.gv-thumb.is-reject.is-current{ box-shadow:0 0 0 2px rgba(239,68,68,.4); }
+
+/* ── Archive bulk-cull selection toolbar ────────────────────────
+   Sits above the archive grid whenever the multi-select model has
+   items selected. Hidden via .hidden when size is 0. */
+.archive-selection-toolbar{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 10px;
+  margin:0 0 6px;
+  background:linear-gradient(135deg, rgba(124,92,255,.12), rgba(52,211,153,.06));
+  border:1px solid rgba(124,92,255,.22);
+  border-radius:10px;
+  flex-wrap:wrap;
+}
+.archive-selection-toolbar.hidden{ display:none; }
+.archive-selection-toolbar .asb-count{
+  font-size:12px;
+  font-weight:600;
+  color:var(--text);
+  flex:1;
+  min-width:80px;
+}
+.archive-selection-toolbar .asb-btn{
+  background:var(--bg);
+  border:1px solid var(--border);
+  color:var(--text);
+  padding:5px 10px;
+  font-size:11px;
+  border-radius:6px;
+  cursor:pointer;
+  font-family:inherit;
+  transition:background .15s ease, border-color .15s ease;
+}
+.archive-selection-toolbar .asb-btn:hover{
+  background:var(--hover-8);
+  border-color:var(--accent);
+}
+.archive-selection-toolbar .asb-btn.asb-trash{
+  background:rgba(239,68,68,.08);
+  border-color:rgba(239,68,68,.3);
+  color:#ef4444;
+}
+.archive-selection-toolbar .asb-btn.asb-trash:hover{
+  background:rgba(239,68,68,.18);
+  border-color:#ef4444;
+}
+
+/* Selection visual on individual cards — both swipe-cards and archive-cards
+   respect this. Border + glow + light tint so the selected cards stand out
+   against an otherwise dense grid. */
+.archive-card.archive-selected,
+.swipe-card.archive-selected{
+  border-color:#7c5cff !important;
+  box-shadow:0 0 0 2px rgba(124,92,255,.3), 0 8px 16px rgba(124,92,255,.12);
+}
+
+/* ── Light-mode tweaks for the viewer ───────────────────────────
+   The viewer's dark scrim works fine over the light theme too, but the
+   filmstrip thumbs need a slightly lighter unselected state so currents
+   still pop. */
+.theme-light .gv-thumb{ background:rgba(0,0,0,.08); }
+.theme-light .gv-thumb-placeholder{ color:rgba(0,0,0,.4); }
+.theme-light .archive-selection-toolbar{
+  background:linear-gradient(135deg, rgba(124,92,255,.08), rgba(52,211,153,.04));
+}
