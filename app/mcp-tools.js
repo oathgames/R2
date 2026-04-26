@@ -1397,6 +1397,54 @@ function buildTools(tool, z, ctx) {
     },
   }, tool, z, ctx));
 
+  // ── brand_activate ───────────────────────────────────────
+  //
+  // Atomically promote a freshly-scaffolded brand to the active brand. Called
+  // by the merlin-setup skill the instant `brand.md` exists, so the rest of
+  // the onboarding conversation (scheduled-task creation, the WOW summary)
+  // is associated with the new brand thread. The host updates `.merlin-state`
+  // and fires a `brand-activated` IPC event that the renderer uses to refresh
+  // its dropdown / connections / spells / perf bar — WITHOUT restarting the
+  // SDK session (the current turn is the setup turn) and WITHOUT repainting
+  // chat (the user is watching the setup conversation; tearing it down to
+  // load an empty new-brand thread mid-onboarding would be terrible UX).
+  tools.push(defineTool({
+    name: 'brand_activate',
+    description: 'Promote a brand to active immediately after writing assets/brands/<brand>/brand.md. Updates the dropdown selector and refreshes connections / spells / perf bar. Idempotent — calling with the already-active brand is a no-op. Call ONCE per onboarding, after brand.md is written and before scheduled-task creation.',
+    destructive: false,
+    idempotent: true,
+    costImpact: 'none',
+    brandRequired: false,
+    input: {
+      brand: z.string().regex(BRAND_NAME_PATTERN).describe('Brand folder name under assets/brands/ (lowercase, alphanumeric + hyphen/underscore)'),
+    },
+    handler: async ({ brand }) => {
+      if (typeof ctx.activateBrand !== 'function') {
+        return envelope.fail(errors.makeError('INTERNAL_ERROR', {
+          message: 'host did not wire ctx.activateBrand — brand_activate is unavailable in this build',
+        }));
+      }
+      const result = ctx.activateBrand(brand);
+      if (!result || result.ok !== true) {
+        const rawCode = (result && result.code) || 'INTERNAL_ERROR';
+        // The host returns VALIDATION for malformed slugs; the canonical code
+        // table calls that INVALID_INPUT. BRAND_MISSING and INTERNAL_ERROR
+        // pass through unchanged.
+        const code = rawCode === 'VALIDATION' ? 'INVALID_INPUT' : rawCode;
+        return envelope.fail(errors.makeError(code, {
+          message: (result && result.message) || 'brand activation failed',
+        }));
+      }
+      return {
+        summary: result.previousBrand && result.previousBrand !== brand
+          ? `Activated brand "${brand}" (was "${result.previousBrand}")`
+          : `Activated brand "${brand}"`,
+        brand,
+        previousBrand: result.previousBrand || '',
+      };
+    },
+  }, tool, z, ctx));
+
   // ── decisions ────────────────────────────────────────────
   tools.push(defineTool({
     name: 'decisions',

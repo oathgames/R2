@@ -2156,6 +2156,16 @@ async function handleToolApproval(toolName, input) {
     return { behavior: 'allow', updatedInput: input };
   }
 
+  // ── Scheduled-tasks MCP server — always auto-approve ──
+  // Spell creation / update / list / delete are gated UI-side: the user
+  // already clicked "+ New Brand" or toggled a row in the ✦ Spellbook. Forcing
+  // an approval card on every create_scheduled_task call adds 4 cards to brand
+  // onboarding (one per spell) and turns sub-30s setup into a multi-minute
+  // click-through. Spells are sandboxed (run as scheduled prompts inside
+  // Merlin's own permission boundary) — no fresh authorization is needed.
+  if (toolName.startsWith('mcp__scheduled-tasks__')) {
+    return { behavior: 'allow', updatedInput: input };
+  }
 
   // ── MCP Merlin tools — auto-approve read-only, gate spend actions ──
   if (toolName.startsWith('mcp__merlin__')) {
@@ -2608,6 +2618,40 @@ async function startSession(brandOverride) {
           if (!win || win.isDestroyed() || !win.webContents) return;
           win.webContents.send('mcp-progress', payload);
         } catch (_) { /* telemetry path — never let an emit crash a tool call */ }
+      },
+      // Atomic brand activation — used by the merlin-setup skill IMMEDIATELY
+      // after writing brand.md so the rest of the onboarding conversation
+      // (autopilot spell creation, the WOW summary) is associated with the
+      // new brand thread. Unlike switch-brand IPC, this does NOT abort the
+      // current SDK turn or restart the session: the active turn is owned by
+      // setup itself, restarting mid-flight would orphan it. Future bubbles
+      // append to the new brand's thread (see appendBubble call sites that
+      // read activeBrand from state). The renderer refreshes its dropdown +
+      // peripherals via the brand-activated event without repainting chat.
+      activateBrand: (brand) => {
+        if (typeof brand !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(brand)) {
+          return { ok: false, code: 'VALIDATION', message: 'invalid brand format' };
+        }
+        const brandDir = path.join(appRoot, 'assets', 'brands', brand);
+        try {
+          if (!fs.statSync(brandDir).isDirectory()) {
+            return { ok: false, code: 'BRAND_MISSING', message: `assets/brands/${brand} does not exist` };
+          }
+        } catch {
+          return { ok: false, code: 'BRAND_MISSING', message: `assets/brands/${brand} does not exist` };
+        }
+        let prevBrand = '';
+        try { prevBrand = readState().activeBrand || ''; } catch {}
+        try { writeState({ activeBrand: brand }); } catch (e) {
+          return { ok: false, code: 'INTERNAL_ERROR', message: `state write failed: ${e.message}` };
+        }
+        try { threads.touch(appRoot, brand); } catch {}
+        try {
+          if (win && !win.isDestroyed() && win.webContents) {
+            win.webContents.send('brand-activated', { brand, previousBrand: prevBrand });
+          }
+        } catch {}
+        return { ok: true, brand, previousBrand: prevBrand };
       },
     };
     const merlinMcp = await createMerlinMcpServer(mcpCtx);
@@ -7664,12 +7708,26 @@ ipcMain.handle('get-brands', () => {
           if (statusMatch) status = statusMatch[1].toLowerCase();
           const h1Match = content.match(/^#\s+(.+)$/m);
           if (h1Match) {
-            displayName = h1Match[1].trim()
-              // Strip common prefixes Claude adds to brand.md headings
-              .replace(/^Brand\s*Profile\s*[-—:]\s*/i, '')
-              .replace(/^Brand\s*[-—:]\s*/i, '')
+            // The H1 in brand.md is freeform — Claude has historically written
+            // "# POG", "# POG — Brand Guide", "# Brand Profile — POG",
+            // "# POG: Brand Guide", "# POG — Memory" depending on which skill
+            // ran. The dropdown selector should show the bare brand name. Strip
+            // both prefixes AND suffixes around any em-dash / en-dash / hyphen
+            // / colon separator, then collapse whitespace. If the result is
+            // empty (pathological "# — Brand Guide"), fall back to the folder
+            // name title-cased below.
+            displayName = h1Match[1]
+              .trim()
+              .replace(/^Brand\s*Profile\s*[-—–:]\s*/i, '')
+              .replace(/^Brand\s*[-—–:]\s*/i, '')
+              .replace(/\s*[-—–:]\s*Brand\s*Guide\s*$/i, '')
+              .replace(/\s*[-—–:]\s*Brand\s*Profile\s*$/i, '')
+              .replace(/\s*[-—–:]\s*Memory\s*$/i, '')
+              .replace(/\s*[-—–:]\s*(?:Style|Identity|Voice|Playbook)\s*Guide\s*$/i, '')
+              .replace(/\s+/g, ' ')
               .trim();
-          } else {
+          }
+          if (!displayName || displayName === d.name) {
             const fieldMatch = content.match(/^(?:Brand|Name)[:\s]+["']?([^\n"']+)/im);
             if (fieldMatch) displayName = fieldMatch[1].trim();
           }

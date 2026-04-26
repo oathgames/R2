@@ -7225,6 +7225,46 @@ setInterval(async () => {
   } catch {}
 }, 4 * 60 * 60 * 1000); // every 4 hours
 
+// ── brand-activated: mid-onboarding atomic switch ────────────────
+//
+// Fires from the host the moment the merlin-setup skill calls the
+// `brand_activate` MCP tool (immediately after writing brand.md). Unlike
+// the dropdown-driven switch-brand flow, this does NOT abort the running
+// SDK turn (the active turn IS the setup turn — interrupting it would
+// orphan the WOW summary + autopilot creation) and does NOT repaint chat
+// (the user is watching setup unfold; a chat wipe mid-stream is jarring).
+//
+// All we need to do: refresh the dropdown to show the new brand, advance
+// `lastValue` so a later user-driven switch computes the right `prevBrand`,
+// then refetch the peripherals (vertical chip, connections tiles, spells
+// list, perf bar) which all read from active-brand state. loadBrands()
+// rebuilds the option list (the freshly-scaffolded brand wasn't there at
+// startup, so we can't just set `select.value`).
+if (merlin && typeof merlin.onBrandActivated === 'function') {
+  merlin.onBrandActivated(({ brand }) => {
+    if (!brand) return;
+    loadBrands().then(() => {
+      const select = document.getElementById('brand-select');
+      if (select) {
+        select.value = brand;
+        select.dataset.lastValue = brand;
+      }
+      // Vertical chip — read fresh from get-brands so the just-written
+      // brand.md vertical lands in the chip without a race against the
+      // host's filesystem write.
+      merlin.getBrands().then((brands) => {
+        const b = brands.find(x => x.name === brand);
+        updateVertical(b?.vertical || '');
+      }).catch(() => {});
+      loadConnections();
+      loadSpells();
+      const activePeriod = document.querySelector('.perf-period-btn.active')?.dataset.days || '7';
+      renderPerfBarSkeleton();
+      loadPerfBar(parseInt(activePeriod) || 7, brand);
+    }).catch((err) => { console.warn('[brand-activated]', err); });
+  });
+}
+
 // Period selector buttons
 document.querySelectorAll('.perf-period-btn').forEach(btn => {
   btn.addEventListener('click', (e) => {

@@ -271,6 +271,15 @@ contextBridge.exposeInMainWorld('merlin', {
     const h = (_, data) => cb(data); ipcRenderer.on('brand-switched', h);
     return () => ipcRenderer.removeListener('brand-switched', h);
   },
+  // brand-activated fires the moment the merlin-setup skill calls the
+  // brand_activate MCP tool — used during onboarding to swap the dropdown
+  // to the freshly-scaffolded brand without restarting the SDK session
+  // (the active turn IS the setup turn) or repainting chat (the user is
+  // watching the WOW moment unfold).
+  onBrandActivated: (cb) => {
+    const h = (_, data) => cb(data); ipcRenderer.on('brand-activated', h);
+    return () => ipcRenderer.removeListener('brand-activated', h);
+  },
   onApprovalRequest: (cb) => {
     const h = (_, data) => cb(data); ipcRenderer.on('approval-request', h);
     return () => ipcRenderer.removeListener('approval-request', h);
