@@ -22,6 +22,16 @@ build.ps1
 .claude/tools/AutoCMO*
 !.claude/tools/merlin-config.example.json
 
+# Runtime fact-binding session artifacts (Security Rule 12). The HMAC
+# key + signed envelope log are per-session and MUST NOT reach git —
+# they contain keys/signatures derived from the user's vault state.
+.claude/tools/.merlin-facts-key.*
+.claude/tools/.merlin-facts.*
+.claude/tools/.merlin-vault*
+.claude/tools/.merlin-ratelimit*
+.claude/tools/.merlin-audit*
+.merlin-ref-claim-attempted
+
 # Output
 results/
 
