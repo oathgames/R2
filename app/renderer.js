@@ -3137,7 +3137,7 @@ const VERTICAL_PROFILES = {
     primaryKPI: 'revenue',
     defaultRevenueConnector: 'shopify',
     hasShoppableCatalog: true,
-    integrations: ['meta','tiktok','shopify','stripe','klaviyo','google','pinterest','amazon','reddit','etsy','snapchat','twitter','linkedin', ...BASE_CREATIVE_TOOLS],
+    integrations: ['meta','tiktok','shopify','stripe','klaviyo','postscript','google','pinterest','amazon','reddit','etsy','snapchat','twitter','linkedin', ...BASE_CREATIVE_TOOLS],
   },
   saas: {
     key: 'saas',
@@ -3159,7 +3159,7 @@ const VERTICAL_PROFILES = {
     primaryKPI: 'installs',
     defaultRevenueConnector: 'stripe',
     hasShoppableCatalog: false,
-    integrations: ['meta','tiktok','google','stripe','reddit','snapchat','twitter', ...BASE_CREATIVE_TOOLS],
+    integrations: ['meta','tiktok','google','applovin','stripe','reddit','snapchat','twitter', ...BASE_CREATIVE_TOOLS],
   },
   creator: {
     key: 'creator',
@@ -3170,7 +3170,7 @@ const VERTICAL_PROFILES = {
     primaryKPI: 'enrollments',
     defaultRevenueConnector: 'stripe',
     hasShoppableCatalog: false,
-    integrations: ['meta','tiktok','google','twitter','reddit','klaviyo','stripe', ...BASE_CREATIVE_TOOLS],
+    integrations: ['meta','tiktok','google','twitter','reddit','klaviyo','postscript','stripe', ...BASE_CREATIVE_TOOLS],
   },
   local: {
     key: 'local',
