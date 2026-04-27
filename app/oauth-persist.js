@@ -49,6 +49,13 @@ const VAULT_SENSITIVE_KEYS = [
   // in CONFIG_FIELD_ALLOWLIST but previously missing here, so every paste
   // landed on disk in plaintext.
   'foreplayApiKey',
+  // TrendTrack ecommerce-intelligence API key (Bearer token, shipped
+  // v1.18.11). Same sensitivity profile as Foreplay — workspace-scope
+  // key with a monthly credit budget; if the key leaks the attacker
+  // can drain credits or scrape data on the user's dime. Universal
+  // scope (one key per user, applies to every brand). Stored under
+  // _global/trendtrackApiKey in the vault.
+  'trendtrackApiKey',
   // Postscript SMS marketing API key (BYOK tile, shipped v1.18.0).
   // REGRESSION GUARD (2026-04-27, postscript-save-broken incident): the
   // initial v1.18.0 ship added 'postscript' to renderer.js
@@ -89,7 +96,7 @@ const CONFIG_FIELD_ALLOWLIST = new Set([
   'amazonAccessToken', 'amazonRefreshToken', 'amazonProfileId', 'amazonSellerId',
   'klaviyoAccessToken', 'klaviyoApiKey',
   'pinterestAccessToken', 'pinterestRefreshToken',
-  'falApiKey', 'elevenLabsApiKey', 'heygenApiKey', 'arcadsApiKey', 'foreplayApiKey',
+  'falApiKey', 'elevenLabsApiKey', 'heygenApiKey', 'arcadsApiKey', 'foreplayApiKey', 'trendtrackApiKey',
   // Postscript + AppLovin BYOK API keys. Shipped in v1.18.0 but the
   // allowlist update was missed — see VAULT_SENSITIVE_KEYS comment block
   // above for the full incident writeup. Without these entries the
