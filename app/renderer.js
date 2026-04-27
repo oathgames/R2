@@ -4317,7 +4317,13 @@ document.getElementById('stats-share').addEventListener('click', async () => {
 // to surface a hint in the tile tooltip so users know the escape hatch
 // exists. The canonical list is MANUAL_KEY_HANDLERS (defined below); this
 // Set must stay in sync. Kept as a Set for O(1) lookup in loadConnections.
-const MANUAL_KEY_PLATFORMS = new Set(['meta', 'shopify']);
+// Platforms whose tooltip hints at the right-click "Use my API key" affordance.
+// MUST be a subset of (or equal to) MANUAL_KEY_HANDLERS keys — drift means
+// users with a working manual-key path don't get the tooltip nudge to
+// discover it. AppLovin shipped its right-click two-input modal in v1.18.0
+// but was missing from this set, so its tile tooltip never mentioned the
+// escape hatch. Source-scan test enforces parity with MANUAL_KEY_HANDLERS.
+const MANUAL_KEY_PLATFORMS = new Set(['meta', 'shopify', 'applovin']);
 
 // REGRESSION GUARD (2026-04-26):
 // Single source of truth for "is this tile a stub / Coming Soon platform?"
@@ -4505,7 +4511,16 @@ document.addEventListener('click', (e) => {
 });
 
 // Connect platform tiles — ALL connections handled directly in UI, zero chat involvement
-const OAUTH_PLATFORMS = new Set(['meta', 'tiktok', 'shopify', 'google', 'amazon', 'pinterest', 'klaviyo', 'slack', 'discord', 'etsy', 'reddit', 'stripe']);
+// REGRESSION GUARD (2026-04-27, RSI integration audit): every platform
+// whose OAuth flow is registered in autocmo-core/oauth.go MUST be in
+// this Set, otherwise the tile click handler at the bottom of this
+// section falls through to API_KEY_PLATFORMS lookup; if the platform
+// isn't there either, the click is a silent no-op. LinkedIn shipped
+// with a complete Go OAuth implementation but was missing here, so
+// users saw a "LinkedIn" tile that did nothing on click.
+// The new source-scan test in oauth-persist.test.js cross-checks
+// every connector_id in oauth-provider-config.js against this Set.
+const OAUTH_PLATFORMS = new Set(['meta', 'tiktok', 'shopify', 'google', 'amazon', 'pinterest', 'klaviyo', 'slack', 'discord', 'etsy', 'reddit', 'stripe', 'linkedin', 'threads']);
 const API_KEY_PLATFORMS = {
   fal:        { key: 'falApiKey', label: 'fal.ai', placeholder: 'fal-xxxx...', url: 'https://fal.ai/dashboard/keys' },
   elevenlabs: { key: 'elevenLabsApiKey', label: 'ElevenLabs', placeholder: 'xi_xxxx...', url: 'https://elevenlabs.io/app/settings/api-keys' },

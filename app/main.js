@@ -7697,6 +7697,17 @@ ipcMain.handle('disconnect-platform', (_, platform, brandName) => {
       amazon: ['amazonAccessToken', 'amazonRefreshToken', 'amazonProfileId'],
       etsy: ['etsyAccessToken', 'etsyRefreshToken', 'etsyShopId', 'etsyKeystring'],
       reddit: ['redditAccessToken', 'redditRefreshToken', 'redditAdAccountId'],
+      // LinkedIn was missing for v1.18.0–v1.18.9: OAuth registered in Go
+      // but no disconnect path on the Electron side. RSI integration
+      // audit caught it (2026-04-27). Cross-checked by the new
+      // `every OAUTH_PLATFORMS entry has a disconnect keyMap` test in
+      // oauth-persist.test.js.
+      linkedin: ['linkedinAccessToken', 'linkedinRefreshToken', 'linkedinAdAccountId'],
+      // Threads inherits from the Meta OAuth grant — disconnecting Meta
+      // also clears threadsAccessToken. This entry exists so a
+      // standalone Threads disconnect (when/if Threads gets its own
+      // OAuth grant) wipes correctly without cross-impact on Meta.
+      threads: ['threadsAccessToken'],
       slack: ['slackBotToken', 'slackWebhookUrl', 'slackChannel'],
       discord: ['discordGuildId', 'discordChannelId'],
       fal: ['falApiKey'],

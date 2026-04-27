@@ -268,5 +268,110 @@ test('Postscript + AppLovin tile keys are in both allowlist and vault list', () 
   }
 });
 
+// ── OAUTH_PLATFORMS / keyMap / MANUAL_KEY_PLATFORMS source-scan guards ──
+//
+// REGRESSION GUARD (2026-04-27, RSI integration audit). Three drift bugs
+// found across 25 connectors:
+//   1. LinkedIn shipped a complete Go OAuth flow but was missing from
+//      renderer.js's OAUTH_PLATFORMS Set, so the tile click was a silent
+//      no-op for v1.18.0–v1.18.9.
+//   2. LinkedIn was also missing from disconnect-platform's keyMap in
+//      main.js — even after fixing #1, users would have no way to
+//      disconnect.
+//   3. AppLovin was in MANUAL_KEY_HANDLERS (right-click → modal works)
+//      but missing from MANUAL_KEY_PLATFORMS (the set that drives the
+//      tooltip hint "right-click to paste a token") — no affordance to
+//      discover the manual-key path.
+
+const fsRsi = require('fs');
+const pathRsi = require('path');
+
+function _readSrc(file) {
+  return fsRsi.readFileSync(pathRsi.join(__dirname, file), 'utf8');
+}
+
+function _extractStringSet(src, declaration) {
+  const idx = src.indexOf(declaration);
+  if (idx < 0) return null;
+  const open = src.indexOf('[', idx);
+  const close = src.indexOf(']', open);
+  if (open < 0 || close < 0) return null;
+  const block = src.slice(open, close + 1);
+  return new Set((block.match(/'([^']+)'/g) || []).map(s => s.slice(1, -1)));
+}
+
+function _extractObjectKeys(src, declaration) {
+  const idx = src.indexOf(declaration);
+  if (idx < 0) return null;
+  const open = src.indexOf('{', idx);
+  if (open < 0) return null;
+  let depth = 0, end = -1;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (end < 0) return null;
+  const block = src.slice(open, end + 1);
+  const matches = block.match(/(?:^|\n)\s+([a-zA-Z][a-zA-Z0-9_]*)\s*:/g) || [];
+  return new Set(matches.map(m => m.replace(/^\n?\s+/, '').replace(/\s*:$/, '')));
+}
+
+test('every OAUTH_PLATFORMS entry has a disconnect keyMap entry in main.js', () => {
+  const renderer = _readSrc('renderer.js');
+  const main = _readSrc('main.js');
+  const oauthPlatforms = _extractStringSet(renderer, 'const OAUTH_PLATFORMS');
+  assert.ok(oauthPlatforms, 'OAUTH_PLATFORMS must be parseable from renderer.js');
+  const keyMapKeys = _extractObjectKeys(main, 'const keyMap');
+  assert.ok(keyMapKeys, 'keyMap must be parseable from main.js disconnect-platform handler');
+  const missing = [];
+  for (const platform of oauthPlatforms) {
+    if (!keyMapKeys.has(platform)) missing.push(platform);
+  }
+  assert.deepStrictEqual(missing, [],
+    `OAUTH_PLATFORMS contain platforms with no keyMap entry: ${missing.join(', ')}. ` +
+    `Users will not be able to disconnect these platforms. Add each to keyMap in ` +
+    `main.js's disconnect-platform handler.`);
+});
+
+test('every MANUAL_KEY_HANDLERS entry is also in MANUAL_KEY_PLATFORMS', () => {
+  const renderer = _readSrc('renderer.js');
+  const handlerKeys = _extractObjectKeys(renderer, 'const MANUAL_KEY_HANDLERS');
+  assert.ok(handlerKeys, 'MANUAL_KEY_HANDLERS must be parseable from renderer.js');
+  const tooltipSet = _extractStringSet(renderer, 'const MANUAL_KEY_PLATFORMS');
+  assert.ok(tooltipSet, 'MANUAL_KEY_PLATFORMS must be parseable from renderer.js');
+  const missing = [];
+  for (const platform of handlerKeys) {
+    if (!tooltipSet.has(platform)) missing.push(platform);
+  }
+  assert.deepStrictEqual(missing, [],
+    `MANUAL_KEY_HANDLERS entries missing from MANUAL_KEY_PLATFORMS tooltip set: ` +
+    `${missing.join(', ')}. Users will not see the "right-click to paste a token" ` +
+    `affordance on these tiles even though the handler works.`);
+});
+
+test('LinkedIn is in OAUTH_PLATFORMS, keyMap, and VAULT_SENSITIVE_KEYS', () => {
+  const renderer = _readSrc('renderer.js');
+  const main = _readSrc('main.js');
+  const oauthPlatforms = _extractStringSet(renderer, 'const OAUTH_PLATFORMS');
+  const keyMapKeys = _extractObjectKeys(main, 'const keyMap');
+  assert.ok(oauthPlatforms.has('linkedin'),
+    'linkedin must be in renderer.js OAUTH_PLATFORMS — without it, the LinkedIn tile click is a no-op');
+  assert.ok(keyMapKeys.has('linkedin'),
+    'linkedin must be in main.js disconnect-platform keyMap — without it, users cannot disconnect LinkedIn');
+  for (const k of ['linkedinAccessToken', 'linkedinRefreshToken']) {
+    assert.ok(VAULT_SENSITIVE_KEYS.includes(k), `${k} must be in VAULT_SENSITIVE_KEYS`);
+  }
+});
+
+test('AppLovin is in MANUAL_KEY_HANDLERS AND MANUAL_KEY_PLATFORMS', () => {
+  const renderer = _readSrc('renderer.js');
+  const handlerKeys = _extractObjectKeys(renderer, 'const MANUAL_KEY_HANDLERS');
+  const tooltipSet = _extractStringSet(renderer, 'const MANUAL_KEY_PLATFORMS');
+  assert.ok(handlerKeys.has('applovin'),
+    'applovin must be in MANUAL_KEY_HANDLERS — its v1.18.0 two-input modal needs a registered handler');
+  assert.ok(tooltipSet.has('applovin'),
+    'applovin must be in MANUAL_KEY_PLATFORMS — without it, the AppLovin tile tooltip never hints at the right-click escape hatch');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
