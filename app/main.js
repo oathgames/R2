@@ -6792,7 +6792,7 @@ const BRAND_KEYS = [
 // in disconnect-platform.
 const UNIVERSAL_KEYS = new Set([
   'falApiKey', 'elevenLabsApiKey', 'heygenApiKey', 'arcadsApiKey',
-  'foreplayApiKey', 'googleApiKey',
+  'foreplayApiKey', 'trendtrackApiKey', 'googleApiKey',
   'slackBotToken', 'slackWebhookUrl', 'slackChannel',
   'discordGuildId', 'discordChannelId', 'discordWebhookUrl',
 ]);
@@ -7628,6 +7628,7 @@ function getConnections(brandName) {
     if (globalCfg.heygenApiKey || vaultGet('_global', 'heygenApiKey')) connected.push({ platform: 'heygen', status: 'connected' });
     if (globalCfg.arcadsApiKey || vaultGet('_global', 'arcadsApiKey')) connected.push({ platform: 'arcads', status: 'connected' });
     if (globalCfg.foreplayApiKey || vaultGet('_global', 'foreplayApiKey')) connected.push({ platform: 'foreplay', status: 'connected' });
+    if (globalCfg.trendtrackApiKey || vaultGet('_global', 'trendtrackApiKey')) connected.push({ platform: 'trendtrack', status: 'connected' });
     // AppLovin: two independent reporting keys (MAX publisher, AppDiscovery
     // advertiser). Either one alone counts as connected — most users only have
     // one account type. Per-brand keys also supported for multi-entity users.
@@ -7715,6 +7716,7 @@ ipcMain.handle('disconnect-platform', (_, platform, brandName) => {
       heygen: ['heygenApiKey'],
       arcads: ['arcadsApiKey'],
       foreplay: ['foreplayApiKey'],
+      trendtrack: ['trendtrackApiKey'],
       applovin: ['applovinMaxReportKey', 'applovinAdReportKey'],
       postscript: ['postscriptApiKey'],
     };
@@ -7722,7 +7724,7 @@ ipcMain.handle('disconnect-platform', (_, platform, brandName) => {
     if (!keys) return { success: false, error: 'unknown platform' };
 
     // Keys that live in global config (not per-brand files)
-    const GLOBAL_KEYS_SET = new Set(['falApiKey', 'elevenLabsApiKey', 'heygenApiKey', 'foreplayApiKey', 'slackBotToken', 'slackWebhookUrl', 'slackChannel', 'discordGuildId', 'discordChannelId']);
+    const GLOBAL_KEYS_SET = new Set(['falApiKey', 'elevenLabsApiKey', 'heygenApiKey', 'foreplayApiKey', 'trendtrackApiKey', 'slackBotToken', 'slackWebhookUrl', 'slackChannel', 'discordGuildId', 'discordChannelId']);
     const isGlobalPlatform = keys.every(k => GLOBAL_KEYS_SET.has(k));
 
     // 1. Clear from global config (for global platforms + legacy single-brand setups)

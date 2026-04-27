@@ -4527,6 +4527,7 @@ const API_KEY_PLATFORMS = {
   heygen:     { key: 'heygenApiKey', label: 'HeyGen', placeholder: 'your-api-key', url: 'https://app.heygen.com/settings?nav=API' },
   arcads:     { key: 'arcadsApiKey', label: 'Arcads', placeholder: 'your-api-key', url: 'https://app.arcads.ai/settings' },
   foreplay:   { key: 'foreplayApiKey', label: 'Foreplay', placeholder: 'fp_xxxx...', url: 'https://app.foreplay.co/settings/api' },
+  trendtrack: { key: 'trendtrackApiKey', label: 'TrendTrack', placeholder: 'tt_xxxx...', url: 'https://app.trendtrack.io/workspace/settings/api' },
   postscript: { key: 'postscriptApiKey', label: 'Postscript', placeholder: 'sk_live_xxxx...', url: 'https://app.postscript.io/settings/api' },
   // AppLovin default tile click saves the MAX (publisher) key. Users who have
   // an AppDiscovery (advertiser) key instead — or both — can switch via the

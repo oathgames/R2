@@ -46,6 +46,13 @@ const BANNED_HOSTS = [
   // Direct curl/WebFetch would bypass the user's credit budget telemetry and
   // could leak the Bearer API key via shell history.
   'public.api.foreplay.co',
+  // TrendTrack — ecommerce intelligence (Shopify stores, ads, email
+  // library, brand tracker). Same threat model as Foreplay: credit-metered
+  // workspace API; direct curl bypasses the user's monthly credit budget
+  // and would leak the Bearer key into shell history. Every TrendTrack
+  // call MUST go through trendtrack.go's trendtrackRequest helper which
+  // wraps PreflightCheck.
+  'api.trendtrack.io',
   // AppLovin reporting (MAX publisher + AppDiscovery advertiser). The binary
   // enforces PreflightCheck against the shared rate-limit bucket; a direct
   // curl would bypass it and could trip AppLovin's server-side QPM guard.
