@@ -5364,8 +5364,14 @@ function buildSpellRow(spell, isActive) {
       toggle.disabled = false;
       toggle.textContent = prevText;
       toggle.className = prevClass;
-      const msg = (result && (result.error || result.reason))
-        ? result.error || result.reason
+      // Prefer result.error (always plain English from friendlyReason()
+      // at the IPC boundary). Never leak result.reason — those are
+      // stable technical codes ('not-found', 'lock-timeout', ...) that
+      // belong in logs, not in toasts. REGRESSION GUARD (2026-04-27):
+      // the old `result.error || result.reason` fallback would have
+      // leaked the raw code if a future IPC return omitted `error`.
+      const msg = (result && typeof result.error === 'string' && result.error)
+        ? result.error
         : 'Couldn\'t change the spell. Please try again.';
       showSpellToast(msg);
     }
@@ -5510,7 +5516,14 @@ async function activateSpell(template, row) {
         error: r && r.error,
       });
     } catch (err) {
-      results.push({ brand, ok: false, daemonOk: false, error: (err && err.message) || 'unknown' });
+      // REGRESSION GUARD (2026-04-27, spellbook-rsi):
+      // Never surface raw err.message to the user — that path leaks
+      // Electron internals + stack traces into the failure-display row
+      // and violates the friendlyError rule. Map every catch into a
+      // generic "couldn't reach the app" toast and log the raw detail
+      // to the console for support.
+      console.warn('[activateSpell] IPC error for brand', brand, err);
+      results.push({ brand, ok: false, daemonOk: false, error: 'Couldn\'t save the spell — try again.' });
     }
   }
 
