@@ -68,6 +68,18 @@ jobs:
       # session init (not a generic "Thinking" label).
       - name: sdk-chat-hang-fix lockdown
         run: node app/sdk-chat-hang-fix.test.js
+      # Silent token refresh — the second half of the v1.18.7 incident.
+      # The trigger for the "you must re-authenticate" prompt was a token
+      # expiry that should have been refreshed silently by the SDK against
+      # platform.claude.com/v1/oauth/token. Two regressions defeated it:
+      # an early-rejection of expired tokens in extractToken(), and env-
+      # injection of CLAUDE_CODE_OAUTH_TOKEN that forces the SDK off its
+      # file-reading code path (which is the only path that knows about
+      # the refresh token). Both are now locked down.
+      - name: silent token refresh — helper behavior
+        run: node app/auth-credentials.test.js
+      - name: silent token refresh — main wiring lockdown
+        run: node app/sdk-token-silent-refresh.test.js
       - name: ws-server listen-bind lockdown
         run: node app/ws-server.test.js
       - name: relay-client contract

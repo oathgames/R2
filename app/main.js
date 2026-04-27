@@ -708,29 +708,18 @@ function execCommand(cmd, timeout = 5000) {
 // launches are instant with zero interaction — matching the Windows experience.
 // The file is also re-written after each successful SDK session to keep it fresh.
 
-const CLAUDE_CRED_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
-
-function extractToken(raw) {
-  if (!raw || typeof raw !== 'string') return null;
-  try {
-    const creds = JSON.parse(raw);
-    // Handle both { claudeAiOauth: { accessToken } } and { accessToken } formats
-    const oauth = creds.claudeAiOauth || creds;
-    if (!oauth.accessToken) return null;
-    // Check expiry — skip tokens that expired more than 5 minutes ago
-    // (allow small buffer for clock skew)
-    if (oauth.expiresAt) {
-      const expiresMs = new Date(oauth.expiresAt).getTime();
-      if (!isNaN(expiresMs) && Date.now() > expiresMs + 300000) {
-        console.log('[auth] Token expired, skipping');
-        return null;
-      }
-    }
-    return { token: oauth.accessToken, raw };
-  } catch {
-    return null;
-  }
-}
+// REGRESSION GUARD (2026-04-27, sdk-token-silent-refresh):
+// extractToken + readFileCredentialsForSession live in app/auth-credentials.js
+// so they can be unit-tested without booting Electron. Importing them here
+// keeps the in-file API identical to the pre-refactor version — every
+// existing caller (Mac Keychain probe, Windows alt-paths, the post-login
+// fs.watch handler) sees the same {token, raw, expiresAt, refreshable}
+// shape. DO NOT re-define them inline; the duplication will silently drift.
+const {
+  CLAUDE_CRED_FILE,
+  extractToken,
+  readFileCredentialsForSession: _readFileCredentialsForSession,
+} = require('./auth-credentials');
 
 function persistCredentials(raw) {
   try {
@@ -764,6 +753,13 @@ async function readCredentials() {
       resolve(null);
     }, READ_CREDENTIALS_TOTAL_CAP_MS)),
   ]);
+}
+
+// Thin adapter — pipes Merlin's persistCredentials into the pure helper
+// from app/auth-credentials.js so a discovered no-dot variant gets
+// normalized to the canonical path the SDK reads.
+function readFileCredentialsForSession() {
+  return _readFileCredentialsForSession({ persist: persistCredentials });
 }
 
 async function _readCredentialsImpl() {
@@ -2719,27 +2715,63 @@ async function startSession(brandOverride) {
     }
   } catch {}
 
-  // Inject OAuth token from any available source — prevents the SDK subprocess
-  // from hitting Keychain ACL issues (Mac) or prompting for re-auth (both platforms).
-  // readCredentials() checks: file → env → Keychain (Mac) → Credential Manager (Win)
+  // REGRESSION GUARD (2026-04-27, sdk-token-silent-refresh):
+  // Two-tier credential resolution. Order matters — read this carefully
+  // before changing.
+  //
+  //   Tier 1 — File with refresh capability (preferred):
+  //     If ~/.claude/.credentials.json holds a blob with both accessToken
+  //     and refreshToken, Merlin DOES NOT inject CLAUDE_CODE_OAUTH_TOKEN
+  //     into the SDK subprocess env. The SDK reads the same file
+  //     directly and refreshes silently against
+  //     platform.claude.com/v1/oauth/token whenever the access token
+  //     hits 401 — no browser sign-in, no UI interruption, no replay.
+  //     This is the path that 99% of paying users hit; preserving it
+  //     is what fixes the 2026-04-27 forced re-auth incident.
+  //
+  //   Tier 2 — Fallback (no file or no refresh):
+  //     Mac Keychain probe / Win alt-paths / env-only / etc. Returns a
+  //     bare access-token string with no refresh capability. Inject it
+  //     via env. If/when this token expires, the SDK hits 401 and
+  //     Merlin's auth-error interceptor (for-await loop, line ~3140)
+  //     routes through requireAuth() — the correct UX for the no-refresh
+  //     case.
+  //
+  // DO NOT collapse this back to a single readCredentials() call that
+  // always env-injects. The SDK's env-fed code path explicitly returns
+  // {refreshToken:null}, defeating refresh — that's the exact bug we
+  // fixed here.
   if (!sessionEnv.CLAUDE_CODE_OAUTH_TOKEN && !sessionEnv.ANTHROPIC_API_KEY) {
     emitSessionPhase('cred-read', 'Authenticating…');
-    const token = await readCredentials();
-    if (token) {
-      sessionEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
-      console.log('[auth] Injected OAuth token into session env');
+    const fileCreds = readFileCredentialsForSession();
+    if (fileCreds) {
+      // Tier 1: file has refresh capability — let the SDK handle it.
+      // We deliberately do NOT set sessionEnv.CLAUDE_CODE_OAUTH_TOKEN
+      // here, so cli.js falls through to its file-reading path.
+      const expiryNote = fileCreds.expired
+        ? 'expired (SDK will refresh)'
+        : (typeof fileCreds.expiresAt === 'number'
+            ? `expires in ${Math.max(0, Math.floor((fileCreds.expiresAt - Date.now()) / 60000))}m`
+            : 'expiry unknown');
+      console.log(`[auth] File credentials with refresh capability detected (${expiryNote}) — skipping env injection`);
     } else {
-      // No credentials found. Fire the unified auth-required event; the
-      // renderer will auto-trigger login and replay the pending message
-      // after auth succeeds. We DO NOT clear pendingMessageQueue here —
-      // the renderer is responsible for replaying via a stashed copy,
-      // but we also leave the queue intact as belt-and-suspenders in case
-      // the renderer path breaks. The next startSession() call (after
-      // successful login) drains whatever's still in the queue.
-      console.warn('[auth] No credentials found — emitting auth-required');
-      _queueFrozenForAuth = true; // signal the finally block not to wipe
-      requireAuth('session start: no credentials');
-      return;
+      const token = await readCredentials();
+      if (token) {
+        sessionEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
+        console.log('[auth] Injected OAuth token into session env (Tier 2: no refresh capability)');
+      } else {
+        // No credentials found. Fire the unified auth-required event; the
+        // renderer will auto-trigger login and replay the pending message
+        // after auth succeeds. We DO NOT clear pendingMessageQueue here —
+        // the renderer is responsible for replaying via a stashed copy,
+        // but we also leave the queue intact as belt-and-suspenders in case
+        // the renderer path breaks. The next startSession() call (after
+        // successful login) drains whatever's still in the queue.
+        console.warn('[auth] No credentials found — emitting auth-required');
+        _queueFrozenForAuth = true; // signal the finally block not to wipe
+        requireAuth('session start: no credentials');
+        return;
+      }
     }
   }
 
