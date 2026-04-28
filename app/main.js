@@ -4373,11 +4373,14 @@ ipcMain.handle('save-config-field', (_, key, value, brandName) => {
 // (and Slack/Discord screenshots of the chat) might be shared.
 const {
   isValidBrandName: bulkIsValidBrand,
+  isValidProductSlug: bulkIsValidProductSlug,
   sanitizeFilename: bulkSanitizeFilename,
   sha256File: bulkSha256File,
   buildTargetName: bulkBuildTargetName,
   resolveBrandPaths: bulkResolveBrandPaths,
   validateInputFile: bulkValidateInputFile,
+  SHA_PREFIX_LEN: BULK_SHA_PREFIX_LEN,
+  SHA_PREFIX_RE: BULK_SHA_PREFIX_RE,
 } = require('./bulk-upload');
 
 const BULK_UPLOAD_PARALLEL = 6;
@@ -4405,20 +4408,23 @@ async function bulkBuildExistingHashIndex(paths) {
     } catch (_) { continue; }
     for (const e of entries) {
       if (!e.isFile()) continue;
-      // Optimization: filenames we wrote ourselves START with <8-hex>_, so we
-      // can read the prefix without re-hashing the file. Files predating the
-      // bulk-upload feature won't have this prefix — we still recognize them
-      // via their content hash on the next drop because the new file will
-      // collide on FULL hash too. To keep the first-drop dedup correct, we
-      // hash legacy entries lazily on first encounter.
-      const m = /^([0-9a-f]{8})_/.exec(e.name);
+      // Optimization: filenames we wrote ourselves START with <SHA_PREFIX_LEN-hex>_,
+      // so we can read the prefix without re-hashing the file. Files predating
+      // the bulk-upload feature (or written by an older version with a shorter
+      // prefix) won't match — we still recognize them via their content hash on
+      // the next drop because the new file will collide on FULL hash too. To
+      // keep the first-drop dedup correct, we hash legacy entries lazily on
+      // first encounter. SHA_PREFIX_LEN moved to bulk-upload.js so the regex
+      // and slice length stay in lockstep with buildTargetName (REGRESSION
+      // GUARD 2026-04-28, Gitar PR #139 dedup-collision finding).
+      const m = BULK_SHA_PREFIX_RE.exec(e.name);
       if (m) {
         seen.add(m[1]);
         continue;
       }
       try {
         const full = await bulkSha256File(path.join(dir, e.name));
-        seen.add(full.slice(0, 8));
+        seen.add(full.slice(0, BULK_SHA_PREFIX_LEN));
       } catch (_) { /* unreadable — skip */ }
     }
   }
@@ -4534,7 +4540,7 @@ ipcMain.handle('bulk-upload-assets', async (_event, args) => {
         rejected.push({ file: h.validation.name, reason: 'hash-failed' });
         continue;
       }
-      const shortSha = h.sha.slice(0, 8);
+      const shortSha = h.sha.slice(0, BULK_SHA_PREFIX_LEN);
       if (existing.has(shortSha) || seenInBatch.has(shortSha)) {
         skippedDup.push(h.validation.name);
         continue;
@@ -4574,9 +4580,15 @@ ipcMain.handle('bulk-upload-assets', async (_event, args) => {
     const failedMoves = [];
     for (const m of (report.autoAssociated || [])) {
       const productSlug = String(m.product || '');
-      // The Go matcher already validated slug shape (folder name on disk),
-      // but we re-check here so a hand-crafted JSON can't traverse out.
-      if (!/^[A-Za-z0-9._-]{1,200}$/.test(productSlug)) continue;
+      // Defense-in-depth: the Go matcher already validated slug shape (folder
+      // name on disk), but we re-check here so a hand-crafted JSON (compromised
+      // binary, race with a manual edit, future bug) can't path-traverse out
+      // of products/<slug>/references/. isValidProductSlug layers the
+      // explicit `..` / `.` / all-dots rejection on top of the char-class
+      // regex (REGRESSION GUARD 2026-04-28, Gitar PR #139 path-traversal
+      // finding — see bulk-upload.js:isValidProductSlug for the full
+      // incident writeup).
+      if (!bulkIsValidProductSlug(productSlug)) continue;
       const baseName = path.basename(String(m.file || ''));
       if (!baseName || baseName.includes('..')) continue;
       const refsDir = path.join(paths.productsDir, productSlug, 'references');

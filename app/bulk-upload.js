@@ -52,6 +52,11 @@ function isValidBrandName(brand) {
   return typeof brand === 'string' && BRAND_RE.test(brand);
 }
 
+// MAX_BASENAME_LEN — most filesystems allow 255 bytes; path-joining adds up,
+// so 200 leaves headroom. Used by sanitizeFilename's extension-preserving
+// truncation. Exported so tests can pin to the same constant.
+const MAX_BASENAME_LEN = 200;
+
 // sanitizeFilename returns a safe basename derived from the user-supplied
 // filename. We:
 //   - basename only (no directory components)
@@ -59,7 +64,10 @@ function isValidBrandName(brand) {
 //   - drop dotfile leading dots
 //   - replace anything that isn't ascii alnum / dot / dash / underscore with _
 //   - cap length so a pathological 4096-char filename can't blow up the
-//     target FS path
+//     target FS path — and preserve the extension when truncating, so a
+//     300-char name doesn't lose `.jpg` and then get rejected by the
+//     extension allowlist with a misleading "bad-extension" reason
+//     (REGRESSION GUARD 2026-04-28, Gitar finding on PR #139).
 function sanitizeFilename(raw) {
   if (typeof raw !== 'string' || raw.length === 0) return '';
   const base = path.basename(raw);
@@ -70,9 +78,20 @@ function sanitizeFilename(raw) {
   if (!stripped) return '';
   // Replace illegal chars with _. We deliberately keep the extension dot.
   const sanitized = stripped.replace(/[^A-Za-z0-9._-]/g, '_');
-  // Cap to a sane max — most filesystems allow 255, but path-joining adds
-  // up so 200 leaves headroom.
-  return sanitized.slice(0, 200);
+  if (sanitized.length <= MAX_BASENAME_LEN) return sanitized;
+  // Truncate the stem, NOT the extension — losing `.jpg` cascades into
+  // the allowlist check returning bad-extension on what's really a long
+  // legitimate filename.
+  const ext = path.extname(sanitized);
+  const stem = sanitized.slice(0, sanitized.length - ext.length);
+  const maxStem = MAX_BASENAME_LEN - ext.length;
+  // Pathological case: extension itself is >= MAX_BASENAME_LEN. Keep at
+  // least one stem char so the result isn't ".ext" (which path.basename
+  // treats as a dotfile, not an extension). Math.max(1, maxStem) handles
+  // ext.length >= MAX_BASENAME_LEN by retaining a 1-char stem; the total
+  // length may exceed MAX_BASENAME_LEN in this edge case but that's
+  // acceptable (and any sane FS will still accept it).
+  return stem.slice(0, Math.max(1, maxStem)) + ext;
 }
 
 // hasAllowedExtension verifies the basename ends in one of the media types
@@ -97,14 +116,50 @@ function sha256File(filepath) {
   });
 }
 
+// SHA_PREFIX_LEN — number of hex chars used to disambiguate filenames inside
+// inbox/ + as the dedup key against existing files. 16 hex = 64 bits → 1%
+// birthday-collision threshold at ~4 billion files (vs ~9,300 at 8 hex /
+// 32 bits, which a brand with hundreds of products × dozens of refs each
+// could realistically hit). Also feeds the prefix-read regex in main.js;
+// keep both sides in sync (REGRESSION GUARD 2026-04-28, Gitar finding on
+// PR #139). The matching regex pattern is exported as SHA_PREFIX_RE.
+const SHA_PREFIX_LEN = 16;
+const SHA_PREFIX_RE = /^([0-9a-f]{16})_/;
+
 // buildTargetName produces the on-disk filename inside inbox/. We prefix the
 // short SHA so two files with the same user-visible name (very common — every
-// camera saves IMG_0001.JPG) don't collide. 8 hex chars = 4 bytes = 1 in 4
-// billion collision odds per pair, well below the threshold where users
-// would ever notice.
+// camera saves IMG_0001.JPG) don't collide.
 function buildTargetName(sha256Hex, sanitizedName) {
-  const prefix = sha256Hex.slice(0, 8);
+  const prefix = sha256Hex.slice(0, SHA_PREFIX_LEN);
   return `${prefix}_${sanitizedName}`;
+}
+
+// PRODUCT_SLUG_RE — character-class allowlist for product folder names. NOT
+// sufficient on its own: `..` passes this regex because each dot matches
+// the class. isValidProductSlug below layers the explicit traversal-
+// sentinel rejection on top.
+const PRODUCT_SLUG_RE = /^[A-Za-z0-9._-]{1,200}$/;
+
+// isValidProductSlug — defense-in-depth check on the productSlug field
+// returned by the Go matcher's match-asset-to-product action. The Go side
+// already validates folder shape, but we re-check here so a hand-crafted
+// JSON (compromised binary, race with a manual edit, future bug) can't
+// path-traverse out of products/<slug>/references/.
+//
+// REGRESSION GUARD (2026-04-28, Gitar PR #139): a prior version did the
+// re-check inline as `/^[A-Za-z0-9._-]{1,200}$/.test(slug)`. The literal
+// string `..` passed that regex because `.` is in the character class,
+// so a malicious matcher could return product:".." and writes would land
+// in <brandDir>/references/ instead of <brandDir>/products/<slug>/
+// references/. Layered fix: char-class regex + explicit `.`/`..`
+// rejection + reject anything that's all dots (`...`, `....` etc.,
+// future-proofing against POSIX edge cases where consecutive dots are
+// collapsed by path.join).
+function isValidProductSlug(slug) {
+  if (typeof slug !== 'string' || !PRODUCT_SLUG_RE.test(slug)) return false;
+  if (slug === '.' || slug === '..') return false;
+  if (/^\.+$/.test(slug)) return false;
+  return true;
 }
 
 // resolveBrandPaths returns the canonical paths for a given brand. Caller
@@ -145,9 +200,14 @@ function validateInputFile(file) {
 
 module.exports = {
   MAX_FILE_BYTES,
+  MAX_BASENAME_LEN,
   MEDIA_EXT_ALLOWLIST,
   BRAND_RE,
+  PRODUCT_SLUG_RE,
+  SHA_PREFIX_LEN,
+  SHA_PREFIX_RE,
   isValidBrandName,
+  isValidProductSlug,
   sanitizeFilename,
   hasAllowedExtension,
   sha256File,
