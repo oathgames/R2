@@ -233,6 +233,27 @@ Write prompts in this EXACT order — locks first, creative flourish after.
 
 HeyGen output → `results/video/YYYY-MM/<brand>/ad_<runID>/video.mp4`. Requires `heygenApiKey`.
 
+## Burn captions on existing video (`mcp__merlin__captions`)
+
+When the user wants to **add captions to a video they already have on disk** — a clip they shot themselves, a UGC asset a creator sent, an old ad they want to refresh — route to:
+
+```
+mcp__merlin__captions({ action: 'burn', videoPath: '<absolute path>', style: 'hormozi' })
+```
+
+Merlin ships ffmpeg + whisper-cli + the `ggml-small.en-q5_1` speech model **bundled inside the installer** (`.claude/tools/`). Transcription is fully local — audio never leaves the user's machine. **Never** suggest installing third-party tools, FFmpeg, or writing Python; the toolchain is already in place.
+
+| Param | Notes |
+|---|---|
+| `action` | Only `'burn'` for now. |
+| `videoPath` | Absolute path. `.mp4`, `.mov`, or `.webm`. < 500MB. |
+| `style` | Currently `'hormozi'` — bold yellow active-word over white context, bottom-third center, ~14% of video height, libass `\\c` overrides per-word. |
+| `outputDir` | Optional. Defaults to `<appRoot>/results/captioned_<timestamp>/captioned.mp4`. |
+
+Returns `{ outputPath, wordCount, durationMs }` on success. Errors map to `INVALID_INPUT` (bad path / size / extension), `PRECONDITION_FAILED` (no detected speech — silent or music-only video), `BINARY_UNAVAILABLE` (toolchain missing — reinstall), or `TIMEOUT` (>10 min wall clock — split the video).
+
+This is for **existing** videos. For NEW videos with captions baked in from the start, use `mcp__merlin__video({ action: 'generate' })` — the regular pipeline already produces a `captioned.mp4` variant.
+
 ## Voice (`mcp__merlin__voice`)
 
 `clone` (`voiceSampleDir`, `voiceName`) · `list` · `delete` (`voiceId`) · `list-avatars` (HeyGen).

@@ -886,6 +886,98 @@ function buildTools(tool, z, ctx) {
     },
   }, tool, z, ctx));
 
+  // ── captions ─────────────────────────────────────────────
+  //
+  // Hormozi-style word-level caption burn-in onto an EXISTING video.
+  // Routes through ./captions.js, which reuses the bundled
+  // ffmpeg + whisper-cli + ggml-small.en-q5_1 toolchain that ships
+  // inside the Electron installer (.claude/tools/, see release.yml's
+  // "Bundle voice tools" step). Strictly local — no upload, no
+  // third-party service, no Python.
+  //
+  // Background: pre-this-tool, the in-app agent had no captions
+  // surface. When asked to "add captions to this video," it
+  // confabulated "ffmpeg isn't installed" and offered to write
+  // Python — embarrassing, given the toolchain ships in the same
+  // installer. This tool is the explicit affordance.
+  //
+  // Cost impact: 'generation' — each call burns a new video file.
+  // Marked NOT destructive (no platform mutation, just file IO),
+  // longRunning (transcription on a 60s video can take 30-60s on a
+  // slow Windows AMD; up to 10min ceiling enforced inside captions.js).
+  tools.push(defineTool({
+    name: 'captions',
+    description: 'Burn Hormozi-style word-level captions onto an existing video file using the bundled ffmpeg + whisper-cli + small.en speech model. Transcribes audio locally (never uploaded), generates a libass subtitle file with bold yellow active-word highlighting, and re-encodes the video at CRF 18 with audio passthrough. Use this when a user wants captions added to a video they already have on disk — never suggest installing third-party tools or writing Python; the toolchain is already shipped with Merlin.',
+    destructive: false,
+    idempotent: true,
+    costImpact: 'generation',
+    brandRequired: false,
+    longRunning: true,
+    input: {
+      action: z.enum(['burn']).describe('Operation. Currently only "burn" is supported.'),
+      videoPath: z.string().describe('Absolute path to the source video file (.mp4, .mov, or .webm). Must be < 500MB.'),
+      style: z.enum(['hormozi']).optional().describe('Caption style. Defaults to "hormozi" (bold yellow active-word, white context).'),
+      outputDir: z.string().optional().describe('Optional absolute path for the output directory. Defaults to <appRoot>/results/captioned_<timestamp>/.'),
+    },
+    handler: async (args) => {
+      if (args.action !== 'burn') {
+        return validationEnvelope(`Unknown action "${args.action}". Supported: burn.`);
+      }
+      let captionsMod;
+      try {
+        captionsMod = require('./captions');
+      } catch (e) {
+        return envelope.fail(errors.makeError('INTERNAL_ERROR', {
+          message: `captions module failed to load: ${e.message}`,
+        }));
+      }
+      const result = await captionsMod.burnCaptions({
+        videoPath: args.videoPath,
+        style: args.style,
+        outputDir: args.outputDir,
+        appRoot: ctx.appRoot,
+        appInstall: ctx.appInstall,
+      });
+      if (result && result.error) {
+        // Map captions:<code> to the canonical mcp-error code so the
+        // agent's next_action branches are predictable.
+        const code = String(result.error);
+        const detail = result.errorDetail || '';
+        let mcpCode = 'INTERNAL_ERROR';
+        let nextAction;
+        if (code === 'captions:invalid-input' || code === 'captions:not-found') {
+          mcpCode = 'INVALID_INPUT';
+          nextAction = 'fix_inputs_and_retry';
+        } else if (code === 'captions:too-large') {
+          mcpCode = 'INVALID_INPUT';
+          nextAction = 'split_video_and_retry';
+        } else if (code === 'captions:missing-tools') {
+          mcpCode = 'BINARY_UNAVAILABLE';
+          nextAction = 'restart_app';
+        } else if (code === 'captions:no-speech') {
+          mcpCode = 'PRECONDITION_FAILED';
+          nextAction = 'verify_video_has_speech';
+        } else if (code.endsWith('-timeout')) {
+          mcpCode = 'TIMEOUT';
+          nextAction = 'retry_or_split';
+        }
+        const errObj = errors.makeError(mcpCode, {
+          message: detail,
+        });
+        if (nextAction) errObj.next_action = nextAction;
+        return envelope.fail(errObj, {
+          data: { code, errorDetail: detail },
+        });
+      }
+      return {
+        summary: `Captions burned: ${result.wordCount} words in ${(result.durationMs / 1000).toFixed(1)}s`,
+        outputPath: result.outputPath,
+        wordCount: result.wordCount,
+        durationMs: result.durationMs,
+      };
+    },
+  }, tool, z, ctx));
+
   // ── dashboard ────────────────────────────────────────────
   tools.push(defineTool({
     name: 'dashboard',
