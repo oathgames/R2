@@ -4520,7 +4520,7 @@ document.addEventListener('click', (e) => {
 // users saw a "LinkedIn" tile that did nothing on click.
 // The new source-scan test in oauth-persist.test.js cross-checks
 // every connector_id in oauth-provider-config.js against this Set.
-const OAUTH_PLATFORMS = new Set(['meta', 'tiktok', 'shopify', 'google', 'amazon', 'pinterest', 'klaviyo', 'slack', 'discord', 'etsy', 'reddit', 'stripe', 'linkedin', 'threads']);
+const OAUTH_PLATFORMS = new Set(['meta', 'tiktok', 'shopify', 'google', 'amazon', 'pinterest', 'slack', 'discord', 'etsy', 'reddit', 'stripe', 'linkedin', 'threads']);
 const API_KEY_PLATFORMS = {
   fal:        { key: 'falApiKey', label: 'fal.ai', placeholder: 'fal-xxxx...', url: 'https://fal.ai/dashboard/keys' },
   elevenlabs: { key: 'elevenLabsApiKey', label: 'ElevenLabs', placeholder: 'xi_xxxx...', url: 'https://elevenlabs.io/app/settings/api-keys' },
@@ -4529,6 +4529,12 @@ const API_KEY_PLATFORMS = {
   foreplay:   { key: 'foreplayApiKey', label: 'Foreplay', placeholder: 'fp_xxxx...', url: 'https://app.foreplay.co/settings/api' },
   trendtrack: { key: 'trendtrackApiKey', label: 'TrendTrack', placeholder: 'tt_xxxx...', url: 'https://app.trendtrack.io/workspace/settings/api' },
   postscript: { key: 'postscriptApiKey', label: 'Postscript', placeholder: 'sk_live_xxxx...', url: 'https://app.postscript.io/settings/api' },
+  // Klaviyo Private API Key (pk_…). Marketplace OAuth requires a long
+  // partner-review pipeline; private keys cover every scope Merlin uses
+  // (campaigns:read/write, flows:read, lists:read, metrics:read,
+  // profiles:read) and ship today. The link drops users on the
+  // "API Keys" tab where the "Create Private API Key" button lives.
+  klaviyo:    { key: 'klaviyoApiKey', label: 'Klaviyo', placeholder: 'pk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx', url: 'https://www.klaviyo.com/account#api-keys-tab' },
   // AppLovin default tile click saves the MAX (publisher) key. Users who have
   // an AppDiscovery (advertiser) key instead — or both — can switch via the
   // tile's right-click "Use my API key" override, which opens the two-input
