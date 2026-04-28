@@ -2797,6 +2797,12 @@ async function startSession(brandOverride) {
       runOAuthFlow,
       getConnections,
       appRoot,
+      // Installer-resolved Resources directory (where bundled voice tools
+      // live in a packaged build). Required by tools that resolve binaries
+      // via captions.js#findVoiceTools or the equivalent install-first /
+      // workspace-fallback pattern. Dev mode falls back to <appRoot>/..
+      // (same calculation as the appInstall constant up top).
+      appInstall,
       activeChildProcesses,
       appendAudit,
       sdkModule,
@@ -4658,6 +4664,43 @@ async function transcribeAudioImpl(audioBytes) {
 }
 
 ipcMain.handle('transcribe-audio', async (_, audioBytes) => transcribeAudioImpl(audioBytes));
+
+// ── burn-captions: Hormozi-style word-level caption burn-in ──
+//
+// Reuses the same bundled toolchain (ffmpeg + whisper-cli + small.en
+// model) that transcribe-audio above resolves via findTool. The
+// orchestration lives in app/captions.js so it's testable without
+// the renderer or Electron context. We pass appRoot + appInstall so
+// the captions module's own findVoiceTools() resolves to the same
+// install-first, workspace-fallback paths as voice transcription.
+//
+// Args contract:
+//   { videoPath: <abs path>, style?: 'hormozi', outputDir?: <abs path> }
+//
+// Returns the captions module envelope verbatim:
+//   { success: true, outputPath, wordCount, durationMs }
+//   | { error: 'captions:<step>', errorDetail: <human-readable> }
+//
+// AbortController is mainly defensive — long-running runs (a 10-min
+// video on a slow CPU) would otherwise tie up the renderer. The
+// SUBPROCESS_TIMEOUT_MS in captions.js is the per-step ceiling; this
+// IPC boundary doesn't add a wall-clock kill on top.
+ipcMain.handle('burn-captions', async (_, args) => {
+  let captionsMod;
+  try {
+    captionsMod = require('./captions');
+  } catch (err) {
+    return { error: 'captions:internal', errorDetail: `captions module failed to load: ${err.message}` };
+  }
+  const safeArgs = (args && typeof args === 'object') ? args : {};
+  return captionsMod.burnCaptions({
+    videoPath: safeArgs.videoPath,
+    style: safeArgs.style,
+    outputDir: safeArgs.outputDir,
+    appRoot,
+    appInstall,
+  });
+});
 
 // §2.6: OS-level microphone permission status + request.
 //
