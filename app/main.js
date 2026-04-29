@@ -11550,16 +11550,28 @@ async function maybePromptClaudeDesktopAutoconfig() {
     if (ccOut && ccOut.ok) didAnyApply = true;
   }
 
-  // Gitar PR #163 follow-up (2026-04-29): if the user picked ONLY 'code'
-  // and the registration succeeded, persist an 'added' decision (with
-  // the current major stamp) so the autoprompt doesn't re-fire on
-  // every subsequent launch within this major (Desktop is installed
-  // but unregistered → shouldPrompt would fire every launch otherwise).
-  // applyRegistration already writes 'added' on its own success path,
-  // so the 'code'-only branch is the gap we need to close. The new
-  // 'already-added-this-major' suppression rule in shouldPrompt
-  // honors this stamp.
-  if (action === 'code' && didAnyApply) {
+  // Gitar PR #163 follow-up (2026-04-29, two findings landed together):
+  //
+  // (a) Code-only success must persist an 'added' decision so the
+  //     autoprompt doesn't re-fire every launch within this major
+  //     (Desktop installed but unregistered → shouldPrompt would
+  //     fire forever otherwise). The original 2026-04-29 attempt
+  //     gated this on `action === 'code'` only, which left a hole:
+  //     `action === 'both'` with Desktop-write-failure + Code-write-
+  //     success would also write no sentinel.
+  // (b) applyRegistration writes 'added' without a major stamp.
+  //     Combined with the new `already-added-this-major` rule's
+  //     legacy-fallback (treats missing major as currentMajor), a
+  //     v1.20.5+ Desktop-only registration would PERMANENTLY suppress
+  //     the prompt — even on a major bump where we WANT to re-offer
+  //     enablement.
+  //
+  // Both issues fixed by broadening the writeDecision guard here to
+  // `didAnyApply` (covers code-only, both, AND desktop-only) and
+  // always stamping the major. writeDecision is last-writer-wins:
+  // applyRegistration's un-stamped decision gets overwritten by this
+  // stamped one on the desktop path.
+  if (didAnyApply) {
     try { cdcMod.writeDecision(stateDir, 'added', { major: currentMajor }); } catch {}
   }
 
