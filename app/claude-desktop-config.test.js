@@ -217,6 +217,9 @@ test('shouldPrompt: skipped on same major → fire=false', () => {
       configPath: path.join(ccDir, 'claude_desktop_config.json'),
       merlinEntry,
       currentMajor: 1,
+      // Force a known client-detection state so the test is hermetic
+      // on CI runners (which have neither Claude client installed).
+      installedClients: { desktop: true, code: false },
     });
     assert.strictEqual(out.fire, false);
     assert.strictEqual(out.reason, 'skipped-this-major');
@@ -233,6 +236,7 @@ test('shouldPrompt: skipped on older major → fire=true on bump', () => {
       configPath: path.join(ccDir, 'claude_desktop_config.json'),
       merlinEntry,
       currentMajor: 2,
+      installedClients: { desktop: true, code: false },
     });
     assert.strictEqual(out.fire, true);
   } finally { rmTmp(d); rmTmp(ccDir); }
