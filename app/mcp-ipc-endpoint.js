@@ -151,34 +151,80 @@ function toJsonSchema(inputSchema) {
     return { type: 'object', properties: {}, additionalProperties: true };
   }
   // The SDK stores the original ZodRawShape (a plain object of
-  // ZodTypeAny), not a compiled Zod object. We can either wrap it via
-  // z.object(...) and convert, or build a shallow JSON schema by hand.
-  // We try zod-to-json-schema first (already a transitive dep via the
-  // Claude SDK); fall back to a hand-built shape on any failure.
+  // ZodTypeAny), not a compiled Zod object. We wrap via z.object(...)
+  // and convert via the available JSON-Schema serializer.
+  //
+  // The Claude Agent SDK ships zod 4 as a peer dep (see mcp-server.js's
+  // `const z = require('zod')`). Zod 4 has a NATIVE `z.toJSONSchema`
+  // helper that emits a clean JSON Schema 2020-12 / draft-07 shape.
+  // The legacy `zod-to-json-schema` package only supports zod 3 — given
+  // a zod 4 schema it returns `{$schema: '...'}` with no `type` and no
+  // `properties`, which is the root cause of the 2026-04-29 Claude Code
+  // rejection incident. Prefer zod 4 native first, fall back to
+  // zod-to-json-schema only if a future zod downgrade ever happens.
+  let result;
   try {
     // Lazy require to avoid loading zod at module-init time when this
     // file is required by tests that don't exercise schema conversion.
     const z = require('zod');
-    const { zodToJsonSchema } = require('zod-to-json-schema');
     const obj = z.object(inputSchema);
-    const schema = zodToJsonSchema(obj, { target: 'jsonSchema7' });
+    let schema;
+    if (typeof z.toJSONSchema === 'function') {
+      // Zod 4 native — preferred path. unrepresentable:'any' makes
+      // unsupported-but-rare zod features (e.g. transforms) survive
+      // as `{}` rather than crash the conversion.
+      try {
+        schema = z.toJSONSchema(obj, { unrepresentable: 'any' });
+      } catch (_) {
+        schema = z.toJSONSchema(obj);
+      }
+    } else {
+      // Zod 3 fallback path.
+      const { zodToJsonSchema } = require('zod-to-json-schema');
+      schema = zodToJsonSchema(obj, { target: 'jsonSchema7' });
+    }
     // zod-to-json-schema sometimes returns { $schema, ... } with a
     // wrapping reference; flatten to the inner object schema if so.
     if (schema && schema.$ref && schema.definitions) {
       const refKey = schema.$ref.replace(/^#\/definitions\//, '');
-      if (schema.definitions[refKey]) return schema.definitions[refKey];
+      if (schema.definitions[refKey]) schema = schema.definitions[refKey];
     }
-    // Strip the $schema field (MCP clients don't need it) and return.
+    // Strip the $schema field (MCP clients don't need it).
     if (schema && typeof schema === 'object') {
       const { $schema, ...rest } = schema;
-      return rest;
+      result = rest;
     }
   } catch (_) { /* fall through to hand-built fallback */ }
-  // Fallback: shallow object with names but no constraints. The SDK's
-  // own validation still runs at handler dispatch.
-  const properties = {};
-  for (const k of Object.keys(inputSchema)) properties[k] = {};
-  return { type: 'object', properties, additionalProperties: true };
+  if (!result || typeof result !== 'object') {
+    // Fallback: shallow object with names but no constraints. The SDK's
+    // own validation still runs at handler dispatch.
+    const properties = {};
+    for (const k of Object.keys(inputSchema)) properties[k] = {};
+    return { type: 'object', properties, additionalProperties: true };
+  }
+  // REGRESSION GUARD (2026-04-29, Claude Code MCP rejection incident):
+  // Claude Code strictly enforces the MCP spec requirement that every
+  // tool's top-level inputSchema be a JSON Schema object with
+  // `type: "object"`. Claude Desktop is permissive and accepts schemas
+  // without this. zodToJsonSchema typically emits type:"object" but
+  // edge cases (empty zod objects, unwrap-failed $ref shapes, type
+  // drift across zod versions, enum-only or recursive shapes) can
+  // produce schemas without it. Force the contract here so EVERY
+  // emitted schema is conformant — drift can't reach the wire.
+  // Live incident: v1.20.0 sidecar shipped, Claude Code rejected all
+  // 45 tools with "inputSchema.type missing or not object". See the
+  // matching tests in mcp-ipc-endpoint.test.js.
+  if (result.type !== 'object') {
+    result = { ...result, type: 'object' };
+  }
+  if (!result.properties) result.properties = {};
+  // Some Claude Code clients also expect additionalProperties to be
+  // explicit. zod-to-json-schema's default omits it. Set true for
+  // permissiveness — matches the legacy fallback path's contract.
+  if (result.additionalProperties === undefined) {
+    result.additionalProperties = true;
+  }
+  return result;
 }
 
 // Build the MCP tools/list payload from the in-process tool array (the

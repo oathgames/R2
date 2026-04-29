@@ -348,6 +348,138 @@ test('toJsonSchema: shallow shape returns object schema with properties', () => 
   assert.ok(s.properties);
 });
 
+// ── REGRESSION GUARD (2026-04-29): Claude Code MCP inputSchema.type ──
+// Live incident: v1.20.0 sidecar shipped tools whose inputSchema lacked
+// a top-level `type: "object"`; Claude Desktop accepted them, Claude
+// Code refused every tool. Every emitted schema MUST declare
+// type:"object" + properties + additionalProperties. These tests guard
+// against any future regression that lets a non-conformant schema
+// reach the wire — the failure mode is silent in dev (works on
+// Desktop) and catastrophic in production (Code refuses all tools).
+
+test('toJsonSchema: empty input enforces type/properties/additionalProperties', () => {
+  const s = ipc.toJsonSchema(null);
+  assert.strictEqual(s.type, 'object');
+  assert.ok(s.properties && typeof s.properties === 'object');
+  assert.strictEqual(s.additionalProperties, true);
+});
+
+test('toJsonSchema: empty Zod object → type:"object" + properties + additionalProperties', () => {
+  // Real zod call — exercises the happy path.
+  const z = require('zod');
+  // z.object({}) is the worst-case empty schema; some zod versions emit
+  // a JSON schema without an explicit `type` here.
+  const s = ipc.toJsonSchema({});
+  assert.strictEqual(s.type, 'object', 'empty zod object MUST emit type:"object"');
+  assert.ok(s.properties && typeof s.properties === 'object', 'properties MUST be present');
+  assert.notStrictEqual(s.additionalProperties, undefined, 'additionalProperties MUST be set');
+});
+
+test('toJsonSchema: normal Zod shape → type:"object" + properties preserved', () => {
+  const z = require('zod');
+  const s = ipc.toJsonSchema({ foo: z.string(), bar: z.number().optional() });
+  assert.strictEqual(s.type, 'object');
+  assert.ok(s.properties);
+  assert.ok(s.properties.foo, 'foo property MUST be preserved');
+  assert.ok(s.properties.bar, 'bar property MUST be preserved');
+  assert.notStrictEqual(s.additionalProperties, undefined);
+});
+
+test('toJsonSchema: enum + nested objects → type:"object" + enum + nested preserved', () => {
+  // Mirrors merlin tool schemas like meta_ads where action is an enum
+  // and there are nested object/array fields.
+  const z = require('zod');
+  const s = ipc.toJsonSchema({
+    action: z.enum(['push', 'kill', 'insights']),
+    brand: z.string().optional(),
+    options: z.object({ dryRun: z.boolean() }).optional(),
+  });
+  assert.strictEqual(s.type, 'object');
+  assert.ok(s.properties.action, 'enum field preserved');
+  // The enum array MUST survive normalization.
+  const actionSchema = s.properties.action;
+  assert.ok(actionSchema && (Array.isArray(actionSchema.enum) || actionSchema.type === 'string'),
+    'enum field must keep its enum array (or type:string fallback)');
+  assert.ok(s.properties.brand);
+  assert.ok(s.properties.options);
+});
+
+test('toJsonSchema: properties is always present (never undefined)', () => {
+  const z = require('zod');
+  // Several inputs that could plausibly drop `properties` — empty obj,
+  // null, undefined, fallback-path shape.
+  const inputs = [
+    null,
+    undefined,
+    {},
+    { foo: z.string() },
+    { not_zod: { random: 1 } },
+  ];
+  for (const input of inputs) {
+    const s = ipc.toJsonSchema(input);
+    assert.ok(s.properties && typeof s.properties === 'object',
+      'properties missing for input: ' + JSON.stringify(input));
+  }
+});
+
+test('toJsonSchema: additionalProperties is always present (never undefined)', () => {
+  const z = require('zod');
+  const inputs = [
+    null,
+    {},
+    { foo: z.string() },
+    { not_zod: { random: 1 } },
+  ];
+  for (const input of inputs) {
+    const s = ipc.toJsonSchema(input);
+    assert.notStrictEqual(s.additionalProperties, undefined,
+      'additionalProperties missing for input: ' + JSON.stringify(input));
+  }
+});
+
+test('toJsonSchema: required field list is preserved when zod marks fields required', () => {
+  const z = require('zod');
+  // foo is required, bar is optional → JSON Schema should mark `foo` required.
+  const s = ipc.toJsonSchema({ foo: z.string(), bar: z.string().optional() });
+  assert.strictEqual(s.type, 'object');
+  // zod-to-json-schema emits a `required: ["foo"]` array; tolerate the
+  // case where it doesn't (some versions emit `required: []` or omit it
+  // entirely), but if it IS emitted it must include foo.
+  if (Array.isArray(s.required)) {
+    assert.ok(s.required.includes('foo'),
+      'expected foo in required array, got: ' + JSON.stringify(s.required));
+  }
+});
+
+test('buildToolsListPayload: every tool has inputSchema.type === "object"', () => {
+  // Anti-regression for the live 2026-04-29 incident — the failure mode
+  // was a tools/list response where Claude Code rejected every tool
+  // because its inputSchema lacked a top-level type:"object".
+  const z = require('zod');
+  // Mix of pathological shapes that have historically tripped the
+  // converter: empty zod object, normal shape, fallback (non-zod)
+  // shape, enum-only, schema with optional fields only.
+  const tools = [
+    { name: 'a', description: 'empty zod', inputSchema: {}, annotations: {}, handler: async () => ({}) },
+    { name: 'b', description: 'normal', inputSchema: { foo: z.string() }, annotations: {}, handler: async () => ({}) },
+    { name: 'c', description: 'fallback', inputSchema: { not_zod: { x: 1 } }, annotations: {}, handler: async () => ({}) },
+    { name: 'd', description: 'enum only', inputSchema: { action: z.enum(['x', 'y']) }, annotations: {}, handler: async () => ({}) },
+    { name: 'e', description: 'optional only', inputSchema: { foo: z.string().optional() }, annotations: {}, handler: async () => ({}) },
+    { name: 'f', description: 'no schema', inputSchema: null, annotations: {}, handler: async () => ({}) },
+  ];
+  const payload = ipc.buildToolsListPayload(tools);
+  assert.ok(Array.isArray(payload.tools));
+  assert.strictEqual(payload.tools.length, 6);
+  for (const t of payload.tools) {
+    assert.strictEqual(t.inputSchema.type, 'object',
+      'tool ' + t.name + ' missing type:"object" — Claude Code will reject it');
+    assert.ok(t.inputSchema.properties,
+      'tool ' + t.name + ' missing properties');
+    assert.notStrictEqual(t.inputSchema.additionalProperties, undefined,
+      'tool ' + t.name + ' missing additionalProperties');
+  }
+});
+
 // ── End-to-end socket test ──────────────────────────────────
 
 test('start/stop: token + socket created, socket accepts a tools/list call, stop cleans up', async () => {
