@@ -794,7 +794,12 @@ function buildTools(tool, z, ctx) {
       // Flow fields (used by flow-* + flows-bulk-import actions)
       flowId: z.string().optional().describe('Klaviyo flow ID (get/update-status/delete)'),
       flowBody: z.any().optional().describe('Full flow body for flow-create. Shape: {name, trigger:{type, list_id?, metric?}, steps:[{type, ...}]}. Step types: "delay" {duration_seconds}, "send_email" {subject, preheader, from_email, from_name, template_id?, body?}, "wait_until" {time_of_day, timezone}, "branch" {condition}. The binary runs CheckFlowCANSPAM before any HTTP — trigger.type must be on the documented-consent allowlist (list_added, segment_added, profile_subscribed_marketing, ecommerce_placed_order, ecommerce_started_checkout, viewed_product, custom_event), every send_email step must have an unsubscribe token + physical address + subject + from_name. Failures REFUSE the create (no auto-fix).'),
-      status: z.string().optional().describe('Target flow status for flow-update-status. One of: draft, manual, live.'),
+      // REGRESSION GUARD (2026-04-29, Gitar PR #166): was z.string().optional()
+      // — switched to z.enum so the LLM sees the valid set in the JSON Schema
+      // tool spec without parsing the .describe() text, and typos are
+      // rejected at schema validation before the binary is invoked. Matches
+      // the codebase convention used by every other fixed-set field.
+      status: z.enum(['draft', 'manual', 'live']).optional().describe('Target flow status for flow-update-status.'),
       includeDefinition: z.boolean().optional().describe('When true on flow-get, request the heavy `definition` blob (full flow topology) via additional-fields[flow]=definition. Default true. Set false to skip and get only the summary attributes.'),
       manifestPath: z.string().optional().describe('Filesystem path to a flow manifest JSON for flows-bulk-import. MUST live under assets/brands/<brand>/email/ — the binary refuses arbitrary paths to block traversal. Manifest shape: {manifest_version, brand, flows:[{name, status?, trigger, steps}, ...]}. References uploaded templates by template_id (run templates-bulk-upload first to get the IDs).'),
       forceReimport: z.boolean().optional().describe('When true, flows-bulk-import bypasses the live-state dedup that refuses duplicate-by-name imports. Use this only when intentionally creating a second copy.'),
