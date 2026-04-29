@@ -4266,10 +4266,41 @@ ipcMain.handle('run-oauth', async (_, platform, brandName, extra) => {
 ipcMain.handle('discover-meta-ids', async (_, brandName) => {
   try {
     let binaryPath = getBinaryPath();
-    const configPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
+    const globalConfigPath = path.join(appRoot, '.claude', 'tools', 'merlin-config.json');
     try { fs.accessSync(binaryPath); } catch { return { error: 'Engine not found. Restart Merlin to download it.' }; }
-    try { fs.accessSync(configPath); } catch { return { error: 'Config not found. Run preflight first.' }; }
+    try { fs.accessSync(globalConfigPath); } catch { return { error: 'Config not found. Run preflight first.' }; }
     await maybeHydrateBinaryLicenseToken('meta-discover');
+
+    // REGRESSION GUARD (2026-04-28, meta-discover brand-config-merge bug):
+    // The binary's loadConfig only reads the file passed via --config; it does
+    // NOT merge `.merlin-config-<brand>.json` from disk. Brand-scoped tokens
+    // (metaAccessToken, etc.) saved via `save-config-field` land in the brand
+    // config file + the brand vault namespace — invisible to the binary if we
+    // pass only the global config here. Symptom (live incident, brand=pog,
+    // user pasted manual token via showMetaApiKeyModal): meta-discover errors
+    // with "metaAccessToken required — paste your token and run this again"
+    // because cfg.MetaAccessToken stays empty after vault resolution finds no
+    // placeholder to resolve. Mirror the dashboard handler's pattern at
+    // line ~6253 — build a strict brand-merged config in a temp file, pass
+    // THAT as --config, delete on completion (no decrypted tokens left on
+    // disk). The dashboard guard at line ~6253 explains the strictBrandConfig
+    // semantics; we use the SAME function so the two stay in lockstep.
+    let configPath = globalConfigPath;
+    let isTmpConfig = false;
+    if (brandName) {
+      const strictBrandConfig = buildStrictBrandConfig(brandName);
+      if (strictBrandConfig && Object.keys(strictBrandConfig).length > 0) {
+        // Tmp config MUST live inside .claude/tools/ so filepath.Dir^3 in the
+        // Go binary still resolves projectRoot back to appRoot — same guard
+        // as the dashboard handler.
+        const toolsDir = path.join(appRoot, '.claude', 'tools');
+        try { fs.mkdirSync(toolsDir, { recursive: true }); } catch {}
+        const tmpPath = path.join(toolsDir, `.merlin-config-tmp-${require('crypto').randomBytes(16).toString('hex')}.json`);
+        fs.writeFileSync(tmpPath, JSON.stringify(strictBrandConfig, null, 2), { mode: 0o600 });
+        configPath = tmpPath;
+        isTmpConfig = true;
+      }
+    }
 
     const { execFile } = require('child_process');
     return await new Promise((resolve) => {
@@ -4277,6 +4308,9 @@ ipcMain.handle('discover-meta-ids', async (_, brandName) => {
       const child = execFile(binaryPath, ['--config', configPath, '--cmd', cmd], {
         timeout: 30000, cwd: appRoot, maxBuffer: 10 * 1024 * 1024,
       }, (err, stdout) => {
+        // Delete temp config IMMEDIATELY — don't leave decrypted credentials
+        // on disk past the binary call. Same pattern as the dashboard handler.
+        if (isTmpConfig) { try { fs.unlinkSync(configPath); } catch {} }
         activeChildProcesses.delete(child);
         if (err) return resolve({ error: (err.message || 'meta-discover failed').slice(0, 500) });
         try {
