@@ -1875,6 +1875,16 @@ async function createWindow() {
         }
         if (pendingMessageQueue.length < 50) {
           pendingMessageQueue.push(msg);
+          // REGRESSION GUARD (2026-04-29, mid-turn-queue-visible-feedback):
+          // Tell the renderer the message landed in the queue. Without this
+          // event, the user types during THINKING and sees no feedback —
+          // appears identical to typing into the void. The renderer renders
+          // a "queued (N)" badge in the chat-status row that pulses on each
+          // queue event, so users know their follow-up will be picked up
+          // when the current tool call finishes.
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('message-queued', { depth: pendingMessageQueue.length });
+          }
           if (!activeQuery) startSession();
         }
       }
@@ -2693,11 +2703,35 @@ async function startSession(brandOverride) {
         : `No brands exist yet. Use the AskUserQuestion tool to ask "What's your website?" with these options: (1) label: "Set up my brand", description: "Enter your website URL and we'll auto-detect your brand, products, and colors" (2) label: "Just exploring", description: "See what Merlin can do — no setup needed".${domainHint} When the user provides their website URL, start working IMMEDIATELY — scrape the site with WebFetch, extract brand colors, find products, identify competitors with WebSearch. Do ALL of this in parallel. Show results as you find them. If the user selects "Just exploring", give a 3-sentence pitch and ask what they'd like to try.`;
       yield { type: 'user', message: { role: 'user', content: `Run /merlin — silent preflight. ${setupInstructions}` } };
     }
-    // Drain any messages queued before SDK was ready
-    while (pendingMessageQueue.length > 0) {
-      yield pendingMessageQueue.shift();
-    }
+    // REGRESSION GUARD (2026-04-29, mid-turn-queue-silent-drop):
+    // The drain MUST happen INSIDE the while(true) loop, BEFORE awaiting
+    // the next-message Promise. Live incident: while the SDK was running a
+    // long tool call (image generation, brand_scrape, WebFetch), the user
+    // typed a follow-up message ("?", "helloe?"). resolveNextMessage was
+    // null (we're between yields, the SDK is processing), so the message
+    // landed in pendingMessageQueue (correct). But the original drain at
+    // session start ran ONCE before this loop — so when the SDK finished
+    // the tool call and called next() on the iterator, control returned
+    // to line `await new Promise(...)`, which silently swallowed the
+    // queued message FOREVER. The user typed into a void.
+    //
+    // Fix: drain on every iteration, BEFORE the await. Any message that
+    // landed in pendingMessageQueue while resolveNextMessage was null gets
+    // delivered on the next turn boundary. The renderer's queue badge
+    // (window.merlin.onMessageQueued) gives the user real-time feedback
+    // that their message landed in the queue and will be picked up next.
     while (true) {
+      // Drain anything that landed while the SDK was busy with the prior turn.
+      while (pendingMessageQueue.length > 0) {
+        const next = pendingMessageQueue.shift();
+        // Tell the renderer the badge count decremented as messages get
+        // delivered to the SDK. When the queue empties (depth === 0), the
+        // renderer hides the badge entirely.
+        if (win && !win.isDestroyed()) {
+          try { win.webContents.send('message-queue-drained', { depth: pendingMessageQueue.length }); } catch {}
+        }
+        yield next;
+      }
       const msg = await new Promise((resolve) => { resolveNextMessage = resolve; });
       if (msg === null) return;
       yield msg;
@@ -3502,6 +3536,10 @@ async function startSession(brandOverride) {
     // P1 #5 (dropped prompt).
     if (!_queueFrozenForAuth) {
       pendingMessageQueue = []; // Clear stale messages from failed session
+      // Sync the renderer badge with the cleared queue.
+      if (win && !win.isDestroyed()) {
+        try { win.webContents.send('message-queue-drained', { depth: 0 }); } catch {}
+      }
     }
     // Clear any orphaned approval cards
     for (const [id, entry] of pendingApprovals) {
@@ -3981,7 +4019,11 @@ ipcMain.handle('abort-active-query', async () => {
     try { clearTimeout(entry.timer); entry.fn(false); } catch {}
   }
   pendingApprovals.clear();
-  if (win && !win.isDestroyed()) win.webContents.send('query-aborted');
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('query-aborted');
+    // Hard-clear the queue badge — abort drained the queue (line above).
+    try { win.webContents.send('message-queue-drained', { depth: 0 }); } catch {}
+  }
   return { success: true };
 });
 
@@ -4052,6 +4094,10 @@ ipcMain.handle('switch-brand', async (_, targetBrand) => {
       try { resolveNextMessage(null); } catch {}
     }
     pendingMessageQueue = [];
+    // Hard-clear the queue badge — switch-brand drained the queue.
+    if (win && !win.isDestroyed()) {
+      try { win.webContents.send('message-queue-drained', { depth: 0 }); } catch {}
+    }
     // Clear any orphaned approvals from the old session — the user will be
     // asked again if the new brand's session needs them.
     for (const [id, entry] of pendingApprovals) {
@@ -4890,6 +4936,15 @@ ipcMain.handle('send-message', (_, text, options = {}) => {
       return { success: false, error: 'Message queue full — please wait for the current session to start' };
     }
     pendingMessageQueue.push(msg);
+    // REGRESSION GUARD (2026-04-29, mid-turn-queue-visible-feedback):
+    // Notify the renderer the message landed in the queue (paired with the
+    // mobileHandlers.onSendMessage push above). The renderer's queue-badge
+    // helper renders "queued (N)" next to the spinner so the user knows
+    // their typed-during-THINKING follow-up will be picked up at the next
+    // turn boundary (the messageGenerator drain inside while(true)).
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('message-queued', { depth: pendingMessageQueue.length });
+    }
     // If no session is running, start one so the queued message gets processed.
     // This handles the case where the session was stopped (Escape) or crashed
     // without auto-restarting — without this, messages sit in the queue forever

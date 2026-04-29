@@ -6349,9 +6349,113 @@ function clearStatusLabel() {
 if (merlin && typeof merlin.onQueryAborted === 'function') {
   merlin.onQueryAborted(() => {
     clearStatusLabel();
+    _queueBadgeState = { depth: 0, lastChange: null };
+    _renderQueueBadge();
     if (typeof showToast === 'function') {
       showToast('Cancelled. Send a new message when you\'re ready.');
     }
+  });
+}
+
+// ── Mid-turn queue badge ────────────────────────────────────────
+//
+// REGRESSION GUARD (2026-04-29, mid-turn-queue-visible-feedback):
+// While the SDK is in the middle of a tool call (image generation,
+// brand_scrape, WebFetch, anything taking >1s), resolveNextMessage in
+// main.js is null, so any message the user types lands in
+// pendingMessageQueue. main.js drains it on the NEXT turn boundary
+// (the while(true) drain in messageGenerator). But without this badge,
+// the user has zero UI feedback that the message landed — appears
+// identical to typing into a void. The 2026-04-29 incident: Ryan typed
+// "?" then "helloe?" while a tool was hung; both messages disappeared
+// from the agent's perspective until the long tool finished, and the
+// user assumed they were silently dropped.
+//
+// State machine lives in app/sdk-parity.js:queueBadgeReducer (pure,
+// fully unit-tested at app/sdk-parity.test.js). The reducer is fed
+// 'queued' / 'drained' / 'reset' events. We render the resulting
+// badge string into a small chip inside the chat-status-row so it
+// sits next to the spinner.
+
+let _queueBadgeState = { depth: 0, lastChange: null };
+// sdk-parity.js exposes window.MerlinSdkParity via UMD shim (see app/sdk-parity.js
+// header). It's loaded by index.html as a <script src> tag BEFORE renderer.js.
+// If the global isn't there for any reason (script tag removed, CSP block,
+// load order regression), the badge silently no-ops — better to not show a
+// "queued" indicator than to crash the chat-status row.
+const _queueBadgeReducer = (typeof window !== 'undefined' && window.MerlinSdkParity)
+  ? window.MerlinSdkParity.queueBadgeReducer
+  : null;
+
+// _queueBadgeLabel — cached badge string returned by the reducer. Single
+// source of truth for the visible label so renderer + reducer can never
+// drift on format/cap/null-when-zero. Set in the IPC event handlers when
+// the reducer runs; read by _renderQueueBadge.
+//
+// REGRESSION GUARD (2026-04-29, Gitar PR #148 finding): an earlier
+// version recomputed the label inline as
+//   const label = `queued (${_queueBadgeState.depth})`;
+// duplicating the formatting that the reducer at sdk-parity.js:81-84
+// already encapsulated (50-cap, null-when-zero). Currently the two
+// implementations agreed, but a future change to the badge format
+// (localization, different cap, different copy) would only update one
+// site. Use the reducer's `badge` field directly.
+let _queueBadgeLabel = null;
+
+function _renderQueueBadge() {
+  const status = document.getElementById('chat-status');
+  if (!status) return;
+  let badge = status.querySelector('.chat-status-queued');
+  if (!_queueBadgeLabel) {
+    if (badge) badge.remove();
+    return;
+  }
+  // If the chat-status-row hasn't been rendered yet (typing indicator
+  // hasn't fired), inject a minimal row so the user still sees feedback.
+  let row = status.querySelector('.chat-status-row');
+  if (!row) {
+    status.innerHTML = `<div class="chat-status-row"><span class="status-spinner">✦</span> <span class="chat-status-label">Thinking</span></div>`;
+    row = status.querySelector('.chat-status-row');
+  }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'chat-status-queued';
+    badge.style.cssText = 'margin-left:10px;padding:2px 8px;font-size:11px;background:rgba(99,102,241,0.18);color:#c7d2fe;border:1px solid rgba(99,102,241,0.35);border-radius:4px;font-family:inherit;letter-spacing:0.02em;';
+    badge.title = "You typed while Merlin was busy. We'll handle these as soon as the current step finishes.";
+    row.appendChild(badge);
+  }
+  badge.textContent = _queueBadgeLabel;
+  // Subtle pulse on update so the user notices the count tick.
+  badge.style.animation = 'none';
+  // Force a reflow so the next animation reapplies (DOM trick).
+  void badge.offsetWidth;
+  badge.style.animation = 'merlin-queue-pulse 600ms ease-out';
+}
+
+// Inject the keyframe once. style.css is updateable but we keep the
+// animation here so the badge ships self-contained.
+(function ensureQueuePulseKeyframe() {
+  if (document.getElementById('merlin-queue-pulse-style')) return;
+  const s = document.createElement('style');
+  s.id = 'merlin-queue-pulse-style';
+  s.textContent = '@keyframes merlin-queue-pulse { 0% { transform: scale(1); } 30% { transform: scale(1.08); } 100% { transform: scale(1); } }';
+  document.head.appendChild(s);
+})();
+
+if (merlin && typeof merlin.onMessageQueued === 'function' && _queueBadgeReducer) {
+  merlin.onMessageQueued((payload) => {
+    const { state, badge } = _queueBadgeReducer(_queueBadgeState, { type: 'queued', depth: payload && payload.depth });
+    _queueBadgeState = state;
+    _queueBadgeLabel = badge;
+    _renderQueueBadge();
+  });
+}
+if (merlin && typeof merlin.onMessageQueueDrained === 'function' && _queueBadgeReducer) {
+  merlin.onMessageQueueDrained((payload) => {
+    const { state, badge } = _queueBadgeReducer(_queueBadgeState, { type: 'drained', depth: payload && payload.depth });
+    _queueBadgeState = state;
+    _queueBadgeLabel = badge;
+    _renderQueueBadge();
   });
 }
 

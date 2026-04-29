@@ -65,6 +65,10 @@
     { "utterance": "make a better version of this ad", "expectedSkill": "merlin-tournament" },
     { "utterance": "beat my current best Meta creative", "expectedSkill": "merlin-tournament" },
     { "utterance": "tournament my pink-set ad against new variants", "expectedSkill": "merlin-tournament" },
-    { "utterance": "run rival challengers to my winning hook", "expectedSkill": "merlin-tournament" }
+    { "utterance": "run rival challengers to my winning hook", "expectedSkill": "merlin-tournament" },
+    { "utterance": "make 12 ads of the cherry product", "expectedSkill": "merlin-content" },
+    { "utterance": "generate hero shots for my new SKU", "expectedSkill": "merlin-content" },
+    { "utterance": "shoot ad images using the photos I uploaded", "expectedSkill": "merlin-content" },
+    { "utterance": "create 6 image variations for the launch", "expectedSkill": "merlin-content" }
   ]
 }

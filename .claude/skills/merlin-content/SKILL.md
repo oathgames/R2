@@ -2,16 +2,28 @@
 name: merlin-content
 description: Use when the user wants to make, generate, create, shoot, write, or brief an ad, image, video, voiceover, blog body, email body, landing headline, social post, or any creative asset. Covers the 7-lock Universal Creative Brief, ad-type modules (UGC, Hero, Talking-Head, SaaS, Gameplay, Split-Screen, Transformation), the negative anchor library, continuity locks, realism gradient, the 6 technical anchors for video, the prompt template, offer construction (Hormozi Value Equation + Schwartz 5 awareness levels + PAS/AIDA/PASTOR/RMBC frameworks), creative performance metrics (hook rate, hold rate, thumbstop ratio, beat structure), the Copy Quality Gate (7-expert panel + AI detector weighted 1.5× + banned-vocab list), the Content Scoring viral formula, and HeyGen one-shot Video Agent routing.
 owner: ryan
-bytes_justification: 26KB — the creative brief (7 locks × 7 ad-type modules × negative-anchor library × realism gradient × video technical anchors), offer construction (Value Equation + Schwartz awareness levels + 5 DR frameworks), creative performance metrics (hook/hold/thumbstop with beat structure), copy quality gate, and content scoring form one linked reasoning chain. Splitting by asset type would duplicate the shared brief/scoring sections and break cross-references (e.g. UGC brief references the realism gradient which references continuity locks; offer construction references hook archetypes which reference Copy Quality Gate). Hard-capped at 32KB.
+bytes_justification: ~48KB — the creative brief (7 locks × 7 ad-type modules × negative-anchor library × realism gradient × video technical anchors), offer construction (Value Equation + Schwartz awareness levels + 5 DR frameworks), creative performance metrics (hook/hold/thumbstop with beat structure), copy quality gate, content scoring, and (added v1.19.5 after the 2026-04-29 POG incident) the Mandatory pre-tool checklist that gates every image/video/voice call on brand+product+references+brand.md ground-truth — these form one linked reasoning chain. Splitting by asset type would duplicate the shared brief/scoring sections and break cross-references (e.g. UGC brief references the realism gradient which references continuity locks; offer construction references hook archetypes which reference Copy Quality Gate; the pre-tool checklist references the brand-color hex anchor only present in brand.md). Hard-capped at the Tier C 50KB ceiling.
 ---
 
 # Content Production — Images, Video, Copy
 
 **Customers buy what they see in the ad. If the ad doesn't match the product, it's deceptive — non-negotiable.**
 
+## MANDATORY pre-tool checklist (every image / video / voice / refine call)
+
+Live incident 2026-04-29 (POG): the agent generated 12 product images without loading any of the brand's reference photos — output was generic, $1+ of fal spend wasted, 36 minutes of wall clock burned, the user lost trust. This checklist is the prevention. It runs BEFORE the tool call, not as a "best effort" inside the prompt assembler.
+
+1. **Brand resolved.** Read `[ACTIVE_BRAND]` from the message tag. Never infer brand from product name, never reuse a brand from earlier in the session if the tag changed.
+2. **Product named.** The user named a product, OR you've already confirmed which product via AskUserQuestion. NEVER run a "make 12 images" prompt without a specific product — multi-product brands have multi-SKU references and a generic prompt produces generic output.
+3. **References loaded.** Glob `assets/brands/<brand>/products/<product>/references/` (Read tool, list the files). Required: pass these absolute paths in the `referencesDir` / `referenceImages` argument of the content tool. If the product folder exists but has zero references, STOP and ask "I see the product but no reference photos — want to drop a few in, or use the brand inbox files instead?" Do NOT proceed with text-only prompting on a product the brand has expectations for.
+4. **brand.md read.** `assets/brands/<brand>/brand.md` for: brand colors (exact hex), forbidden angles, voice, vertical's `offeringNoun`. The app's anti-slop guard validates against this — if your prompt drifts, the binary returns a `brief_check_failed` error and the run is wasted.
+5. **Pre-tool status emitted.** ONE short sentence stating: action, count, context (brand + product + ref count + model), ETA/cost. Example: *"Generating 12 images of POG cherry using 4 references from products/pog-cherry/references/ — banana-pro-edit, ~36min, ~$1.20 fal."* Lets the user catch a wrong context BEFORE the spend.
+
+If any of (1)–(4) is unresolved, STOP and surface the exact missing item. Never substitute "I'll generate something general" — that's the AI-slop pattern this app is built to refuse.
+
 ## Image Prompts (`mcp__merlin__content({action: "image"})`)
 
-Before writing ANY image prompt:
+Before writing ANY image prompt (after the mandatory checklist above):
 1. **Read every reference photo** in `assets/brands/<brand>/products/<product>/references/` (use the Read tool).
 2. **Describe ONLY what you see** — not what `brand.md` says, not what you imagine.
 3. The app validates your description against reference images and rejects mismatches.

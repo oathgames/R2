@@ -499,6 +499,31 @@ contextBridge.exposeInMainWorld('merlin', {
     const h = () => cb(); ipcRenderer.on('query-aborted', h);
     return () => ipcRenderer.removeListener('query-aborted', h);
   },
+  // onMessageQueued / onMessageQueueDrained — main.js fires these when a
+  // user message gets pushed into pendingMessageQueue (because the SDK is
+  // mid-turn and resolveNextMessage is null) or when the messageGenerator
+  // drains a queued message at the next turn boundary. Renderer feeds them
+  // through queueBadgeReducer (app/sdk-parity.js) and renders a "queued (N)"
+  // badge in the chat-status row. Without this surface, the user types
+  // during THINKING and gets zero feedback — the live 2026-04-29 incident
+  // where Ryan typed "?" and "helloe?" mid-turn and the messages appeared
+  // to vanish into a void.
+  //
+  // Payload shape: { depth: <int> } — current pendingMessageQueue.length
+  // after the push (queued) or shift (drained). Reducer is defensive
+  // against malformed payloads (clamps to [0..50]).
+  onMessageQueued: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const h = (_, payload) => cb(payload || {});
+    ipcRenderer.on('message-queued', h);
+    return () => ipcRenderer.removeListener('message-queued', h);
+  },
+  onMessageQueueDrained: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const h = (_, payload) => cb(payload || {});
+    ipcRenderer.on('message-queue-drained', h);
+    return () => ipcRenderer.removeListener('message-queue-drained', h);
+  },
   // Two paths:
   //   - send:   fire-and-forget (legacy, no feedback)
   //   - invoke: returns { ok, reason? } so the dialog can show the user
